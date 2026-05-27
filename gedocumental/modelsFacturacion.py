@@ -5,7 +5,7 @@ from django.db import models
 
 class Admisiones(models.Model):
     # Mapeado a sis_maes de ZeusSalud_Neuro
-    Consecutivo = models.AutoField(primary_key=True, db_column='autoid')
+    Consecutivo = models.IntegerField(primary_key=True, db_column='con_estudio')
     IDPaciente = models.CharField(max_length=50, db_column='cod_entidad')
     CodigoEntidad = models.CharField(max_length=50, db_column='EPSPaciente', null=True, blank=True)
     FacturaNo = models.IntegerField(db_column='nro_factura', null=True, blank=True)
