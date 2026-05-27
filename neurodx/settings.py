@@ -108,8 +108,8 @@ DATABASES = {
         'NAME': 'ZeusSalud_Neuro',
         'HOST': '192.168.1.207',
         'PORT': '1433',
-        'USER': 'neurodx_app',
-        'PASSWORD': 'TuPasswordSegura123',
+        'USER': 'sa',
+        'PASSWORD': 'Neuro*2026',
         'OPTIONS': {
             'driver': 'ODBC Driver 17 for SQL Server',
         },
@@ -133,8 +133,8 @@ DATABASES = {
         'NAME': 'Contabilidad_Neuro',
         'HOST': '192.168.1.207',
         'PORT': '1433',
-        'USER': 'neurodx_app',
-        'PASSWORD': 'TuPasswordSegura123',
+        'USER': 'sa',
+        'PASSWORD': 'Neuro*2026',
         'OPTIONS': {
             'driver': 'ODBC Driver 17 for SQL Server',
         },
