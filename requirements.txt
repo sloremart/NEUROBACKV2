@@ -1,0 +1,15 @@
+django
+django-filter
+djangorestframework-simplejwt
+django-cors-headers
+djangorestframework
+PyPDF2
+reportlab
+mysqlclient
+ftfy
+mysqlclient>=2.1.1
+django-debug-toolbar
+bcrypt
+pytz
+pandas>=2.2.2
+openpyxl>=3.1.2
