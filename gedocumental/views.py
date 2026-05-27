@@ -186,7 +186,9 @@ class ArchivoUploadView(APIView):
             if not tipo_documento:
                 return JsonResponse({"success": False, "detail": "El tipo de documento es obligatorio."}, status=status.HTTP_400_BAD_REQUEST)
 
-            admision = Admisiones.objects.using('zeussalud').get(Consecutivo=consecutivo)
+            admision = Admisiones.objects.using('zeussalud').filter(Consecutivo=consecutivo).first()
+            if not admision:
+                return JsonResponse({"success": False, "detail": "Admisión no encontrada."}, status=status.HTTP_404_NOT_FOUND)
 
             # Obtener archivos existentes en la admisión
             archivos_existentes = ArchivoFacturacion.objects.filter(Admision_id=consecutivo)
@@ -268,7 +270,9 @@ class ArchivoEditView(APIView):
 
     def put(self, request, consecutivo, archivo_id, format=None):
         try:
-            admision = Admisiones.objects.using('zeussalud').get(Consecutivo=consecutivo)
+            admision = Admisiones.objects.using('zeussalud').filter(Consecutivo=consecutivo).first()
+            if not admision:
+                return JsonResponse({"success": False, "detail": "Admisión no encontrada."}, status=status.HTTP_404_NOT_FOUND)
             archivo = ArchivoFacturacion.objects.get(IdArchivo=archivo_id, Admision_id=admision.Consecutivo)
 
             if 'archivo' in request.FILES:
