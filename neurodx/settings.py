@@ -107,12 +107,11 @@ DATABASES = {
         'ENGINE': 'mssql',
         'NAME': 'ZeusSalud_Neuro',
         'HOST': '192.168.1.207',
-        'PORT': '',
-        'USER': '',
-        'PASSWORD': '',
+        'PORT': '1433',
+        'USER': 'neurodx_app',
+        'PASSWORD': 'TuPasswordSegura123',
         'OPTIONS': {
             'driver': 'ODBC Driver 17 for SQL Server',
-            'trusted_connection': 'yes',
         },
     },
     # hcresult: base de datos del portal de resultados (MySQL)
@@ -133,12 +132,11 @@ DATABASES = {
         'ENGINE': 'mssql',
         'NAME': 'Contabilidad_Neuro',
         'HOST': '192.168.1.207',
-        'PORT': '',
-        'USER': '',
-        'PASSWORD': '',
+        'PORT': '1433',
+        'USER': 'neurodx_app',
+        'PASSWORD': 'TuPasswordSegura123',
         'OPTIONS': {
             'driver': 'ODBC Driver 17 for SQL Server',
-            'trusted_connection': 'yes',
         },
     },
 }
