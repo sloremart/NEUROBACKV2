@@ -48,7 +48,7 @@ def get_admision_zeus(cursor, consecutivo):
             sm.tipoUsuario,
             sm.fecha_ing
         FROM sis_maes sm
-        LEFT JOIN sis_paci sp ON sm.con_estudio = sp.autoid
+        LEFT JOIN sis_paci sp ON sm.autoid = sp.autoid
         WHERE sm.con_estudio = %s
         ORDER BY sm.con_estudio DESC
     ''', [consecutivo])
@@ -69,7 +69,7 @@ def get_admisiones_zeus_bulk(cursor, ids):
             sm.tipoUsuario,
             sm.fecha_ing
         FROM sis_maes sm
-        LEFT JOIN sis_paci sp ON sm.con_estudio = sp.autoid
+        LEFT JOIN sis_paci sp ON sm.autoid = sp.autoid
         WHERE sm.con_estudio IN ({placeholders})
     ''', list(ids))
     return {row[0]: row for row in cursor.fetchall()}
@@ -105,7 +105,7 @@ class GeDocumentalView(APIView):
                     sm.fecha_ing AS FechaIngreso,
                     sm.Prefijo
                 FROM sis_maes sm
-                LEFT JOIN sis_paci sp ON sm.con_estudio = sp.autoid
+                LEFT JOIN sis_paci sp ON sm.autoid = sp.autoid
                 LEFT JOIN sis_empre se ON LTRIM(RTRIM(sm.EPSPaciente)) = LTRIM(RTRIM(se.codigo))
                 LEFT JOIN contratos c ON sm.contrato = c.codigo
                 WHERE sm.con_estudio = %s
@@ -651,7 +651,7 @@ class AdmisionesRadicarView(APIView):
                     sm.fecha_ing,
                     c.alias AS ContratoAlias
                 FROM sis_maes sm
-                LEFT JOIN sis_paci sp ON sm.con_estudio = sp.autoid
+                LEFT JOIN sis_paci sp ON sm.autoid = sp.autoid
                 LEFT JOIN contratos c ON sm.contrato = c.codigo
                 WHERE sm.contrato = %s
                   AND CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
