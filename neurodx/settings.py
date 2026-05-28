@@ -95,7 +95,7 @@ DATABASES = {
         'HOST': '192.168.1.99',
         'PORT': '3306',
         'USER': 'root',
-        'PASSWORD': 'root',
+        'PASSWORD': 'server',
         'NAME': 'neurodx',
         'OPTIONS': {
             'autocommit': True,
@@ -120,7 +120,7 @@ DATABASES = {
         'HOST': '192.168.1.99',
         'PORT': '3306',
         'USER': 'root',
-        'PASSWORD': 'root',
+        'PASSWORD': 'server',
         'NAME': 'hcresult',
         'OPTIONS': {
             'autocommit': True,
