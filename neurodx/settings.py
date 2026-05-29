@@ -189,7 +189,7 @@ STATICFILES_DIRS = [
 
 
 
-MEDIA_ROOT = os.environ.get('MEDIA_ROOT', '/media/disco1/examenes')
+MEDIA_ROOT = os.environ.get('MEDIA_ROOT', '/neuro')
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 
