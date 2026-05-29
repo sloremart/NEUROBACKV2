@@ -24,6 +24,7 @@ from gedocumental.views import (
     archivos_por_usuario_observacion,
     archivos_por_usuario_observacion_tesoreria,
     ObservacionesPorUsuario,
+    AgregarObservacionSinArchivoView,
     AdmisionesRadicarView,
     radicar_capitalsalud_view,
     radicar_colsanitas_view,
@@ -95,6 +96,7 @@ urlpatterns = [
     path('api/v2/',                     include('resultadosgedocumental.urls')),
     # Alias legacy: frontend viejo llama /api/v2/descargar/ sin prefijo gedocumental
     path('api/v2/descargar/<int:id_archivo>/', downloadFile, name='v2-descargar-legacy'),
+    path('api/v2/agregar_observacion_sin_archivo/', AgregarObservacionSinArchivoView.as_view(), name='v2-obs-sin-archivo'),
     # path('api/v2/citas/',        include(citas_urls)),       # próximo módulo
 ]
 
