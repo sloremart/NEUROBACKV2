@@ -407,7 +407,21 @@ def archivos_por_admision(request, numero_admision):
 def downloadFile(request, id_archivo):
     try:
         archivo = ArchivoFacturacion.objects.get(IdArchivo=id_archivo)
-        archivo_path = os.path.join(settings.MEDIA_ROOT, str(archivo.RutaArchivo))
+        ruta = str(archivo.RutaArchivo)
+
+        # Normalize Windows-style absolute paths (C:\... or C:/...)
+        if len(ruta) >= 2 and ruta[1] == ':':
+            ruta = ruta[2:]
+        ruta = ruta.replace('\\', '/')
+
+        # Strip leading /media/ or /media/disco1/examenes/ prefix if stored as absolute URL
+        for prefix in ['/media/disco1/examenes/', '/media/']:
+            if ruta.startswith(prefix):
+                ruta = ruta[len(prefix):]
+                break
+        ruta = ruta.lstrip('/')
+
+        archivo_path = os.path.join(settings.MEDIA_ROOT, ruta)
         logger.info(f"Ruta completa esperada: {archivo_path}")
 
         if not os.path.exists(archivo_path):
@@ -417,7 +431,14 @@ def downloadFile(request, id_archivo):
         with open(archivo_path, 'rb') as file:
             file_content = file.read()
 
-        response = HttpResponse(file_content, content_type='application/pdf')
+        content_type = 'application/pdf'
+        ext = os.path.splitext(archivo_path)[1].lower()
+        if ext in ('.jpg', '.jpeg'):
+            content_type = 'image/jpeg'
+        elif ext == '.png':
+            content_type = 'image/png'
+
+        response = HttpResponse(file_content, content_type=content_type)
         response['Content-Disposition'] = 'inline; filename=' + os.path.basename(archivo_path)
         return response
 
