@@ -3123,22 +3123,37 @@ class ActualizarRegimenArchivosView(APIView):
 ### CREAR OBSERVACIONES SIN ARCHIVO PARA LOS RESULTADOS QUE NO ESTAN CARGADOS !
 class AgregarObservacionSinArchivoView(APIView):
     def post(self, request, *args, **kwargs):
-        data = request.data.copy()
-        if 'Usuario' in data and 'Usuario_id' not in data:
-            data['Usuario_id'] = data['Usuario']
-        serializer = ObservacionSinArchivoSerializer(data=data)
-        if serializer.is_valid():
-            observacion = serializer.save()
-            response_data = {
-                "id": observacion.id,
-                "AdmisionId": observacion.AdmisionId,
-                "Descripcion": observacion.Descripcion,
-                "FechaObservacion": observacion.FechaObservacion,
-                "Revisada": observacion.Revisada,
-                "Usuario": observacion.Usuario.id
-            }
-            return Response({"success": True, "message": "Observación sin archivo agregada correctamente", "data": response_data}, status=status.HTTP_201_CREATED)
-        return Response({"success": False, "message": "Error de validación", "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            usuario_id = request.data.get('Usuario') or request.data.get('Usuario_id')
+            admision_id = request.data.get('AdmisionId')
+            descripcion = request.data.get('Descripcion', '')
+            tipo_archivo = request.data.get('TipoArchivo', 'Sin Archivo')
+
+            if not usuario_id:
+                return Response({"success": False, "message": "Usuario es requerido"}, status=status.HTTP_400_BAD_REQUEST)
+            if not admision_id:
+                return Response({"success": False, "message": "AdmisionId es requerido"}, status=status.HTTP_400_BAD_REQUEST)
+
+            observacion = ObservacionSinArchivo.objects.create(
+                AdmisionId=admision_id,
+                Usuario_id=usuario_id,
+                Descripcion=descripcion,
+                TipoArchivo=tipo_archivo,
+            )
+            return Response({
+                "success": True,
+                "message": "Observación sin archivo agregada correctamente",
+                "data": {
+                    "id": observacion.id,
+                    "AdmisionId": observacion.AdmisionId,
+                    "Descripcion": observacion.Descripcion,
+                    "FechaObservacion": observacion.FechaObservacion,
+                    "Revisada": observacion.Revisada,
+                    "Usuario": observacion.Usuario_id,
+                }
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({"success": False, "message": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     
 
