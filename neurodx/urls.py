@@ -25,6 +25,11 @@ from gedocumental.views import (
     archivos_por_usuario_observacion_tesoreria,
     ObservacionesPorUsuario,
     AgregarObservacionSinArchivoView,
+    RevisarObservacion,
+    FiltroAuditoriaCuentasMedicas,
+    FiltroTesoreria,
+    actualizar_modificado_revisor,
+    actualizar_correciones_cm,
     AdmisionesRadicarView,
     radicar_capitalsalud_view,
     radicar_colsanitas_view,
@@ -94,9 +99,16 @@ urlpatterns = [
     path('api/v2/gedocumental/',        include(gedocumental_urls)),
     path('api/v2/programacionpagos/',   include('programacionpagos.urls')),
     path('api/v2/',                     include('resultadosgedocumental.urls')),
-    # Alias legacy: frontend viejo llama /api/v2/descargar/ sin prefijo gedocumental
-    path('api/v2/descargar/<int:id_archivo>/', downloadFile, name='v2-descargar-legacy'),
-    path('api/v2/agregar_observacion_sin_archivo/', AgregarObservacionSinArchivoView.as_view(), name='v2-obs-sin-archivo'),
+    # ── Endpoints legacy (sin prefijo gedocumental/) ─────────────────────────
+    path('api/v2/descargar/<int:id_archivo>/',        downloadFile,                            name='v2-descargar-legacy'),
+    path('api/v2/agregar_observacion_sin_archivo/',   AgregarObservacionSinArchivoView.as_view(), name='v2-obs-sin-archivo'),
+    path('api/v2/revisar_observacion/<int:admision_id>/', RevisarObservacion.as_view(),        name='v2-revisar-observacion'),
+    path('api/v2/filtro_auditoria/',                  FiltroAuditoriaCuentasMedicas.as_view(), name='v2-filtro-auditoria'),
+    path('api/v2/filtro_tesoreria/',                  FiltroTesoreria.as_view(),               name='v2-filtro-tesoreria'),
+    path('api/v2/actualizar_modificado_revisor/',     actualizar_modificado_revisor,            name='v2-actualizar-modificado'),
+    path('api/v2/actualizar_correciones_cm/',         actualizar_correciones_cm,               name='v2-actualizar-correcciones-cm'),
+    path('api/v2/actualizar_regimen/<int:consecutivo>/', ActualizarRegimenArchivosView.as_view(), name='v2-actualizar-regimen-legacy'),
+    path('api/v2/eliminar_archivo_facturacion/',      ArchivoFacturacionDeleteView.as_view(),  name='v2-eliminar-archivo-legacy'),
     # path('api/v2/citas/',        include(citas_urls)),       # próximo módulo
 ]
 
