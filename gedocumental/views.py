@@ -3123,7 +3123,10 @@ class ActualizarRegimenArchivosView(APIView):
 ### CREAR OBSERVACIONES SIN ARCHIVO PARA LOS RESULTADOS QUE NO ESTAN CARGADOS !
 class AgregarObservacionSinArchivoView(APIView):
     def post(self, request, *args, **kwargs):
-        serializer = ObservacionSinArchivoSerializer(data=request.data)
+        data = request.data.copy()
+        if 'Usuario' in data and 'Usuario_id' not in data:
+            data['Usuario_id'] = data['Usuario']
+        serializer = ObservacionSinArchivoSerializer(data=data)
         if serializer.is_valid():
             observacion = serializer.save()
             response_data = {
