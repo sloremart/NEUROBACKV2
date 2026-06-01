@@ -162,18 +162,6 @@ class SubirDocumentoExamen(APIView):
                     examen_resultado_id, archivo_nombre_limpio, tipo_archivo
                 ])
 
-            # Guardar en tabla gestion documental con idpaciente en la ruta
-            with connections['zeussalud'].cursor() as cursor_zeussalud:
-                cursor_zeussalud.execute('''
-                    INSERT INTO tblgestiondocumental 
-                    (FechaCreado, NumeroPaciente, RutaArchivo, txtContenido, IdItem) 
-                    VALUES (%s, %s, %s, %s, %s)
-                ''', [
-                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    admision.get('NumeroPaciente', None),
-                    f"{id_paciente}/{archivo_nombre_limpio}",
-                    archivo_nombre_limpio, 5
-                ])
 
             # Enviar a servidor compartido vía SMB
             server_ip = "192.168.1.92"
