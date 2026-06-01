@@ -127,6 +127,19 @@ DATABASES = {
             'charset': 'utf8mb4',
         },
     },
+    # datosipsndx: tabla tblxmlprocesados con datos Lumier (MySQL)
+    'datosipsndx': {
+        'ENGINE': 'django.db.backends.mysql',
+        'HOST': '192.168.1.99',
+        'PORT': '3306',
+        'USER': 'antares',
+        'PASSWORD': 'dic2401',
+        'NAME': 'datosipsndx',
+        'OPTIONS': {
+            'autocommit': True,
+            'charset': 'utf8mb3',
+        },
+    },
     # Contabilidad_Neuro: proveedores, cuentas contables (SQL Server)
     'contabilidad': {
         'ENGINE': 'mssql',
