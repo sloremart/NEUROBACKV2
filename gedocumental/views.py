@@ -1413,7 +1413,7 @@ def radicar_salud_total_view(request, numero_admision, idusuario):
             ruta_destino_archivo = os.path.join(carpeta_nombre_archivo, nuevo_nombre)
             shutil.copy(ruta_origen, ruta_destino_archivo)
 
-        carpeta_json_txt = os.path.join('/mnt/prueba/DocsFE/json', f'FEC{factura_numero}')
+        carpeta_json_txt = os.path.join('/mnt/prueba/DocsFESIESA', f'Factura-FES{factura_numero}')
         json_temp, txt_temp = None, None
 
         if os.path.exists(carpeta_json_txt):
@@ -1539,8 +1539,8 @@ def radicar_sanitas_evento_view(request, numero_admision, idusuario):
 
         # === COPIA DE ARCHIVOS JSON Y TXT ADICIONALES ===
         carpeta_json_txt = os.path.join(
-            '/mnt/prueba/DocsFE/json',
-            f'FEC{factura_numero}'
+            '/mnt/prueba/DocsFESIESA',
+            f'Factura-FES{factura_numero}'
         )
 
         if os.path.exists(carpeta_json_txt):
@@ -1667,8 +1667,8 @@ def radicar_sanitas_evento_view(request, numero_admision, idusuario):
 
         # === COPIA DE ARCHIVOS JSON, TXT Y XML ADICIONALES ===
         carpeta_json_txt = os.path.join(
-            '/mnt/prueba/DocsFE/json',
-            f'FEC{factura_numero}'
+            '/mnt/prueba/DocsFESIESA',
+            f'Factura-FES{factura_numero}'
         )
 
         if os.path.exists(carpeta_json_txt):
@@ -1792,7 +1792,7 @@ def radicar_ejercito_view(request, numero_admision, idusuario):
             ruta_destino_archivo = os.path.join(carpeta_nombre_archivo, nuevo_nombre)
             shutil.copy(ruta_origen, ruta_destino_archivo)
 
-        carpeta_json_txt = os.path.join('/mnt/prueba/DocsFE/json', f'FEC{factura_numero}')
+        carpeta_json_txt = os.path.join('/mnt/prueba/DocsFESIESA', f'Factura-FES{factura_numero}')
 
         if os.path.exists(carpeta_json_txt):
             for archivo_nombre in os.listdir(carpeta_json_txt):
@@ -1932,7 +1932,7 @@ def radicar_fomag_view(request, numero_admision, idusuario):
             destino = os.path.join(carpeta_soportes, nuevo_nombre)
             shutil.copy(ruta_origen, destino)
 
-        carpeta_json_txt = os.path.join('/mnt/prueba/DocsFE/json', f'FEC{factura_numero}')
+        carpeta_json_txt = os.path.join('/mnt/prueba/DocsFESIESA', f'Factura-FES{factura_numero}')
         archivo_txt_json = None
         archivo_rips_json = None
         archivo_xml = None
@@ -2061,11 +2061,11 @@ def radicar_colsanitas_view(request, numero_admision, idusuario):
                 raise FileNotFoundError(f"La ruta de origen '{ruta_origen}' no es válida")
 
         # === PROCESAR ARCHIVO .TXT ADICIONAL ===
-        carpeta_txt = os.path.join('/mnt/prueba/DocsFE/json', f'FEC{factura_numero}')
+        carpeta_txt = os.path.join('/mnt/prueba/DocsFESIESA', f'Factura-FES{factura_numero}')
         if os.path.exists(carpeta_txt):
             print(f"[\u2714] Carpeta TXT encontrada: {carpeta_txt}")
             for archivo_nombre in os.listdir(carpeta_txt):
-                if archivo_nombre.lower().endswith('.txt') and f'FEC{factura_numero}' in archivo_nombre:
+                if archivo_nombre.lower().endswith('.txt') and f'FES{factura_numero}' in archivo_nombre:
                     ruta_txt_origen = os.path.join(carpeta_txt, archivo_nombre)
                     print(f"[\u2714] Archivo TXT encontrado: {ruta_txt_origen}")
                     try:
@@ -2201,7 +2201,7 @@ def radicar_mes01_view(request, numero_admision, idusuario):
                 raise FileNotFoundError(f"La ruta de origen '{ruta_origen}' no es válida")
 
         # === PROCESAR ARCHIVO .TXT ADICIONAL ===
-        carpeta_txt = os.path.join('/mnt/prueba/DocsFE/json', f'FEC{factura_numero}')
+        carpeta_txt = os.path.join('/mnt/prueba/DocsFESIESA', f'Factura-FES{factura_numero}')
         if os.path.exists(carpeta_txt):
             for archivo_nombre in os.listdir(carpeta_txt):
                 if archivo_nombre.lower().endswith('.txt'):
@@ -2351,14 +2351,14 @@ def radicar_capitalsalud_view(request, numero_admision, idusuario):
             shutil.copy(ruta_origen, destino_temporal)
             archivos_para_zip.append(destino_temporal)
 
-        carpeta_json_txt = os.path.join('/mnt/prueba/DocsFE/json', f'FEC{factura_numero}')
+        carpeta_json_txt = os.path.join('/mnt/prueba/DocsFESIESA', f'Factura-FES{factura_numero}')
         archivo_txt = None
         if os.path.exists(carpeta_json_txt):
             for archivo_nombre in os.listdir(carpeta_json_txt):
                 extension = os.path.splitext(archivo_nombre)[1].lower()
                 ruta_archivo_origen = os.path.join(carpeta_json_txt, archivo_nombre)
                 if extension == '.json':
-                    nuevo_nombre = f"901119103_FEC{factura_numero}.json"
+                    nuevo_nombre = f"901119103_FES{factura_numero}.json"
                     shutil.copy(ruta_archivo_origen, os.path.join(carpeta_nombre_archivo, nuevo_nombre))
                 elif extension == '.txt':
                     nuevo_nombre = f"ResultadosLocales_FEC{factura_numero}.txt"
@@ -2757,13 +2757,13 @@ def radicar_policia_view(request, numero_admision, idusuario):
         merger.close()
 
         # Archivos adicionales: JSON, TXT, XML
-        carpeta_json_txt = os.path.join('/mnt/prueba/DocsFE/json', f'FEC{factura_numero}')
+        carpeta_json_txt = os.path.join('/mnt/prueba/DocsFESIESA', f'Factura-FES{factura_numero}')
         adicionales = []
         if os.path.exists(carpeta_json_txt):
             for nombre in os.listdir(carpeta_json_txt):
                 ruta_origen = os.path.join(carpeta_json_txt, nombre)
                 if nombre.lower().endswith('.json'):
-                    nuevo_nombre = f"FEC{factura_numero}.json"
+                    nuevo_nombre = f"FES{factura_numero}.json"
                 elif nombre.lower().endswith('.txt'):
                     nuevo_nombre = f"ResultadosLocales_FEC{factura_numero}.txt"
                 else:

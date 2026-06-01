@@ -117,14 +117,14 @@ DATABASES = {
     # hcresult: base de datos del portal de resultados (MySQL)
     'hcresult': {
         'ENGINE': 'django.db.backends.mysql',
-        'HOST': '192.168.1.99',
+        'HOST': '192.168.1.178',
         'PORT': '3306',
         'USER': 'root',
-        'PASSWORD': 'server',
+        'PASSWORD': 'Neuro2023',
         'NAME': 'hcresult',
         'OPTIONS': {
             'autocommit': True,
-            'charset': 'utf8mb3',
+            'charset': 'utf8mb4',
         },
     },
     # Contabilidad_Neuro: proveedores, cuentas contables (SQL Server)
