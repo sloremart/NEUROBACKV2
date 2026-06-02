@@ -695,39 +695,27 @@ class AdmisionesRadicarView(APIView):
         if not ids_revisados:
             return Response([], status=200)
 
-        TIPOS_REQUERIDOS = set(TIPOS_DOCUMENTOS_ESTANDAR)  # FACTURA, COMPROBANTE, AUTORIZACION, ORDEN, ADICIONALES, RESULTADO, HCNEURO, HCLINICA
+        # Igual que el proyecto anterior: tener al menos RESULTADO, HCNEURO o FACTURA con Radicado=False
+        archivos_filtrados = ArchivoFacturacion.objects.filter(
+            Admision_id__in=ids_revisados,
+            Radicado=False,
+            Tipo__in=['RESULTADO', 'HCNEURO', 'FACTURA']
+        )
 
-        archivos_info = {}
-        for archivo in ArchivoFacturacion.objects.filter(Admision_id__in=ids_revisados).order_by('Admision_id', '-FechaCreacionArchivo'):
-            aid = archivo.Admision_id
-            if aid not in archivos_info:
-                archivos_info[aid] = {
-                    'FechaCreacionArchivo': archivo.FechaCreacionArchivo,
-                    'todos_radicados': archivo.Radicado,
-                    'todos_aprobados': archivo.RevisionPrimera is True,
-                    'tipos_presentes': {archivo.Tipo},
-                }
-            else:
-                archivos_info[aid]['todos_radicados'] = archivos_info[aid]['todos_radicados'] and archivo.Radicado
-                archivos_info[aid]['todos_aprobados'] = archivos_info[aid]['todos_aprobados'] and (archivo.RevisionPrimera is True)
-                archivos_info[aid]['tipos_presentes'].add(archivo.Tipo)
+        archivos_por_admision = {}
+        for archivo in archivos_filtrados:
+            if archivo.Admision_id not in archivos_por_admision:
+                archivos_por_admision[archivo.Admision_id] = archivo
 
         result = []
         for row in rows:
             admision_id, eps_code, nombre, fecha_ing, contrato_alias = row
             if admision_id not in ids_revisados:
                 continue
-            info = archivos_info.get(admision_id)
-            # Debe tener archivos cargados
-            if not info:
+            archivo = archivos_por_admision.get(admision_id)
+            if not archivo:
                 continue
-            # Todos los archivos deben estar aprobados (RevisionPrimera = True)
-            if not info.get('todos_aprobados', False):
-                continue
-            # Deben estar presentes todos los tipos de documento requeridos
-            if not TIPOS_REQUERIDOS.issubset(info.get('tipos_presentes', set())):
-                continue
-            fecha_archivo = info.get('FechaCreacionArchivo')
+            fecha_archivo = archivo.FechaCreacionArchivo
             result.append({
                 'AdmisionId': admision_id,
                 'CodigoEntidad': eps_code or '',
@@ -736,7 +724,7 @@ class AdmisionesRadicarView(APIView):
                 'RevisionCuentasMedicas': True,
                 'FechaCreacionAntares': fecha_ing.isoformat() if fecha_ing else None,
                 'FechaCreacionArchivo': fecha_archivo.isoformat() if fecha_archivo else None,
-                'Radicado': info.get('todos_radicados', False),
+                'Radicado': archivo.Radicado,
             })
 
         return Response(result)
