@@ -17,7 +17,7 @@ from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.decorators import api_view
 from gedocumental.modelsFacturacion import Admisiones
-from gedocumental.utils.codigoentidad import obtener_tipos_documentos_por_entidad
+from gedocumental.utils.codigoentidad import obtener_tipos_documentos_por_entidad, TIPOS_DOCUMENTOS_ESTANDAR
 from login.models import CustomUser
 from resultadosgedocumental.models import ConsolidadoEstudios
 from .serializers import   ArchivoFacturacionSerializer, ObservacionSinArchivoSerializer,  RevisionCuentaMedicaSerializer
@@ -695,7 +695,7 @@ class AdmisionesRadicarView(APIView):
         if not ids_revisados:
             return Response([], status=200)
 
-        TIPOS_REQUERIDOS = {'FACTURA', 'COMPROBANTE', 'ORDEN', 'RESULTADO', 'AUTORIZACION', 'HCNEURO'}
+        TIPOS_REQUERIDOS = set(TIPOS_DOCUMENTOS_ESTANDAR)  # FACTURA, COMPROBANTE, AUTORIZACION, ORDEN, ADICIONALES, RESULTADO, HCNEURO, HCLINICA
 
         archivos_info = {}
         for archivo in ArchivoFacturacion.objects.filter(Admision_id__in=ids_revisados).order_by('Admision_id', '-FechaCreacionArchivo'):
