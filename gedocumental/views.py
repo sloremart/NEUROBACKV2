@@ -702,14 +702,21 @@ class AdmisionesRadicarView(APIView):
                 archivos_info[aid] = {
                     'FechaCreacionArchivo': archivo.FechaCreacionArchivo,
                     'todos_radicados': archivo.Radicado,
+                    'todos_aprobados': archivo.RevisionPrimera is True,
                 }
             else:
                 archivos_info[aid]['todos_radicados'] = archivos_info[aid]['todos_radicados'] and archivo.Radicado
+                archivos_info[aid]['todos_aprobados'] = archivos_info[aid]['todos_aprobados'] and (archivo.RevisionPrimera is True)
 
         result = []
         for row in rows:
             admision_id, eps_code, nombre, fecha_ing, contrato_alias = row
             if admision_id not in ids_revisados:
+                continue
+            # Debe tener archivos cargados y todos aprobados por el revisor
+            if admision_id not in archivos_info:
+                continue
+            if not archivos_info[admision_id].get('todos_aprobados', False):
                 continue
             info = archivos_info.get(admision_id, {})
             fecha_archivo = info.get('FechaCreacionArchivo')
