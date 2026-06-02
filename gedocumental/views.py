@@ -695,6 +695,8 @@ class AdmisionesRadicarView(APIView):
         if not ids_revisados:
             return Response([], status=200)
 
+        TIPOS_REQUERIDOS = {'FACTURA', 'COMPROBANTE', 'ORDEN', 'RESULTADO', 'AUTORIZACION', 'HCNEURO'}
+
         archivos_info = {}
         for archivo in ArchivoFacturacion.objects.filter(Admision_id__in=ids_revisados).order_by('Admision_id', '-FechaCreacionArchivo'):
             aid = archivo.Admision_id
@@ -703,22 +705,28 @@ class AdmisionesRadicarView(APIView):
                     'FechaCreacionArchivo': archivo.FechaCreacionArchivo,
                     'todos_radicados': archivo.Radicado,
                     'todos_aprobados': archivo.RevisionPrimera is True,
+                    'tipos_presentes': {archivo.Tipo},
                 }
             else:
                 archivos_info[aid]['todos_radicados'] = archivos_info[aid]['todos_radicados'] and archivo.Radicado
                 archivos_info[aid]['todos_aprobados'] = archivos_info[aid]['todos_aprobados'] and (archivo.RevisionPrimera is True)
+                archivos_info[aid]['tipos_presentes'].add(archivo.Tipo)
 
         result = []
         for row in rows:
             admision_id, eps_code, nombre, fecha_ing, contrato_alias = row
             if admision_id not in ids_revisados:
                 continue
-            # Debe tener archivos cargados y todos aprobados por el revisor
-            if admision_id not in archivos_info:
+            info = archivos_info.get(admision_id)
+            # Debe tener archivos cargados
+            if not info:
                 continue
-            if not archivos_info[admision_id].get('todos_aprobados', False):
+            # Todos los archivos deben estar aprobados (RevisionPrimera = True)
+            if not info.get('todos_aprobados', False):
                 continue
-            info = archivos_info.get(admision_id, {})
+            # Deben estar presentes todos los tipos de documento requeridos
+            if not TIPOS_REQUERIDOS.issubset(info.get('tipos_presentes', set())):
+                continue
             fecha_archivo = info.get('FechaCreacionArchivo')
             result.append({
                 'AdmisionId': admision_id,
