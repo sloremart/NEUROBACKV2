@@ -111,7 +111,7 @@ DATABASES = {
         'USER': 'sa',
         'PASSWORD': 'Neuro*2026',
         'OPTIONS': {
-            'driver': 'ODBC Driver 17 for SQL Server',
+            'driver': 'ODBC Driver 18 for SQL Server',
         },
     },
     # hcresult: base de datos del portal de resultados (MySQL)
@@ -149,7 +149,7 @@ DATABASES = {
         'USER': 'sa',
         'PASSWORD': 'Neuro*2026',
         'OPTIONS': {
-            'driver': 'ODBC Driver 17 for SQL Server',
+            'driver': 'ODBC Driver 18 for SQL Server',
         },
     },
 }
