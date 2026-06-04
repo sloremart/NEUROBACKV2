@@ -11,3 +11,4 @@ staticfiles/
 .DS_Store
 venv/
 env/
+neurodx/settings_local.py

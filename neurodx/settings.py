@@ -248,7 +248,8 @@ CORS_ALLOW_HEADERS = [
 
 JWT_EXPIRATION_DELTA = datetime.timedelta(minutes=15)
 
-
-
-
+try:
+    from .settings_local import *
+except ImportError:
+    pass
 
