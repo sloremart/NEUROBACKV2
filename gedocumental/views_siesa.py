@@ -109,7 +109,8 @@ def _estudios_por_fecha(fecha_inicio: str, fecha_fin: str):
     """
     Devuelve lista de (con_estudio, autoid) de sis_maes en ZeusSalud
     para estudios de imágenes diagnósticas en el rango de fechas.
-    id_sede=3 → SEDE 02 (imágenes: TAC, Resonancia, RX, Ecografía, etc.)
+    id_sede=3 → SEDE 02 (TAC, Resonancia, RX, Mamografía, PET/CT)
+    id_sede=2 → SEDE 01 (Ecografías y otros procedimientos imagen)
     """
     with connections["zeussalud"].cursor() as cursor:
         cursor.execute(
@@ -117,7 +118,7 @@ def _estudios_por_fecha(fecha_inicio: str, fecha_fin: str):
             SELECT con_estudio, autoid
             FROM sis_maes
             WHERE CAST(fecha_ing AS DATE) BETWEEN %s AND %s
-              AND id_sede = 3
+              AND id_sede IN (2, 3)
               AND estado = 'A'
             ORDER BY fecha_ing
             """,
