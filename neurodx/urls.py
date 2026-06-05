@@ -44,6 +44,7 @@ from gedocumental.views import (
     radicar_other_view,
 )
 from gedocumental.utils.codigoentidad import obtener_hallazgos
+from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote
 
 # =============================================================================
 # MÓDULO: Auth  →  api/v2/auth/
@@ -88,6 +89,9 @@ gedocumental_urls = [
     path('radicar-medisanitas/<int:numero_admision>/<str:idusuario>/',     radicar_mes01_view,           name='v2-radicar-medisanitas'),
     path('radicar-san02/<int:numero_admision>/<str:idusuario>/',           radicar_san02_view,           name='v2-radicar-san02'),
     path('radicar-otros/<int:numero_admision>/<str:idusuario>/',           radicar_other_view,           name='v2-radicar-otros'),
+    # ── Generación PDFs desde SIESA (reemplaza el flujo Antares) ─────────────
+    path('generar-pdf-siesa/',       generar_pdf_siesa,          name='v2-generar-pdf-siesa'),
+    path('generar-pdfs-siesa/',      generar_pdfs_siesa_lote,    name='v2-generar-pdfs-siesa-lote'),
 ]
 
 # =============================================================================
