@@ -3201,7 +3201,7 @@ class ObservacionesPorUsuario(APIView):
                     observaciones_filtradas.append(observacion)
             
             if not observaciones_filtradas:
-                return Response({'error': 'Observaciones no encontradas para este usuario'}, status=404)
+                return Response([], status=200)
 
             # Serializar las observaciones filtradas
             serializer = ObservacionSinArchivoSerializer(observaciones_filtradas, many=True)
