@@ -1899,7 +1899,7 @@ def radicar_fomag_view(request, numero_admision, idusuario):
 
         # Estructura de carpetas
         carpeta_usuario  = os.path.join(settings.MEDIA_ROOT, 'gdocumental', 'Radicacion', 'FOM01', fecha_hoy, nombre_usuario)
-        carpeta_factura  = os.path.join(carpeta_usuario, f'FEC{factura_numero}')
+        carpeta_factura  = os.path.join(carpeta_usuario, f'FES{factura_numero}')
         carpeta_soportes = os.path.join(carpeta_factura, 'SOPORTES')
         carpeta_json     = os.path.join(carpeta_factura, 'JSON_901119103')
         os.makedirs(carpeta_soportes, exist_ok=True)
@@ -1944,33 +1944,62 @@ def radicar_fomag_view(request, numero_admision, idusuario):
             return JsonResponse({"success": False, "detail": f"No se encontró la carpeta {carpeta_json_txt}"}, status=400)
 
         # Copiar JSON / TXT / XML a carpeta JSON_901119103
+        # DocsFESIESA contiene:
+        #   FES{n}.json              → RIPS  (empieza con "numDocumentoIdObligado")
+        #   ResultadosIMSPS_*.json   → ResultadosMSP (empieza con "ResultState")
+        #   ResultadosIMSPS_*.txt    → mismo ResultadosMSP en texto (respaldo)
+        #   FES{n}.xml               → XML de factura electrónica (opcional)
         for archivo_nombre in os.listdir(carpeta_json_txt):
             extension = os.path.splitext(archivo_nombre)[1].lower()
             ruta_origen = os.path.join(carpeta_json_txt, archivo_nombre)
 
             if extension == '.json':
-                nuevo_nombre = f"RIPS_901119103_FEC{factura_numero}.json"
-                archivo_rips_json = os.path.join(carpeta_json, nuevo_nombre)
-                shutil.copy(ruta_origen, archivo_rips_json)
+                with open(ruta_origen, 'r', encoding='utf-8') as f:
+                    contenido_json = f.read()
+                contenido_stripped = contenido_json.lstrip()
+
+                if contenido_stripped.startswith('{"numDocumentoIdObligado') or \
+                   os.path.splitext(archivo_nombre)[0].upper() == f'FES{factura_numero}'.upper():
+                    # Es el archivo RIPS
+                    nuevo_nombre = f"RIPS_901119103_FES{factura_numero}.json"
+                    archivo_rips_json = os.path.join(carpeta_json, nuevo_nombre)
+                    shutil.copy(ruta_origen, archivo_rips_json)
+
+                elif contenido_stripped.startswith('{"ResultState') or 'Resultados' in archivo_nombre:
+                    # Es el archivo ResultadosMSP
+                    match = re.search(r'"ProcesoId"\s*:\s*"?(?P<id>\d+)', contenido_json)
+                    if match:
+                        id_proceso = match.group('id')
+                        nombre_txt = f"ResultadosMSP_FES{factura_numero}_ID{id_proceso}_A_CUV.json"
+                        archivo_txt_json = os.path.join(carpeta_json, nombre_txt)
+                        with open(archivo_txt_json, 'w', encoding='utf-8') as f:
+                            f.write(contenido_json)
 
             elif extension == '.txt':
-                with open(ruta_origen, 'r', encoding='utf-8') as f:
-                    contenido = f.read()
-                match = re.search(r'"ProcesoId"\s*:\s*"?(?P<id>\d+)', contenido)
-                if match:
-                    id_proceso = match.group('id')
-                    nombre_txt = f"ResultadosMSP_FEC{factura_numero}_ID{id_proceso}_A_CUV.json"
-                    archivo_txt_json = os.path.join(carpeta_json, nombre_txt)
-                    with open(archivo_txt_json, 'w', encoding='utf-8') as f:
-                        f.write(contenido)
+                # Sólo se usa si aún no se encontró el ResultadosMSP vía .json
+                if not archivo_txt_json:
+                    with open(ruta_origen, 'r', encoding='utf-8') as f:
+                        contenido = f.read()
+                    match = re.search(r'"ProcesoId"\s*:\s*"?(?P<id>\d+)', contenido)
+                    if match:
+                        id_proceso = match.group('id')
+                        nombre_txt = f"ResultadosMSP_FES{factura_numero}_ID{id_proceso}_A_CUV.json"
+                        archivo_txt_json = os.path.join(carpeta_json, nombre_txt)
+                        with open(archivo_txt_json, 'w', encoding='utf-8') as f:
+                            f.write(contenido)
 
             elif extension == '.xml':
                 nuevo_nombre_xml = f"FEV_901119103_{factura_numero}.xml"
                 archivo_xml = os.path.join(carpeta_json, nuevo_nombre_xml)
                 shutil.copy(ruta_origen, archivo_xml)
 
-        if not archivo_rips_json or not archivo_txt_json or not archivo_xml:
-            return JsonResponse({"success": False, "detail": "Faltan uno o más archivos adicionales (JSON, TXT, XML) requeridos para la radicación."}, status=400)
+        faltantes = []
+        if not archivo_rips_json:
+            faltantes.append("RIPS (JSON con numDocumentoIdObligado)")
+        if not archivo_txt_json:
+            faltantes.append("ResultadosMSP (JSON/TXT con ResultState)")
+        if faltantes:
+            return JsonResponse({"success": False, "detail": f"Faltan archivos en DocsFESIESA: {', '.join(faltantes)}"}, status=400)
 
         archivos_a_verificar.update(Radicado=True)
 
