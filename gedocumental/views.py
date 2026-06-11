@@ -1815,17 +1815,10 @@ def radicar_ejercito_view(request, numero_admision, idusuario):
                     with open(ruta_archivo_origen, 'r', encoding='utf-8') as f:
                         contenido_json = f.read()
                     contenido_stripped = contenido_json.lstrip()
-                    if contenido_stripped.startswith('{"numDocumentoIdObligado') or \
-                       os.path.splitext(archivo_nombre)[0].upper() == f'FES{factura_numero}'.upper():
-                        nuevo_nombre = f"RIPS_901119103_FES{factura_numero}.json"
-                    elif contenido_stripped.startswith('{"ResultState') or 'Resultados' in archivo_nombre:
-                        match_id = re.search(r'"ProcesoId"\s*:\s*"?(?P<id>\d+)', contenido_json)
-                        if match_id:
-                            nuevo_nombre = f"ResultadosMSP_FES{factura_numero}_ID{match_id.group('id')}_A_CUV.json"
-                        else:
-                            nuevo_nombre = f"ResultadosMSP_FES{factura_numero}_A_CUV.json"
-                    else:
+                    if not (contenido_stripped.startswith('{"numDocumentoIdObligado') or
+                            os.path.splitext(archivo_nombre)[0].upper() == f'FES{factura_numero}'.upper()):
                         continue
+                    nuevo_nombre = f"RIPS_901119103_FES{factura_numero}.json"
                     ruta_archivo_destino = os.path.join(carpeta_nombre_archivo, nuevo_nombre)
 
                 elif extension == '.txt':
@@ -2409,17 +2402,11 @@ def radicar_capitalsalud_view(request, numero_admision, idusuario):
                     with open(ruta_archivo_origen, 'r', encoding='utf-8') as f:
                         contenido_json = f.read()
                     contenido_stripped = contenido_json.lstrip()
-                    if contenido_stripped.startswith('{"numDocumentoIdObligado') or \
-                       os.path.splitext(archivo_nombre)[0].upper() == f'FES{factura_numero}'.upper():
-                        nuevo_nombre = f"901119103_FES{factura_numero}.json"
-                        shutil.copy(ruta_archivo_origen, os.path.join(carpeta_nombre_archivo, nuevo_nombre))
-                    elif contenido_stripped.startswith('{"ResultState') or 'Resultados' in archivo_nombre:
-                        match_id = re.search(r'"ProcesoId"\s*:\s*"?(?P<id>\d+)', contenido_json)
-                        if match_id:
-                            nuevo_nombre = f"ResultadosMSP_FES{factura_numero}_ID{match_id.group('id')}_A_CUV.json"
-                        else:
-                            nuevo_nombre = f"ResultadosMSP_FES{factura_numero}_A_CUV.json"
-                        shutil.copy(ruta_archivo_origen, os.path.join(carpeta_nombre_archivo, nuevo_nombre))
+                    if not (contenido_stripped.startswith('{"numDocumentoIdObligado') or
+                            os.path.splitext(archivo_nombre)[0].upper() == f'FES{factura_numero}'.upper()):
+                        continue
+                    nuevo_nombre = f"901119103_FES{factura_numero}.json"
+                    shutil.copy(ruta_archivo_origen, os.path.join(carpeta_nombre_archivo, nuevo_nombre))
                 elif extension == '.txt':
                     nuevo_nombre = f"ResultadosLocales_FES{factura_numero}.txt"
                     archivo_txt = os.path.join(carpeta_nombre_archivo, nuevo_nombre)
@@ -2826,17 +2813,10 @@ def radicar_policia_view(request, numero_admision, idusuario):
                     with open(ruta_origen, 'r', encoding='utf-8') as f:
                         contenido_json = f.read()
                     contenido_stripped = contenido_json.lstrip()
-                    if contenido_stripped.startswith('{"numDocumentoIdObligado') or \
-                       os.path.splitext(nombre)[0].upper() == f'FES{factura_numero}'.upper():
-                        nuevo_nombre = f"FES{factura_numero}.json"
-                    elif contenido_stripped.startswith('{"ResultState') or 'Resultados' in nombre:
-                        match_id = re.search(r'"ProcesoId"\s*:\s*"?(?P<id>\d+)', contenido_json)
-                        if match_id:
-                            nuevo_nombre = f"ResultadosMSP_FES{factura_numero}_ID{match_id.group('id')}_A_CUV.json"
-                        else:
-                            nuevo_nombre = f"ResultadosMSP_FES{factura_numero}_A_CUV.json"
-                    else:
-                        nuevo_nombre = nombre
+                    if not (contenido_stripped.startswith('{"numDocumentoIdObligado') or
+                            os.path.splitext(nombre)[0].upper() == f'FES{factura_numero}'.upper()):
+                        continue
+                    nuevo_nombre = f"FES{factura_numero}.json"
                 elif nombre.lower().endswith('.txt'):
                     nuevo_nombre = f"ResultadosLocales_FES{factura_numero}.txt"
                 else:
