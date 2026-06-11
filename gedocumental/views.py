@@ -1423,7 +1423,12 @@ def radicar_salud_total_view(request, numero_admision, idusuario):
             for archivo_nombre in os.listdir(carpeta_json_txt):
                 ruta_origen = os.path.join(carpeta_json_txt, archivo_nombre)
                 if archivo_nombre.lower().endswith('.json'):
-                    json_temp = ruta_origen
+                    with open(ruta_origen, 'r', encoding='utf-8') as f:
+                        contenido_json = f.read()
+                    contenido_stripped = contenido_json.lstrip()
+                    if contenido_stripped.startswith('{"numDocumentoIdObligado') or \
+                       os.path.splitext(archivo_nombre)[0].upper() == f'FES{factura_numero}'.upper():
+                        json_temp = ruta_origen
                 elif archivo_nombre.lower().endswith('.txt'):
                     txt_temp = ruta_origen
         else:
@@ -1432,13 +1437,13 @@ def radicar_salud_total_view(request, numero_admision, idusuario):
         if not json_temp or not txt_temp:
             return JsonResponse({
                 "success": False,
-                "detail": "No se encontraron ambos archivos necesarios (CUV.json y RIPS.json) para generar el ZIP."
+                "detail": "No se encontraron ambos archivos necesarios (RIPS.json y ResultadosMSP.txt) para generar el ZIP."
             }, status=400)
 
-        zip_path = os.path.join(carpeta_nombre_archivo, f"901119103_FEC{factura_numero}.zip")
+        zip_path = os.path.join(carpeta_nombre_archivo, f"901119103_FES{factura_numero}.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
-            zipf.write(json_temp, arcname=f"901119103_FEC{factura_numero}_CUV.json")
-            zipf.write(txt_temp, arcname=f"901119103_FEC{factura_numero}_RIPS.json")
+            zipf.write(json_temp, arcname=f"901119103_FES{factura_numero}_CUV.json")
+            zipf.write(txt_temp, arcname=f"901119103_FES{factura_numero}_RIPS.json")
 
         archivos_a_verificar.update(Radicado=True)
 
@@ -1807,13 +1812,24 @@ def radicar_ejercito_view(request, numero_admision, idusuario):
                     ruta_archivo_destino = os.path.join(carpeta_nombre_archivo, nuevo_nombre)
 
                 elif extension == '.json':
-                    # ← CAMBIO: el .json ahora se llama RIPS_901119103_FEC{n}
-                    nuevo_nombre = f"RIPS_901119103_FEC{factura_numero}.json"
+                    with open(ruta_archivo_origen, 'r', encoding='utf-8') as f:
+                        contenido_json = f.read()
+                    contenido_stripped = contenido_json.lstrip()
+                    if contenido_stripped.startswith('{"numDocumentoIdObligado') or \
+                       os.path.splitext(archivo_nombre)[0].upper() == f'FES{factura_numero}'.upper():
+                        nuevo_nombre = f"RIPS_901119103_FES{factura_numero}.json"
+                    elif contenido_stripped.startswith('{"ResultState') or 'Resultados' in archivo_nombre:
+                        match_id = re.search(r'"ProcesoId"\s*:\s*"?(?P<id>\d+)', contenido_json)
+                        if match_id:
+                            nuevo_nombre = f"ResultadosMSP_FES{factura_numero}_ID{match_id.group('id')}_A_CUV.json"
+                        else:
+                            nuevo_nombre = f"ResultadosMSP_FES{factura_numero}_A_CUV.json"
+                    else:
+                        continue
                     ruta_archivo_destino = os.path.join(carpeta_nombre_archivo, nuevo_nombre)
 
                 elif extension == '.txt':
-                    # ← CAMBIO: el .txt ahora queda como .json con el mismo nombre CUV
-                    nuevo_nombre = f"CUV_901119103_FEC{factura_numero}.json"
+                    nuevo_nombre = f"CUV_901119103_FES{factura_numero}.json"
                     ruta_archivo_destino = os.path.join(carpeta_nombre_archivo, nuevo_nombre)
 
                 else:
@@ -2390,10 +2406,22 @@ def radicar_capitalsalud_view(request, numero_admision, idusuario):
                 extension = os.path.splitext(archivo_nombre)[1].lower()
                 ruta_archivo_origen = os.path.join(carpeta_json_txt, archivo_nombre)
                 if extension == '.json':
-                    nuevo_nombre = f"901119103_FES{factura_numero}.json"
-                    shutil.copy(ruta_archivo_origen, os.path.join(carpeta_nombre_archivo, nuevo_nombre))
+                    with open(ruta_archivo_origen, 'r', encoding='utf-8') as f:
+                        contenido_json = f.read()
+                    contenido_stripped = contenido_json.lstrip()
+                    if contenido_stripped.startswith('{"numDocumentoIdObligado') or \
+                       os.path.splitext(archivo_nombre)[0].upper() == f'FES{factura_numero}'.upper():
+                        nuevo_nombre = f"901119103_FES{factura_numero}.json"
+                        shutil.copy(ruta_archivo_origen, os.path.join(carpeta_nombre_archivo, nuevo_nombre))
+                    elif contenido_stripped.startswith('{"ResultState') or 'Resultados' in archivo_nombre:
+                        match_id = re.search(r'"ProcesoId"\s*:\s*"?(?P<id>\d+)', contenido_json)
+                        if match_id:
+                            nuevo_nombre = f"ResultadosMSP_FES{factura_numero}_ID{match_id.group('id')}_A_CUV.json"
+                        else:
+                            nuevo_nombre = f"ResultadosMSP_FES{factura_numero}_A_CUV.json"
+                        shutil.copy(ruta_archivo_origen, os.path.join(carpeta_nombre_archivo, nuevo_nombre))
                 elif extension == '.txt':
-                    nuevo_nombre = f"ResultadosLocales_FEC{factura_numero}.txt"
+                    nuevo_nombre = f"ResultadosLocales_FES{factura_numero}.txt"
                     archivo_txt = os.path.join(carpeta_nombre_archivo, nuevo_nombre)
                     shutil.copy(ruta_archivo_origen, archivo_txt)
                 elif extension == '.xml':
@@ -2781,7 +2809,7 @@ def radicar_policia_view(request, numero_admision, idusuario):
 
         archivos_pdf.sort(key=lambda x: (0 if x[0] == 'FACTURA' else 1))
 
-        temp_pdf_path = os.path.join(carpeta_usuario, f"FEC{factura_numero}.pdf")
+        temp_pdf_path = os.path.join(carpeta_usuario, f"FES{factura_numero}.pdf")
         merger = PdfMerger()
         for _, ruta in archivos_pdf:
             merger.append(ruta)
@@ -2795,9 +2823,22 @@ def radicar_policia_view(request, numero_admision, idusuario):
             for nombre in os.listdir(carpeta_json_txt):
                 ruta_origen = os.path.join(carpeta_json_txt, nombre)
                 if nombre.lower().endswith('.json'):
-                    nuevo_nombre = f"FES{factura_numero}.json"
+                    with open(ruta_origen, 'r', encoding='utf-8') as f:
+                        contenido_json = f.read()
+                    contenido_stripped = contenido_json.lstrip()
+                    if contenido_stripped.startswith('{"numDocumentoIdObligado') or \
+                       os.path.splitext(nombre)[0].upper() == f'FES{factura_numero}'.upper():
+                        nuevo_nombre = f"FES{factura_numero}.json"
+                    elif contenido_stripped.startswith('{"ResultState') or 'Resultados' in nombre:
+                        match_id = re.search(r'"ProcesoId"\s*:\s*"?(?P<id>\d+)', contenido_json)
+                        if match_id:
+                            nuevo_nombre = f"ResultadosMSP_FES{factura_numero}_ID{match_id.group('id')}_A_CUV.json"
+                        else:
+                            nuevo_nombre = f"ResultadosMSP_FES{factura_numero}_A_CUV.json"
+                    else:
+                        nuevo_nombre = nombre
                 elif nombre.lower().endswith('.txt'):
-                    nuevo_nombre = f"ResultadosLocales_FEC{factura_numero}.txt"
+                    nuevo_nombre = f"ResultadosLocales_FES{factura_numero}.txt"
                 else:
                     nuevo_nombre = nombre  # XML u otros se dejan igual
                 ruta_destino = os.path.join(carpeta_usuario, nuevo_nombre)
@@ -2805,7 +2846,7 @@ def radicar_policia_view(request, numero_admision, idusuario):
                 adicionales.append(ruta_destino)
 
         # Crear ZIP con PDF y archivos adicionales
-        zip_path = os.path.join(carpeta_usuario, f"FEC{factura_numero}.zip")
+        zip_path = os.path.join(carpeta_usuario, f"FES{factura_numero}.zip")
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             zipf.write(temp_pdf_path, os.path.basename(temp_pdf_path))
             for adicional in adicionales:
