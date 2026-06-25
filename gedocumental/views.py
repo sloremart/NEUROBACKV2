@@ -86,7 +86,7 @@ class GeDocumentalView(APIView):
                     sp.num_id,
                     sm.EPSPaciente,
                     sm.acompanante,
-                    sm.NumeroFactura,
+                    COALESCE(sm.NumeroFactura, fp.NumeroFactura) AS NumeroFactura,
                     sm.tipoUsuario,
                     sp.tipo_afilia,
                     sp.fecha_naci,
@@ -103,11 +103,12 @@ class GeDocumentalView(APIView):
                     c.alias AS ContratoAlias,
                     c.regimen AS ContratoRegimen,
                     sm.fecha_ing AS FechaIngreso,
-                    sm.Prefijo
+                    COALESCE(sm.Prefijo, fp.Prefijo) AS Prefijo
                 FROM sis_maes sm
                 LEFT JOIN sis_paci sp ON sm.autoid = sp.autoid
                 LEFT JOIN sis_empre se ON LTRIM(RTRIM(sm.EPSPaciente)) = LTRIM(RTRIM(se.codigo))
                 LEFT JOIN contratos c ON sm.contrato = c.codigo
+                LEFT JOIN sis_maes_FacturaPcte fp ON sm.con_estudio = fp.Estudio AND fp.Anulada = 0
                 WHERE sm.con_estudio = %s
                 ORDER BY sm.con_estudio DESC
             '''
@@ -2619,118 +2620,94 @@ def radicar_other_view(request, numero_admision, idusuario):
 
         admision_data = admision_response.data.get('data')
         factura_numero = admision_data.get('FacturaNo')
-        prefijo = admision_data.get('Prefijo')
-        codigo_entidad = admision_data.get('CodigoEntidad')
+        prefijo = admision_data.get('Prefijo') or ''
+        contrato_alias = admision_data.get('ContratoAlias') or ''
 
-        if factura_numero is not None:
-            # Obtener los archivos de la admisión
-            archivos_response = archivos_por_admision_radicacion(request._request, numero_admision)
-            if archivos_response.status_code != 200:
-                return archivos_response
-
-            archivos_data = archivos_response.data.get('data', [])
-
-            # Validar la presencia de los archivos requeridos
-            documentos_requeridos = {'FACTURA', 'RESULTADO'}
-            tipos_archivos_presentes = {archivo.get('Tipo') for archivo in archivos_data}
-            documentos_faltantes = documentos_requeridos - tipos_archivos_presentes
-
-            if documentos_faltantes:
-                response_data = {
-                    "success": False,
-                    "detail": f"Faltan los siguientes documentos requeridos: {', '.join(documentos_faltantes)}"
-                }
-                return JsonResponse(response_data, status=400)
-
-            # Verificar si el usuario existe y obtener el nombre
-            try:
-                user = CustomUser.objects.get(id=idusuario)
-                nombre_usuario = user.username  # Obtener el nombre del usuario para usar en la carpeta
-                # Sanitizar el nombre del usuario si es necesario
-                nombre_usuario = "".join(c for c in nombre_usuario if c.isalnum() or c in (' ', '.', '_')).rstrip()
-                print(f"Nombre del usuario sanitizado para crear carpeta: {nombre_usuario}")
-            except CustomUser.DoesNotExist:
-                response_data = {
-                    "success": False,
-                    "detail": "Usuario no encontrado."
-                }
-                return JsonResponse(response_data, status=404)
-
-            # Procesar y combinar los archivos en un PDF
-            merger = PdfMerger()
-
-            for archivo in archivos_data:
-                tipo_archivo = archivo.get('Tipo')
-                ruta_origen_relative = unquote(archivo.get('RutaArchivo'))
-                ruta_origen_relative = ruta_origen_relative.replace(settings.MEDIA_URL, "").lstrip('/')
-                ruta_origen = os.path.normpath(os.path.join(settings.MEDIA_ROOT, ruta_origen_relative))
-
-                print(f'Ruta formada para {tipo_archivo}: {ruta_origen}')
-
-                if os.path.exists(ruta_origen):
-                    merger.append(ruta_origen)
-                else:
-                    raise FileNotFoundError(f"No se encontró el archivo {tipo_archivo} en {ruta_origen}")
-
-            # Definir la carpeta de destino basada en el código de la entidad
-            carpetas_entidades = {
-                "POL12": "POL12",
-                "PML01": "PML01",
-                "CAJACO": "CAJACO",
-                "CAJASU": "CAJASU",
-                "UNA01": "UNA01",
-                "DM02": "DM02",
-                "EQV01": "EQV01",
-                "PAR01": "PAR01",
-                "CHM05": "CHM05",
-                "COL01": "COL01",
-                "MES01": "MES01",
-                "POL11": "POL11",
-                "CHM02": "CHM02",
-                "UNA02": "UNA02",
-                "MUL01": "MUL01",
-                "IPSOL1": "IPSOL1",
-                "AIR01": "AIR01",
-                "AXA01": "AXA01",
-                "POL13": "POL13",
-                "BOL01": "BOL01",
-                "DMO03": "DMO03",
-                "DMO04": "DMO04",
-                    
-            }
-            entidad_carpeta = carpetas_entidades.get(codigo_entidad, "OTRO")
-
-            # Crear la ruta completa del archivo destino usando el nombre del usuario
-            fecha_hoy = datetime.now().strftime('%Y-%m-%d')
-            carpeta_nombre_archivo = os.path.join(settings.MEDIA_ROOT, 'gdocumental', 'Radicacion', entidad_carpeta, fecha_hoy, nombre_usuario)
-            if not os.path.exists(carpeta_nombre_archivo):
-                os.makedirs(carpeta_nombre_archivo)
-
-            ruta_destino_merged = os.path.join(carpeta_nombre_archivo, f"{prefijo}{factura_numero}.pdf")
-            merger.write(ruta_destino_merged)
-            merger.close()
-
-            # Verificar registros antes de la actualización
-            print(f"Registros encontrados para actualizar: {archivos_a_verificar.count()}")
-            for archivo in archivos_a_verificar:
-                print(f"Antes de la actualización - IdArchivo: {archivo.IdArchivo}, Radicado: {archivo.Radicado}")
-
-            # Actualizar el campo Radicado en la tabla archivos
-            actualizados = archivos_a_verificar.update(Radicado=True)
-            print(f"Registros actualizados a Radicado=True: {actualizados}")
-
-            # Verificar registros después de la actualización
-            archivos_actualizados = ArchivoFacturacion.objects.filter(Admision_id=numero_admision, Radicado=True)
-            for archivo in archivos_actualizados:
-                print(f"Después de la actualización - IdArchivo: {archivo.IdArchivo}, Radicado: {archivo.Radicado}")
-
-            response_data = {
-                "success": True,
-                "detail": f"Archivos combinados en un solo documento y guardados en {ruta_destino_merged}"
-            }
-            return JsonResponse(response_data, status=200)
-        else:
+        if not factura_numero:
             raise ValueError("La admisión no tiene el número de factura.")
+
+        nombre_archivo = f"{prefijo}{factura_numero}"
+
+        archivos_response = archivos_por_admision_radicacion(request._request, numero_admision)
+        if archivos_response.status_code != 200:
+            return archivos_response
+
+        archivos_data = archivos_response.data.get('data', [])
+
+        documentos_requeridos = {'FACTURA', 'RESULTADO'}
+        tipos_archivos_presentes = {archivo.get('Tipo') for archivo in archivos_data}
+        documentos_faltantes = documentos_requeridos - tipos_archivos_presentes
+
+        if documentos_faltantes:
+            return JsonResponse({
+                "success": False,
+                "detail": f"Faltan los siguientes documentos requeridos: {', '.join(documentos_faltantes)}"
+            }, status=400)
+
+        try:
+            user = CustomUser.objects.get(id=idusuario)
+            nombre_usuario = "".join(c for c in user.username if c.isalnum() or c in (' ', '.', '_')).rstrip()
+        except CustomUser.DoesNotExist:
+            return JsonResponse({"success": False, "detail": "Usuario no encontrado."}, status=404)
+
+        merger = PdfMerger()
+        for archivo in archivos_data:
+            tipo_archivo = archivo.get('Tipo')
+            ruta_origen_relative = unquote(archivo.get('RutaArchivo'))
+            ruta_origen_relative = ruta_origen_relative.replace(settings.MEDIA_URL, "").lstrip('/')
+            ruta_origen = os.path.normpath(os.path.join(settings.MEDIA_ROOT, ruta_origen_relative))
+            if os.path.exists(ruta_origen):
+                merger.append(ruta_origen)
+            else:
+                raise FileNotFoundError(f"No se encontró el archivo {tipo_archivo} en {ruta_origen}")
+
+        carpetas_por_alias = {
+            "AIR LIQUIDE COLOMBIA": "AIR01",
+            "ARL POSITIVA": "ARL01",
+            "AXA COLPATRIA SEGUROS S.A.": "AXA01",
+            "EQUIPO INTERDISCIPLINARIO PARA EL MEJORAMIENTO DE LA CALIDAD": "EQUIPO",
+            "BOLIVAR POLIZA": "BOL01",
+            "BOLIVAR SOAT": "BOL01",
+            "EQUIVIDA": "EQV01",
+            "IPS CONSULTORIO MEDICO SALUD OCUPACIONAL S.A.S": "IPS01",
+            "IPS ONCOLIFE": "ONCO01",
+            "IPS SOLIMED JD SAS": "IPSOL1",
+            "MULTISALUD IPS": "MUL01",
+            "MUNDIAL SOAT": "MUNDIAL",
+            "PARTICULAR 10% DESCUENTO": "PAR01",
+            "PARTICULAR 20% DESCUENTO": "PAR01",
+            "PARTICULAR 30% DESCUENTO": "PAR01",
+            "PARTICULAR 40% DESCUENTO": "PAR01",
+            "PARTICULAR 50% DESCUENTO": "PAR01",
+            "PARTICULAR 60% DESCUENTO": "PAR01",
+            "PARTICULAR 70% DESCUENTO": "PAR01",
+            "PARTICULAR 80% DESCUENTO": "PAR01",
+            "PARTICULAR 90% DESCUENTO": "PAR01",
+            "PARTICULAR BONO REGALO": "PAR01",
+            "PARTICULAR TARIFA PLENA": "PAR01",
+            "PREVISORA SOAT": "PREVISORA",
+            "SEGUROS DEL ESTADO SOAT": "SEGESTAL",
+            "SOLIDARIA SOAT": "SOLIDARIA",
+            "SURA POLIZA EVOLUCIONA": "SURA01",
+            "SURA POLIZA GLOBAL Y CLASICO": "SURA01",
+            "SURA SOAT": "SURA01",
+        }
+        entidad_carpeta = carpetas_por_alias.get(contrato_alias, "OTRO")
+
+        fecha_hoy = datetime.now().strftime('%Y-%m-%d')
+        carpeta_nombre_archivo = os.path.join(settings.MEDIA_ROOT, 'gdocumental', 'Radicacion', entidad_carpeta, fecha_hoy, nombre_usuario)
+        os.makedirs(carpeta_nombre_archivo, exist_ok=True)
+
+        ruta_destino_merged = os.path.join(carpeta_nombre_archivo, f"{nombre_archivo}.pdf")
+        merger.write(ruta_destino_merged)
+        merger.close()
+
+        archivos_a_verificar.update(Radicado=True)
+
+        return JsonResponse({
+            "success": True,
+            "detail": f"Archivos combinados en un solo documento y guardados en {ruta_destino_merged}"
+        }, status=200)
     except ArchivoFacturacion.DoesNotExist:
         response_data = {
             "success": False,
