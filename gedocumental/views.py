@@ -1909,9 +1909,8 @@ def radicar_fomag_view(request, numero_admision, idusuario):
 
         # Estructura de carpetas
         carpeta_usuario  = os.path.join(settings.MEDIA_ROOT, 'gdocumental', 'Radicacion', 'FOM01', fecha_hoy, nombre_usuario)
-        carpeta_factura  = os.path.join(carpeta_usuario, f'FES{factura_numero}')
-        carpeta_soportes = os.path.join(carpeta_factura, 'SOPORTES')
-        carpeta_json     = os.path.join(carpeta_factura, 'JSON_901119103')
+        carpeta_soportes = os.path.join(carpeta_usuario, 'SOPORTES', f'FES{factura_numero}')
+        carpeta_json     = os.path.join(carpeta_usuario, 'JSON_901119103', f'FES{factura_numero}')
         os.makedirs(carpeta_soportes, exist_ok=True)
         os.makedirs(carpeta_json,     exist_ok=True)
 
