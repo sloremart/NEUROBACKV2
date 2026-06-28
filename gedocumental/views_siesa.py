@@ -54,6 +54,9 @@ SIESA_HEADERS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+SIESA_APP_URL = "http://192.168.1.209:8091/ZeusSalud/ips/App/index.html"
+
+
 def _siesa_login() -> requests.Session:
     """Crea una sesión autenticada en ZeusSalud (tres pasos)."""
     session = requests.Session()
@@ -67,6 +70,9 @@ def _siesa_login() -> requests.Session:
     bd_nombre   = getattr(settings, "SIESA_BD_NOMBRE",   "ZeusSalud_Neuro")
     bd_usuario  = getattr(settings, "SIESA_BD_USUARIO",  "")
     bd_password = getattr(settings, "SIESA_BD_PASSWORD", "")
+
+    # Paso 0: visitar la app principal para establecer ASP.NET_SessionId
+    session.get(SIESA_APP_URL, timeout=15)
 
     # Paso 1: login con credenciales del usuario — responde con lista de sedes
     session.post(
@@ -292,6 +298,13 @@ def debug_siesa_login(request):
     estudio = request.GET.get("estudio", "3039")
     log = []
     session = requests.Session()
+    session.headers.update(SIESA_HEADERS)
+
+    try:
+        r0 = session.get(SIESA_APP_URL, timeout=15)
+        log.append({"paso": "app_index", "status": r0.status_code, "cookies": dict(session.cookies)})
+    except Exception as e:
+        log.append({"paso": "app_index", "error": str(e)})
 
     try:
         r1 = session.post(SIESA_CONFIG_URL, data={
