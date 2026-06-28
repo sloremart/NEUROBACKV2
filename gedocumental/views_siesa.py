@@ -284,6 +284,75 @@ def generar_pdf_siesa(request):
 
 
 @api_view(["GET"])
+def debug_siesa_login(request):
+    """
+    Diagnóstico: prueba el login de SIESA paso a paso y devuelve cookies y
+    el status del reporte para el estudio indicado.
+    GET /api/v2/gedocumental/debug-siesa/?estudio=3039
+    """
+    import hashlib as _hashlib
+
+    usuario   = getattr(settings, "SIESA_USUARIO",    "NO_CONFIGURADO")
+    clave     = getattr(settings, "SIESA_CLAVE",      "")
+    bd_usuario  = getattr(settings, "SIESA_BD_USUARIO",  "NO_CONFIGURADO")
+    bd_password = getattr(settings, "SIESA_BD_PASSWORD", "")
+    bd_servidor = getattr(settings, "SIESA_BD_SERVIDOR", "NEUROBACK")
+    bd_nombre   = getattr(settings, "SIESA_BD_NOMBRE",   "ZeusSalud_Neuro")
+    clave_md5 = _hashlib.md5(clave.encode()).hexdigest()
+
+    estudio = request.GET.get("estudio", "3039")
+    log = []
+    session = requests.Session()
+
+    try:
+        r1 = session.post(SIESA_CONFIG_URL, data={
+            "operacion": "verificarUsuarios", "k_conexion": "CLIENTE",
+            "conexion": bd_nombre, "servidor": bd_servidor,
+            "usuarioBd": bd_usuario, "passwordBD": bd_password,
+            "file_conexion": "", "file_servidor": "", "file_usuarioBd": "", "file_passwordBD": "",
+        }, timeout=15)
+        log.append({"paso": "configuracionInicial", "status": r1.status_code, "body": r1.text[:300]})
+    except Exception as e:
+        log.append({"paso": "configuracionInicial", "error": str(e)})
+
+    try:
+        r2 = session.post(SIESA_LOGIN_URL, data={
+            "operacion": "Login", "BaseDato": bd_nombre, "ServidorBD": bd_servidor,
+            "UsuarioBD": bd_usuario, "PasswordBD": bd_password,
+            "NombreUsuario": usuario, "PasswordUsuario": clave_md5,
+        }, timeout=15)
+        log.append({"paso": "login", "status": r2.status_code, "body": r2.text[:300]})
+    except Exception as e:
+        log.append({"paso": "login", "error": str(e)})
+
+    try:
+        r3 = session.post(SIESA_LOGIN_URL, data={
+            "operacion": "SetSedePuntoAtencion",
+            "IdPuntoAtencion": SIESA_SEDE_ID,
+            "NombrePuntoAtencion": SIESA_SEDE_NOMBRE,
+            "IdSede": SIESA_SEDE_ID,
+        }, timeout=15)
+        log.append({"paso": "sede", "status": r3.status_code, "body": r3.text[:300]})
+    except Exception as e:
+        log.append({"paso": "sede", "error": str(e)})
+
+    cookies = dict(session.cookies)
+    try:
+        r4 = session.get(SIESA_REPORT_URL, params={
+            "formato": "02", "estudio": estudio, "id": "1", "ImprimirImagenes": "0",
+        }, timeout=15)
+        log.append({"paso": "reporte", "status": r4.status_code, "body": r4.text[:500]})
+    except Exception as e:
+        log.append({"paso": "reporte", "error": str(e)})
+
+    return JsonResponse({
+        "config": {"usuario": usuario, "bd_usuario": bd_usuario, "bd_servidor": bd_servidor, "bd_nombre": bd_nombre},
+        "cookies": cookies,
+        "pasos": log,
+    })
+
+
+@api_view(["GET"])
 def generar_pdfs_siesa_lote(request):
     """
     Procesa en lote todos los estudios de imágenes de un rango de fechas.

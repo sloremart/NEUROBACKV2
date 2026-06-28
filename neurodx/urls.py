@@ -44,7 +44,7 @@ from gedocumental.views import (
     radicar_other_view,
 )
 from gedocumental.utils.codigoentidad import obtener_hallazgos
-from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote
+from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote, debug_siesa_login
 
 # =============================================================================
 # MÓDULO: Auth  →  api/v2/auth/
@@ -92,6 +92,7 @@ gedocumental_urls = [
     # ── Generación PDFs desde SIESA (reemplaza el flujo Antares) ─────────────
     path('generar-pdf-siesa/',       generar_pdf_siesa,          name='v2-generar-pdf-siesa'),
     path('generar-pdfs-siesa/',      generar_pdfs_siesa_lote,    name='v2-generar-pdfs-siesa-lote'),
+    path('debug-siesa/',             debug_siesa_login,          name='v2-debug-siesa'),
 ]
 
 # =============================================================================
