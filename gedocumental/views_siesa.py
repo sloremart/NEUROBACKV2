@@ -61,25 +61,7 @@ def _siesa_login() -> requests.Session:
     bd_usuario  = getattr(settings, "SIESA_BD_USUARIO",  "")
     bd_password = getattr(settings, "SIESA_BD_PASSWORD", "")
 
-    # Paso 1: configuración inicial de conexión
-    session.post(
-        SIESA_CONFIG_URL,
-        data={
-            "operacion":     "verificarUsuarios",
-            "k_conexion":    "CLIENTE",
-            "conexion":      bd_nombre,
-            "servidor":      bd_servidor,
-            "usuarioBd":     bd_usuario,
-            "passwordBD":    bd_password,
-            "file_conexion": "",
-            "file_servidor": "",
-            "file_usuarioBd":  "",
-            "file_passwordBD": "",
-        },
-        timeout=30,
-    )
-
-    # Paso 2: login con credenciales del usuario — responde con lista de sedes
+    # Paso 1: login con credenciales del usuario — responde con lista de sedes
     session.post(
         SIESA_LOGIN_URL,
         data={
@@ -91,10 +73,10 @@ def _siesa_login() -> requests.Session:
             "NombreUsuario":   usuario,
             "PasswordUsuario": clave_md5,
         },
-        timeout=30,
+        timeout=60,
     )
 
-    # Paso 3: seleccionar sede/punto de atención
+    # Paso 2: seleccionar sede/punto de atención
     session.post(
         SIESA_LOGIN_URL,
         data={
