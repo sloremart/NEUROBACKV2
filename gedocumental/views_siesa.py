@@ -15,6 +15,7 @@ Endpoints:
       Procesa en lote todos los estudios de imágenes de un rango de fechas.
 """
 
+import hashlib
 import os
 import stat
 from datetime import datetime
@@ -52,19 +53,36 @@ def _siesa_login() -> requests.Session:
 
     usuario = getattr(settings, "SIESA_USUARIO", "")
     clave = getattr(settings, "SIESA_CLAVE", "")
+    clave_md5 = hashlib.md5(clave.encode()).hexdigest()
+
+    bd_servidor = getattr(settings, "SIESA_BD_SERVIDOR", "NEUROBACK")
+    bd_nombre   = getattr(settings, "SIESA_BD_NOMBRE",   "ZeusSalud_Neuro")
+    bd_usuario  = getattr(settings, "SIESA_BD_USUARIO",  "")
+    bd_password = getattr(settings, "SIESA_BD_PASSWORD", "")
 
     # Paso 1: enviar credenciales — responde con lista de sedes
     resp = session.post(
         SIESA_LOGIN_URL,
-        data={"usuario": usuario, "clave": clave},
+        data={
+            "Opcion":          "Login",
+            "BaseDato":        bd_nombre,
+            "ServidorBD":      bd_servidor,
+            "UsuarioBD":       bd_usuario,
+            "PasswordBD":      bd_password,
+            "NombreUsuario":   usuario,
+            "PasswordUsuario": clave_md5,
+        },
         timeout=30,
     )
     resp.raise_for_status()
 
-    # Paso 2: seleccionar sede
+    # Paso 2: seleccionar sede (ver petición al hacer clic en SEDE 01)
     session.post(
         SIESA_LOGIN_URL,
-        data={"usuario": usuario, "clave": clave, "sede": SIESA_SEDE_ID},
+        data={
+            "Opcion": "Sede",
+            "Sede":   SIESA_SEDE_ID,
+        },
         timeout=30,
     )
 
