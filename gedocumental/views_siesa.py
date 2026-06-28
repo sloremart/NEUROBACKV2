@@ -34,11 +34,50 @@ SIESA_REPORT_URL = (
     "http://192.168.1.209:8091/ZeusSalud/Reportes/CLIENTE//html/"
     "reporte_paraclinicoFormato.php"
 )
+SIESA_LOGIN_URL = (
+    "http://192.168.1.209:8091/ZeusSalud/ips/App/controlador/login/login.php"
+)
+SIESA_SEDE_ID = 2  # SEDE 01
+
+_siesa_session_cache: requests.Session | None = None
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _siesa_login() -> requests.Session:
+    """Crea una sesión autenticada en ZeusSalud (dos pasos: login + sede)."""
+    session = requests.Session()
+
+    usuario = getattr(settings, "SIESA_USUARIO", "")
+    clave = getattr(settings, "SIESA_CLAVE", "")
+
+    # Paso 1: enviar credenciales — responde con lista de sedes
+    resp = session.post(
+        SIESA_LOGIN_URL,
+        data={"usuario": usuario, "clave": clave},
+        timeout=30,
+    )
+    resp.raise_for_status()
+
+    # Paso 2: seleccionar sede
+    session.post(
+        SIESA_LOGIN_URL,
+        data={"usuario": usuario, "clave": clave, "sede": SIESA_SEDE_ID},
+        timeout=30,
+    )
+
+    return session
+
+
+def _get_siesa_session() -> requests.Session:
+    """Devuelve la sesión activa o crea una nueva si no existe."""
+    global _siesa_session_cache
+    if _siesa_session_cache is None:
+        _siesa_session_cache = _siesa_login()
+    return _siesa_session_cache
+
 
 def _fetch_html_siesa(estudio: int, id_admision: int) -> str:
     """Descarga el HTML del reporte SIESA para un estudio."""
@@ -48,7 +87,16 @@ def _fetch_html_siesa(estudio: int, id_admision: int) -> str:
         "id": id_admision,
         "ImprimirImagenes": "0",
     }
-    resp = requests.get(SIESA_REPORT_URL, params=params, timeout=30)
+    session = _get_siesa_session()
+    resp = session.get(SIESA_REPORT_URL, params=params, timeout=30)
+
+    # Si SIESA devuelve 500, puede ser sesión expirada — reintentar con login nuevo
+    if resp.status_code == 500:
+        global _siesa_session_cache
+        _siesa_session_cache = None
+        session = _get_siesa_session()
+        resp = session.get(SIESA_REPORT_URL, params=params, timeout=30)
+
     resp.raise_for_status()
     return resp.text
 
