@@ -43,6 +43,12 @@ SIESA_SEDE_NOMBRE = "SEDE 01"
 
 _siesa_session_cache: requests.Session | None = None
 
+SIESA_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Referer": "http://192.168.1.209:8091/ZeusSalud/ips/App/index.html",
+    "Origin":  "http://192.168.1.209:8091",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -51,6 +57,7 @@ _siesa_session_cache: requests.Session | None = None
 def _siesa_login() -> requests.Session:
     """Crea una sesión autenticada en ZeusSalud (tres pasos)."""
     session = requests.Session()
+    session.headers.update(SIESA_HEADERS)
 
     usuario   = getattr(settings, "SIESA_USUARIO",    "")
     clave     = getattr(settings, "SIESA_CLAVE",      "")
@@ -322,8 +329,12 @@ def debug_siesa_login(request):
     try:
         r4 = session.get(SIESA_REPORT_URL, params={
             "formato": "02", "estudio": estudio, "id": "1", "ImprimirImagenes": "0",
-        }, timeout=15)
-        log.append({"paso": "reporte", "status": r4.status_code, "body": r4.text[:500]})
+        }, timeout=30)
+        body_preview = r4.text[:800]
+        log.append({"paso": "reporte", "status": r4.status_code, "content_length": len(r4.text), "body": body_preview})
+        # Guardar cuerpo completo para inspeccion
+        with open("/tmp/siesa_reporte_debug.html", "w") as f:
+            f.write(r4.text)
     except Exception as e:
         log.append({"paso": "reporte", "error": str(e)})
 
