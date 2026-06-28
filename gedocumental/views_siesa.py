@@ -35,10 +35,11 @@ SIESA_REPORT_URL = (
     "http://192.168.1.209:8091/ZeusSalud/Reportes/CLIENTE//html/"
     "reporte_paraclinicoFormato.php"
 )
-SIESA_LOGIN_URL = (
-    "http://192.168.1.209:8091/ZeusSalud/ips/App/controlador/login/login.php"
-)
-SIESA_SEDE_ID = 2  # SEDE 01
+SIESA_LOGIN_BASE = "http://192.168.1.209:8091/ZeusSalud/ips/App/controlador/login/"
+SIESA_LOGIN_URL  = SIESA_LOGIN_BASE + "login.php"
+SIESA_CONFIG_URL = SIESA_LOGIN_BASE + "configuracionInicial.php"
+SIESA_SEDE_ID    = 2   # SEDE 01
+SIESA_SEDE_NOMBRE = "SEDE 01"
 
 _siesa_session_cache: requests.Session | None = None
 
@@ -48,11 +49,11 @@ _siesa_session_cache: requests.Session | None = None
 # ---------------------------------------------------------------------------
 
 def _siesa_login() -> requests.Session:
-    """Crea una sesión autenticada en ZeusSalud (dos pasos: login + sede)."""
+    """Crea una sesión autenticada en ZeusSalud (tres pasos)."""
     session = requests.Session()
 
-    usuario = getattr(settings, "SIESA_USUARIO", "")
-    clave = getattr(settings, "SIESA_CLAVE", "")
+    usuario   = getattr(settings, "SIESA_USUARIO",    "")
+    clave     = getattr(settings, "SIESA_CLAVE",      "")
     clave_md5 = hashlib.md5(clave.encode()).hexdigest()
 
     bd_servidor = getattr(settings, "SIESA_BD_SERVIDOR", "NEUROBACK")
@@ -60,11 +61,29 @@ def _siesa_login() -> requests.Session:
     bd_usuario  = getattr(settings, "SIESA_BD_USUARIO",  "")
     bd_password = getattr(settings, "SIESA_BD_PASSWORD", "")
 
-    # Paso 1: enviar credenciales — responde con lista de sedes
-    resp = session.post(
+    # Paso 1: configuración inicial de conexión
+    session.post(
+        SIESA_CONFIG_URL,
+        data={
+            "operacion":     "verificarUsuarios",
+            "k_conexion":    "CLIENTE",
+            "conexion":      bd_nombre,
+            "servidor":      bd_servidor,
+            "usuarioBd":     bd_usuario,
+            "passwordBD":    bd_password,
+            "file_conexion": "",
+            "file_servidor": "",
+            "file_usuarioBd":  "",
+            "file_passwordBD": "",
+        },
+        timeout=30,
+    )
+
+    # Paso 2: login con credenciales del usuario — responde con lista de sedes
+    session.post(
         SIESA_LOGIN_URL,
         data={
-            "Opcion":          "Login",
+            "operacion":       "Login",
             "BaseDato":        bd_nombre,
             "ServidorBD":      bd_servidor,
             "UsuarioBD":       bd_usuario,
@@ -74,14 +93,15 @@ def _siesa_login() -> requests.Session:
         },
         timeout=30,
     )
-    resp.raise_for_status()
 
-    # Paso 2: seleccionar sede (ver petición al hacer clic en SEDE 01)
+    # Paso 3: seleccionar sede/punto de atención
     session.post(
         SIESA_LOGIN_URL,
         data={
-            "Opcion": "Sede",
-            "Sede":   SIESA_SEDE_ID,
+            "operacion":           "SetSedePuntoAtencion",
+            "IdPuntoAtencion":     SIESA_SEDE_ID,
+            "NombrePuntoAtencion": SIESA_SEDE_NOMBRE,
+            "IdSede":              SIESA_SEDE_ID,
         },
         timeout=30,
     )
