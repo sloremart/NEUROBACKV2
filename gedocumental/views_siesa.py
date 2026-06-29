@@ -129,7 +129,7 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
             "encoding": "UTF-8",
             "cookie": ("PHPSESSID", phpsessid),
         }
-        return pdfkit.from_url(url, False, options=options)
+        return pdfkit.from_url(url, False, options=options, verbose=True)
 
     session = _get_siesa_session()
     try:
