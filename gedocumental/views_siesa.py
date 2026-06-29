@@ -99,6 +99,9 @@ def _siesa_login() -> requests.Session:
         timeout=30,
     )
 
+    # Paso 3: recargar iniciando.php con sesión autenticada para cargar config del IPS
+    session.get(SIESA_APP_URL, timeout=15)
+
     return session
 
 
