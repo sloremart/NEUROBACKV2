@@ -338,16 +338,24 @@ def debug_siesa_login(request):
     except Exception as e:
         log.append({"paso": "sede", "error": str(e)})
 
+    id_param = request.GET.get("id", "1")
     cookies = dict(session.cookies)
     try:
         r4 = session.get(SIESA_REPORT_URL, params={
-            "formato": "02", "estudio": estudio, "id": "1", "ImprimirImagenes": "0",
+            "formato": "02", "estudio": estudio, "id": id_param, "ImprimirImagenes": "0",
         }, timeout=30)
-        body_preview = r4.text[:800]
-        log.append({"paso": "reporte", "status": r4.status_code, "content_length": len(r4.text), "body": body_preview})
-        # Guardar cuerpo completo para inspeccion
-        with open("/tmp/siesa_reporte_debug.html", "w") as f:
-            f.write(r4.text)
+        html = r4.text
+        # Buscar datos del paciente en el HTML para confirmar si hay contenido
+        import re
+        datos = re.findall(r'<td[^>]*>([^<]{5,})</td>', html)[:20]
+        log.append({
+            "paso": "reporte",
+            "status": r4.status_code,
+            "content_length": len(html),
+            "tiene_datos": len(datos) > 3,
+            "muestra_celdas": datos[:10],
+            "body_inicio": html[:500],
+        })
     except Exception as e:
         log.append({"paso": "reporte", "error": str(e)})
 
