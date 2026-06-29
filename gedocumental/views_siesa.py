@@ -127,9 +127,6 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
         )
         options = {
             "encoding": "UTF-8",
-            "quiet": "",
-            "no-outline": None,
-            "enable-local-file-access": None,
             "cookie": ("PHPSESSID", phpsessid),
         }
         return pdfkit.from_url(url, False, options=options)
