@@ -19,15 +19,13 @@ import hashlib
 import os
 import stat
 from datetime import datetime
-from io import BytesIO
 
+import pdfkit
 import requests
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from django.db import connections
 from rest_framework.decorators import api_view
-from io import BytesIO
-from xhtml2pdf import pisa
 
 from gedocumental.models import ArchivoFacturacion
 
@@ -135,12 +133,14 @@ def _fetch_html_siesa(estudio: int, id_admision: int) -> str:
 
 
 def _html_to_pdf(html_content: str, base_url: str = None) -> bytes:
-    """Convierte HTML a bytes PDF usando xhtml2pdf (pisa)."""
-    buffer = BytesIO()
-    result = pisa.CreatePDF(html_content.encode("utf-8"), dest=buffer, encoding="utf-8")
-    if result.err:
-        raise RuntimeError(f"Error al convertir HTML a PDF: {result.err}")
-    return buffer.getvalue()
+    """Convierte HTML a bytes PDF usando wkhtmltopdf."""
+    options = {
+        "encoding": "UTF-8",
+        "quiet": "",
+        "no-outline": None,
+        "enable-local-file-access": None,
+    }
+    return pdfkit.from_string(html_content, False, options=options)
 
 
 def _guardar_pdf(estudio: int, pdf_bytes: bytes) -> str:

@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y smbclient curl gnupg2 \
     > /etc/apt/sources.list.d/mssql-release.list \
  && apt-get update \
  && ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev \
+ && apt-get install -y wkhtmltopdf \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Copiar e instalar requerimientos de Python
