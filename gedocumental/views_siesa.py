@@ -45,7 +45,7 @@ _siesa_session_cache: requests.Session | None = None
 
 SIESA_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Referer": "http://192.168.1.209:8091/ZeusSalud/ips/App/index.html",
+    "Referer": "http://192.168.1.209:8091/ZeusSalud/ips/iniciando.php",
     "Origin":  "http://192.168.1.209:8091",
 }
 
@@ -54,7 +54,7 @@ SIESA_HEADERS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
-SIESA_APP_URL = "http://192.168.1.209:8091/ZeusSalud/ips/App/index.html"
+SIESA_APP_URL = "http://192.168.1.209:8091/ZeusSalud/ips/iniciando.php"
 
 
 def _siesa_login() -> requests.Session:
