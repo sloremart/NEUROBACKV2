@@ -36,9 +36,10 @@ SIESA_REPORT_URL = (
 )
 SIESA_LOGIN_BASE = "http://192.168.1.209:8091/ZeusSalud/ips/App/controlador/login/"
 SIESA_LOGIN_URL  = SIESA_LOGIN_BASE + "login.php"
-SIESA_CONFIG_URL = SIESA_LOGIN_BASE + "configuracionInicial.php"
-SIESA_SEDE_ID    = 2   # SEDE 01
-SIESA_SEDE_NOMBRE = "SEDE 01"
+SIESA_ROOT_URL        = "http://192.168.1.209:8091/ZeusSalud/"
+SIESA_CTRL_ACCESO_URL = "http://192.168.1.209:8091/ZeusSalud/ips/ctrl_acceso_2.php"
+SIESA_SEDE_ID         = 2   # SEDE 01
+SIESA_SEDE_NOMBRE     = "SEDE 01"
 
 _siesa_session_cache: requests.Session | None = None
 
@@ -70,7 +71,9 @@ def _siesa_login() -> requests.Session:
     bd_usuario  = getattr(settings, "SIESA_BD_USUARIO",  "")
     bd_password = getattr(settings, "SIESA_BD_PASSWORD", "")
 
-    # Paso 0: visitar la app principal para establecer ASP.NET_SessionId
+    # Paso 0a: visitar el root de ZeusSalud — puede establecer ASP.NET_SessionId
+    session.get(SIESA_ROOT_URL, timeout=15)
+    # Paso 0b: visitar iniciando.php para establecer PHPSESSID
     session.get(SIESA_APP_URL, timeout=15)
 
     # Paso 1: login con credenciales del usuario — responde con lista de sedes
@@ -100,8 +103,19 @@ def _siesa_login() -> requests.Session:
         timeout=30,
     )
 
-    # Paso 3: recargar iniciando.php con sesión autenticada para cargar config del IPS
-    session.get(SIESA_APP_URL, timeout=15)
+    # Paso 3: ctrl_acceso_2.php — inicializa $_SESSION del IPS con datos completos de la clínica
+    session.post(
+        SIESA_CTRL_ACCESO_URL,
+        data={
+            "id_sede": "", "hostname": "SERVER", "existeCliente": "N",
+            "manejaBdCentral": "N", "software_name": "ZeusSalud", "conexion": "0",
+            "bd_0": bd_nombre, "servidor_0": bd_servidor,
+            "usuario_0": bd_usuario, "password_0": bd_password,
+            "file_bd_0": "", "file_servidor_0": "", "file_usuario_0": "", "file_password_0": "",
+            "default_0": "1", "usuario": usuario, "password": clave,
+        },
+        timeout=30,
+    )
 
     return session
 
@@ -121,7 +135,8 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
     Si la sesión expira (500), re-autentica y reintenta.
     """
     def _do_fetch(session: requests.Session) -> bytes:
-        phpsessid = session.cookies.get("PHPSESSID", "")
+        phpsessid    = session.cookies.get("PHPSESSID", "")
+        aspnet_sess  = session.cookies.get("ASP.NET_SessionId", "")
         url = (
             f"{SIESA_REPORT_URL}"
             f"?formato=02&estudio={estudio}&id={id_admision}&ImprimirImagenes=0"
@@ -129,13 +144,15 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp_path = tmp.name
         try:
-            cmd = [
-                "wkhtmltopdf",
-                "--encoding", "UTF-8",
-                "--cookie", "PHPSESSID", phpsessid,
-                "--quiet",
-                url, tmp_path,
-            ]
+            cmd = ["wkhtmltopdf", "--encoding", "UTF-8"]
+            if phpsessid:
+                cmd += ["--cookie", "PHPSESSID", phpsessid]
+            if aspnet_sess:
+                cmd += ["--cookie", "ASP.NET_SessionId", aspnet_sess]
+            css_path = "/app/siesa_printable.css"
+            if os.path.exists(css_path):
+                cmd += ["--user-style-sheet", css_path]
+            cmd += ["--quiet", url, tmp_path]
             result = subprocess.run(cmd, capture_output=True, timeout=60)
             if result.returncode != 0:
                 raise RuntimeError(result.stderr.decode(errors="replace"))
@@ -285,87 +302,115 @@ def generar_pdf_siesa(request):
 @api_view(["GET"])
 def debug_siesa_login(request):
     """
-    Diagnóstico: prueba el login de SIESA paso a paso y devuelve cookies y
-    el status del reporte para el estudio indicado.
-    GET /api/v2/gedocumental/debug-siesa/?estudio=3039
+    Diagnóstico exhaustivo: prueba el flujo de login de SIESA paso a paso
+    buscando en qué URL se establece el ASP.NET_SessionId.
+
+    GET /api/v2/gedocumental/debug-siesa/?estudio=3039&id=7506
     """
     import hashlib as _hashlib
+    import re as _re
 
-    usuario   = getattr(settings, "SIESA_USUARIO",    "NO_CONFIGURADO")
-    clave     = getattr(settings, "SIESA_CLAVE",      "")
+    usuario     = getattr(settings, "SIESA_USUARIO",    "NO_CONFIGURADO")
+    clave       = getattr(settings, "SIESA_CLAVE",      "")
     bd_usuario  = getattr(settings, "SIESA_BD_USUARIO",  "NO_CONFIGURADO")
     bd_password = getattr(settings, "SIESA_BD_PASSWORD", "")
     bd_servidor = getattr(settings, "SIESA_BD_SERVIDOR", "NEUROBACK")
     bd_nombre   = getattr(settings, "SIESA_BD_NOMBRE",   "ZeusSalud_Neuro")
-    clave_md5 = _hashlib.md5(clave.encode()).hexdigest()
+    clave_md5   = _hashlib.md5(clave.encode()).hexdigest()
 
-    estudio = request.GET.get("estudio", "3039")
+    estudio  = request.GET.get("estudio", "3039")
+    id_param = request.GET.get("id", "7506")
     log = []
+
+    def _step(label, fn):
+        try:
+            r = fn()
+            cookies_now = dict(session.cookies)
+            entry = {
+                "paso": label,
+                "status": r.status_code,
+                "cookies_despues": cookies_now,
+                "set_cookie_header": r.headers.get("Set-Cookie", ""),
+                "tiene_aspnet": "ASP.NET_SessionId" in cookies_now,
+            }
+            if label in ("root", "iniciando"):
+                entry["body_inicio"] = r.text[:800]
+            else:
+                entry["body"] = r.text[:400]
+            return entry
+        except Exception as e:
+            return {"paso": label, "error": str(e)}
+
     session = requests.Session()
     session.headers.update(SIESA_HEADERS)
 
-    try:
-        r0 = session.get(SIESA_APP_URL, timeout=15)
-        log.append({"paso": "app_index", "status": r0.status_code, "cookies": dict(session.cookies)})
-    except Exception as e:
-        log.append({"paso": "app_index", "error": str(e)})
+    # Paso 0: Root de ZeusSalud
+    log.append(_step("root", lambda: session.get(SIESA_ROOT_URL, timeout=15)))
 
-    try:
-        r1 = session.post(SIESA_CONFIG_URL, data={
-            "operacion": "verificarUsuarios", "k_conexion": "CLIENTE",
-            "conexion": bd_nombre, "servidor": bd_servidor,
-            "usuarioBd": bd_usuario, "passwordBD": bd_password,
-            "file_conexion": "", "file_servidor": "", "file_usuarioBd": "", "file_passwordBD": "",
-        }, timeout=15)
-        log.append({"paso": "configuracionInicial", "status": r1.status_code, "body": r1.text[:300]})
-    except Exception as e:
-        log.append({"paso": "configuracionInicial", "error": str(e)})
+    # Paso 1: iniciando.php
+    log.append(_step("iniciando", lambda: session.get(SIESA_APP_URL, timeout=15)))
 
-    try:
-        r2 = session.post(SIESA_LOGIN_URL, data={
-            "operacion": "Login", "BaseDato": bd_nombre, "ServidorBD": bd_servidor,
-            "UsuarioBD": bd_usuario, "PasswordBD": bd_password,
-            "NombreUsuario": usuario, "PasswordUsuario": clave_md5,
-        }, timeout=15)
-        log.append({"paso": "login", "status": r2.status_code, "body": r2.text[:300]})
-    except Exception as e:
-        log.append({"paso": "login", "error": str(e)})
+    # Buscar en el HTML de iniciando.php URLs que puedan ser ASP.NET
+    iniciando_html = log[-1].get("body_inicio", "")
+    urls_encontradas = list(set(_re.findall(
+        r'(?:src|href|action)\s*=\s*["\']([^"\']+\.(?:aspx|axd|ashx)[^"\']*)["\']',
+        iniciando_html, _re.IGNORECASE
+    )))
 
-    try:
-        r3 = session.post(SIESA_LOGIN_URL, data={
-            "operacion": "SetSedePuntoAtencion",
-            "IdPuntoAtencion": SIESA_SEDE_ID,
-            "NombrePuntoAtencion": SIESA_SEDE_NOMBRE,
-            "IdSede": SIESA_SEDE_ID,
-        }, timeout=15)
-        log.append({"paso": "sede", "status": r3.status_code, "body": r3.text[:300]})
-    except Exception as e:
-        log.append({"paso": "sede", "error": str(e)})
+    # Paso 2: Login
+    log.append(_step("login", lambda: session.post(SIESA_LOGIN_URL, data={
+        "operacion": "Login", "BaseDato": bd_nombre, "ServidorBD": bd_servidor,
+        "UsuarioBD": bd_usuario, "PasswordBD": bd_password,
+        "NombreUsuario": usuario, "PasswordUsuario": clave_md5,
+    }, timeout=30)))
 
-    id_param = request.GET.get("id", "1")
-    cookies = dict(session.cookies)
+    # Paso 3: Sede
+    log.append(_step("sede", lambda: session.post(SIESA_LOGIN_URL, data={
+        "operacion": "SetSedePuntoAtencion",
+        "IdPuntoAtencion": SIESA_SEDE_ID,
+        "NombrePuntoAtencion": SIESA_SEDE_NOMBRE,
+        "IdSede": SIESA_SEDE_ID,
+    }, timeout=15)))
+
+    # Paso 4: ctrl_acceso_2.php — igual que producción
+    log.append(_step("ctrl_acceso", lambda: session.post(SIESA_CTRL_ACCESO_URL, data={
+        "id_sede": "", "hostname": "SERVER", "existeCliente": "N",
+        "manejaBdCentral": "N", "software_name": "ZeusSalud", "conexion": "0",
+        "bd_0": bd_nombre, "servidor_0": bd_servidor,
+        "usuario_0": bd_usuario, "password_0": bd_password,
+        "file_bd_0": "", "file_servidor_0": "", "file_usuario_0": "", "file_password_0": "",
+        "default_0": "1", "usuario": usuario, "password": clave,
+    }, timeout=30)))
+
+    # Paso 5: Reporte — verifica si hay datos del paciente
+    cookies_finales = dict(session.cookies)
     try:
-        r4 = session.get(SIESA_REPORT_URL, params={
+        r5 = session.get(SIESA_REPORT_URL, params={
             "formato": "02", "estudio": estudio, "id": id_param, "ImprimirImagenes": "0",
         }, timeout=30)
-        html = r4.text
-        # Buscar datos del paciente en el HTML para confirmar si hay contenido
-        import re
-        datos = re.findall(r'<td[^>]*>([^<]{5,})</td>', html)[:20]
+        html = r5.text
+        datos = _re.findall(r'<td[^>]*>([^<]{5,})</td>', html)[:20]
         log.append({
             "paso": "reporte",
-            "status": r4.status_code,
+            "status": r5.status_code,
             "content_length": len(html),
             "tiene_datos": len(datos) > 3,
             "muestra_celdas": datos[:10],
-            "body_inicio": html[:500],
+            "body_inicio": html[:600],
         })
     except Exception as e:
         log.append({"paso": "reporte", "error": str(e)})
 
     return JsonResponse({
-        "config": {"usuario": usuario, "bd_usuario": bd_usuario, "bd_servidor": bd_servidor, "bd_nombre": bd_nombre},
-        "cookies": cookies,
+        "config": {
+            "usuario": usuario,
+            "bd_usuario": bd_usuario,
+            "bd_servidor": bd_servidor,
+            "bd_nombre": bd_nombre,
+        },
+        "cookies_finales": cookies_finales,
+        "aspnet_encontrado": "ASP.NET_SessionId" in cookies_finales,
+        "urls_aspnet_en_iniciando": urls_encontradas,
         "pasos": log,
     })
 
