@@ -172,6 +172,14 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
         # Reemplazar nombre de sede por nombre real de la IPS
         html = html.replace("SEDE 01", "NEUROELECTRODIAGNOSTICO SH DEL LLANO S.A.S")
 
+        # wkhtmltopdf no renderiza el contenido de <textarea> — convertir a <div>
+        html = re.sub(
+            r'<textarea([^>]*)>(.*?)</textarea>',
+            r'<div\1 style="white-space:pre-wrap;font-family:Arial,sans-serif;font-size:12px;">\2</div>',
+            html,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+
         tmp_html_path = None
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp_path = tmp.name
