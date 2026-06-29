@@ -15,8 +15,10 @@ Endpoints:
       Procesa en lote todos los estudios de imágenes de un rango de fechas.
 """
 
+import base64
 import hashlib
 import os
+import re
 import stat
 from datetime import datetime
 
@@ -135,32 +137,65 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
     Si la sesión expira (500), re-autentica y reintenta.
     """
     def _do_fetch(session: requests.Session) -> bytes:
-        phpsessid    = session.cookies.get("PHPSESSID", "")
-        aspnet_sess  = session.cookies.get("ASP.NET_SessionId", "")
         url = (
             f"{SIESA_REPORT_URL}"
             f"?formato=02&estudio={estudio}&id={id_admision}&ImprimirImagenes=0"
         )
+        # Descargar el HTML con la sesión autenticada
+        resp = session.get(url, timeout=30)
+        resp.encoding = "utf-8"
+        html = resp.text
+
+        # Anclar URLs relativas al servidor SIESA
+        html = html.replace(
+            "</head>",
+            '<base href="http://192.168.1.209:8091/ZeusSalud/">\n</head>',
+            1,
+        )
+
+        # Inyectar logo de la clínica en lugar del que retorna 404 en SIESA
+        logo_path = "/app/siesa_logo.jpeg"
+        if os.path.exists(logo_path):
+            with open(logo_path, "rb") as lf:
+                logo_b64 = base64.b64encode(lf.read()).decode()
+            logo_tag = (
+                f'<img src="data:image/jpeg;base64,{logo_b64}" '
+                f'style="max-height:70px;max-width:130px;">'
+            )
+            html = re.sub(
+                r'<img[^>]+PuntosDeAtencion[^>]*/?>',
+                logo_tag,
+                html,
+                flags=re.IGNORECASE,
+            )
+
+        # Reemplazar nombre de sede por nombre real de la IPS
+        html = html.replace("SEDE 01", "NEUROELECTRODIAGNOSTICO SH DEL LLANO S.A.S")
+
+        tmp_html_path = None
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp_path = tmp.name
         try:
+            with tempfile.NamedTemporaryFile(
+                suffix=".html", delete=False, mode="w", encoding="utf-8"
+            ) as tmp_html:
+                tmp_html.write(html)
+                tmp_html_path = tmp_html.name
+
             cmd = ["wkhtmltopdf", "--encoding", "UTF-8"]
-            if phpsessid:
-                cmd += ["--cookie", "PHPSESSID", phpsessid]
-            if aspnet_sess:
-                cmd += ["--cookie", "ASP.NET_SessionId", aspnet_sess]
             css_path = "/app/siesa_printable.css"
             if os.path.exists(css_path):
                 cmd += ["--user-style-sheet", css_path]
-            cmd += ["--quiet", url, tmp_path]
+            cmd += ["--quiet", tmp_html_path, tmp_path]
             result = subprocess.run(cmd, capture_output=True, timeout=60)
             if result.returncode != 0:
                 raise RuntimeError(result.stderr.decode(errors="replace"))
             with open(tmp_path, "rb") as f:
                 return f.read()
         finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+            for p in (tmp_html_path, tmp_path):
+                if p and os.path.exists(p):
+                    os.remove(p)
 
     session = _get_siesa_session()
     try:
