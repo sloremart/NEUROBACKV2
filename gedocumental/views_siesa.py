@@ -20,7 +20,8 @@ import os
 import stat
 from datetime import datetime
 
-import pdfkit
+import subprocess
+import tempfile
 import requests
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
@@ -125,11 +126,24 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
             f"{SIESA_REPORT_URL}"
             f"?formato=02&estudio={estudio}&id={id_admision}&ImprimirImagenes=0"
         )
-        options = {
-            "encoding": "UTF-8",
-            "cookie": ("PHPSESSID", phpsessid),
-        }
-        return pdfkit.from_url(url, False, options=options, verbose=True)
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            cmd = [
+                "wkhtmltopdf",
+                "--encoding", "UTF-8",
+                "--cookie", "PHPSESSID", phpsessid,
+                "--quiet",
+                url, tmp_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True, timeout=60)
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.decode(errors="replace"))
+            with open(tmp_path, "rb") as f:
+                return f.read()
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
     session = _get_siesa_session()
     try:
