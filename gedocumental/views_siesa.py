@@ -113,37 +113,35 @@ def _get_siesa_session() -> requests.Session:
     return _siesa_session_cache
 
 
-def _fetch_html_siesa(estudio: int, id_admision: int) -> str:
-    """Descarga el HTML del reporte SIESA para un estudio."""
-    params = {
-        "formato": "02",
-        "estudio": estudio,
-        "id": id_admision,
-        "ImprimirImagenes": "0",
-    }
-    session = _get_siesa_session()
-    resp = session.get(SIESA_REPORT_URL, params=params, timeout=30)
+def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
+    """
+    Descarga el reporte de SIESA como PDF pasando la cookie de sesión
+    directamente a wkhtmltopdf — idéntico al navegador con sesión activa.
+    Si la sesión expira (500), re-autentica y reintenta.
+    """
+    def _do_fetch(session: requests.Session) -> bytes:
+        phpsessid = session.cookies.get("PHPSESSID", "")
+        url = (
+            f"{SIESA_REPORT_URL}"
+            f"?formato=02&estudio={estudio}&id={id_admision}&ImprimirImagenes=0"
+        )
+        options = {
+            "encoding": "UTF-8",
+            "quiet": "",
+            "no-outline": None,
+            "enable-local-file-access": None,
+            "cookie": ("PHPSESSID", phpsessid),
+        }
+        return pdfkit.from_url(url, False, options=options)
 
-    # Si SIESA devuelve 500, puede ser sesión expirada — reintentar con login nuevo
-    if resp.status_code == 500:
+    session = _get_siesa_session()
+    try:
+        return _do_fetch(session)
+    except Exception:
         global _siesa_session_cache
         _siesa_session_cache = None
         session = _get_siesa_session()
-        resp = session.get(SIESA_REPORT_URL, params=params, timeout=30)
-
-    resp.raise_for_status()
-    return resp.text
-
-
-def _html_to_pdf(html_content: str, base_url: str = None) -> bytes:
-    """Convierte HTML a bytes PDF usando wkhtmltopdf."""
-    options = {
-        "encoding": "UTF-8",
-        "quiet": "",
-        "no-outline": None,
-        "enable-local-file-access": None,
-    }
-    return pdfkit.from_string(html_content, False, options=options)
+        return _do_fetch(session)
 
 
 def _guardar_pdf(estudio: int, pdf_bytes: bytes) -> str:
@@ -251,19 +249,11 @@ def generar_pdf_siesa(request):
         )
 
     try:
-        html = _fetch_html_siesa(estudio, id_admision)
-    except requests.RequestException as e:
-        return JsonResponse(
-            {"success": False, "detail": f"No se pudo obtener el reporte de SIESA: {e}"},
-            status=502,
-        )
-
-    try:
-        pdf_bytes = _html_to_pdf(html, base_url=SIESA_REPORT_URL)
+        pdf_bytes = _fetch_pdf_siesa(estudio, id_admision)
     except Exception as e:
         return JsonResponse(
-            {"success": False, "detail": f"Error al generar el PDF: {e}"},
-            status=500,
+            {"success": False, "detail": f"Error al obtener/generar el PDF de SIESA: {e}"},
+            status=502,
         )
 
     ruta_relativa, ruta_absoluta, nombre = _guardar_pdf(estudio, pdf_bytes)
@@ -405,8 +395,7 @@ def generar_pdfs_siesa_lote(request):
             continue
 
         try:
-            html = _fetch_html_siesa(con_estudio, autoid)
-            pdf_bytes = _html_to_pdf(html, base_url=SIESA_REPORT_URL)
+            pdf_bytes = _fetch_pdf_siesa(con_estudio, autoid)
             ruta_relativa, _, nombre = _guardar_pdf(con_estudio, pdf_bytes)
             _registrar_en_bd(con_estudio, nombre, ruta_relativa)
             resultados["generados"].append(con_estudio)
