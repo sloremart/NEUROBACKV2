@@ -156,6 +156,20 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
             if os.path.exists(css_path):
                 cmd += ["--user-style-sheet", css_path]
 
+            # Convertir textareas a divs para que wkhtmltopdf muestre el contenido
+            # (captura .value para incluir lo que haya cargado JS)
+            cmd += ["--run-script",
+                    "(function(){"
+                    "var areas=document.querySelectorAll('textarea');"
+                    "for(var i=0;i<areas.length;i++){"
+                    "var d=document.createElement('div');"
+                    "d.style.cssText='white-space:pre-wrap;font-family:Arial,sans-serif;"
+                    "font-size:12px;padding:2px;';"
+                    "d.textContent=areas[i].value;"
+                    "areas[i].parentNode.replaceChild(d,areas[i]);"
+                    "}"
+                    "})();"]
+
             # Reemplazar nombre de sede con JS (se ejecuta tras cargar la página)
             cmd += ["--run-script",
                     "document.body.innerHTML=document.body.innerHTML"
