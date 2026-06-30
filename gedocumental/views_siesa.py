@@ -137,80 +137,74 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
     Si la sesión expira (500), re-autentica y reintenta.
     """
     def _do_fetch(session: requests.Session) -> bytes:
-        phpsessid   = session.cookies.get("PHPSESSID", "")
-        aspnet_sess = session.cookies.get("ASP.NET_SessionId", "")
         url = (
             f"{SIESA_REPORT_URL}"
             f"?formato=02&estudio={estudio}&id={id_admision}&ImprimirImagenes=0"
         )
+        # El contenido del reporte es PHP-estático — no requiere JS
+        resp = session.get(url, timeout=30)
+        resp.encoding = "utf-8"
+        html = resp.text
+
+        # display:block en <td> elimina contexto de tabla → permite page-break-inside
+        # (page-break-inside:auto en CSS no funciona para <td> en wkhtmltopdf)
+        html = re.sub(
+            r'style="border:solid;\s*border-width:1px;\s*border-color:#CECECE;"',
+            'style="display:block;border:1px solid #CECECE;page-break-inside:auto;"',
+            html,
+            flags=re.IGNORECASE,
+        )
+
+        # Anclar URLs relativas al servidor SIESA
+        html = html.replace(
+            "</head>",
+            '<base href="http://192.168.1.209:8091/ZeusSalud/">\n</head>',
+            1,
+        )
+
+        # Inyectar logo de la clínica (el archivo en SIESA retorna 404)
+        logo_path = "/app/siesa_logo.jpeg"
+        if os.path.exists(logo_path):
+            with open(logo_path, "rb") as lf:
+                logo_b64 = base64.b64encode(lf.read()).decode()
+            logo_tag = (
+                f'<img src="data:image/jpeg;base64,{logo_b64}" '
+                f'style="max-height:70px;max-width:130px;">'
+            )
+            html = re.sub(
+                r'<img[^>]+PuntosDeAtencion[^>]*/?>',
+                logo_tag,
+                html,
+                flags=re.IGNORECASE,
+            )
+
+        # Reemplazar nombre de sede
+        html = html.replace("SEDE 01", "NEUROELECTRODIAGNOSTICO SH DEL LLANO S.A.S")
+
+        tmp_html_path = None
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp_path = tmp.name
         try:
-            cmd = ["wkhtmltopdf", "--encoding", "UTF-8"]
-            if phpsessid:
-                cmd += ["--cookie", "PHPSESSID", phpsessid]
-            if aspnet_sess:
-                cmd += ["--cookie", "ASP.NET_SessionId", aspnet_sess]
+            with tempfile.NamedTemporaryFile(
+                suffix=".html", delete=False, mode="w", encoding="utf-8"
+            ) as tmp_html:
+                tmp_html.write(html)
+                tmp_html_path = tmp_html.name
 
+            cmd = ["wkhtmltopdf", "--encoding", "UTF-8"]
             css_path = "/app/siesa_printable.css"
             if os.path.exists(css_path):
                 cmd += ["--user-style-sheet", css_path]
-
-            # 1) Reemplazar <td colspan="100"> con borde por <div> para que
-            #    wkhtmltopdf pueda cortar el contenido entre páginas
-            #    (page-break-inside funciona en div pero NO en td anidado)
-            cmd += ["--run-script",
-                    "(function(){"
-                    "var tds=document.querySelectorAll('td[colspan=\"100\"]');"
-                    "for(var i=0;i<tds.length;i++){"
-                    "var td=tds[i];"
-                    "if((td.getAttribute('style')||'').indexOf('border:solid')>-1){"
-                    "var outerTable=td.parentNode.parentNode;"
-                    "var div=document.createElement('div');"
-                    "div.style.cssText='border:1px solid #CECECE;margin:2px 0;"
-                    "page-break-inside:auto;';"
-                    "div.innerHTML=td.innerHTML;"
-                    "outerTable.parentNode.replaceChild(div,outerTable);}}"
-                    "var els=document.querySelectorAll('table,tr,td,th');"
-                    "for(var j=0;j<els.length;j++){"
-                    "els[j].style.pageBreakInside='auto';}"
-                    "})();"]
-
-            # 2) Reemplazar nombre de sede via traversal de nodos de texto
-            #    (NO usar innerHTML.replace que destruye cambios estructurales)
-            cmd += ["--run-script",
-                    "(function(){"
-                    "function walk(n){"
-                    "if(n.nodeType===3){"
-                    "n.textContent=n.textContent.replace(/SEDE 01/g,"
-                    "'NEUROELECTRODIAGNOSTICO SH DEL LLANO S.A.S');}"
-                    "else{for(var i=0;i<n.childNodes.length;i++)walk(n.childNodes[i]);}}"
-                    "walk(document.body);"
-                    "})();"]
-
-            # 3) Inyectar logo como base64 (el archivo en SIESA retorna 404)
-            logo_path = "/app/siesa_logo.jpeg"
-            if os.path.exists(logo_path):
-                with open(logo_path, "rb") as lf:
-                    logo_b64 = base64.b64encode(lf.read()).decode()
-                cmd += ["--run-script",
-                        f"(function(){{"
-                        f"var imgs=document.querySelectorAll('img');"
-                        f"for(var i=0;i<imgs.length;i++){{"
-                        f"if(imgs[i].src.indexOf('PuntosDeAtencion')>-1){{"
-                        f"imgs[i].src='data:image/jpeg;base64,{logo_b64}';"
-                        f"imgs[i].style.maxHeight='70px';"
-                        f"imgs[i].style.maxWidth='130px';}}}}}})();"]
-
-            cmd += ["--quiet", url, tmp_path]
+            cmd += ["--quiet", tmp_html_path, tmp_path]
             result = subprocess.run(cmd, capture_output=True, timeout=90)
             if result.returncode != 0:
                 raise RuntimeError(result.stderr.decode(errors="replace"))
             with open(tmp_path, "rb") as f:
                 return f.read()
         finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+            for p in (tmp_html_path, tmp_path):
+                if p and os.path.exists(p):
+                    os.remove(p)
 
     session = _get_siesa_session()
     try:
