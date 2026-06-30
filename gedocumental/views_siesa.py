@@ -156,26 +156,39 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
             if os.path.exists(css_path):
                 cmd += ["--user-style-sheet", css_path]
 
-            # Convertir textareas a divs para que wkhtmltopdf muestre el contenido
-            # (captura .value para incluir lo que haya cargado JS)
+            # 1) Reemplazar <td colspan="100"> con borde por <div> para que
+            #    wkhtmltopdf pueda cortar el contenido entre páginas
+            #    (page-break-inside funciona en div pero NO en td anidado)
             cmd += ["--run-script",
                     "(function(){"
-                    "var areas=document.querySelectorAll('textarea');"
-                    "for(var i=0;i<areas.length;i++){"
-                    "var d=document.createElement('div');"
-                    "d.style.cssText='white-space:pre-wrap;font-family:Arial,sans-serif;"
-                    "font-size:12px;padding:2px;';"
-                    "d.textContent=areas[i].value;"
-                    "areas[i].parentNode.replaceChild(d,areas[i]);"
-                    "}"
+                    "var tds=document.querySelectorAll('td[colspan=\"100\"]');"
+                    "for(var i=0;i<tds.length;i++){"
+                    "var td=tds[i];"
+                    "if((td.getAttribute('style')||'').indexOf('border:solid')>-1){"
+                    "var outerTable=td.parentNode.parentNode;"
+                    "var div=document.createElement('div');"
+                    "div.style.cssText='border:1px solid #CECECE;margin:2px 0;"
+                    "page-break-inside:auto;';"
+                    "div.innerHTML=td.innerHTML;"
+                    "outerTable.parentNode.replaceChild(div,outerTable);}}"
+                    "var els=document.querySelectorAll('table,tr,td,th');"
+                    "for(var j=0;j<els.length;j++){"
+                    "els[j].style.pageBreakInside='auto';}"
                     "})();"]
 
-            # Reemplazar nombre de sede con JS (se ejecuta tras cargar la página)
+            # 2) Reemplazar nombre de sede via traversal de nodos de texto
+            #    (NO usar innerHTML.replace que destruye cambios estructurales)
             cmd += ["--run-script",
-                    "document.body.innerHTML=document.body.innerHTML"
-                    ".replace(/SEDE 01/g,'NEUROELECTRODIAGNOSTICO SH DEL LLANO S.A.S');"]
+                    "(function(){"
+                    "function walk(n){"
+                    "if(n.nodeType===3){"
+                    "n.textContent=n.textContent.replace(/SEDE 01/g,"
+                    "'NEUROELECTRODIAGNOSTICO SH DEL LLANO S.A.S');}"
+                    "else{for(var i=0;i<n.childNodes.length;i++)walk(n.childNodes[i]);}}"
+                    "walk(document.body);"
+                    "})();"]
 
-            # Inyectar logo como base64 (el archivo en SIESA retorna 404)
+            # 3) Inyectar logo como base64 (el archivo en SIESA retorna 404)
             logo_path = "/app/siesa_logo.jpeg"
             if os.path.exists(logo_path):
                 with open(logo_path, "rb") as lf:
