@@ -205,8 +205,14 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
         )
         # El contenido del reporte es PHP-estático — no requiere JS
         resp = session.get(url, timeout=30)
-        resp.encoding = "utf-8"
-        html = resp.text
+        # SIESA devuelve ISO-8859-1; decodificar correctamente antes de escribir UTF-8
+        html = resp.content.decode(resp.encoding or 'iso-8859-1', errors='replace')
+        # Actualizar declaración charset para que wkhtmltopdf lea el archivo como UTF-8
+        html = re.sub(
+            r'<meta[^>]+charset=["\']?[a-zA-Z0-9_-]+["\']?[^>]*/?>',
+            '<meta charset="UTF-8">',
+            html, count=1, flags=re.IGNORECASE
+        )
 
         # Convertir tablas de LECTURA a divs para permitir saltos de página
         html = _destablar_lectura(html)
@@ -317,20 +323,22 @@ def _registrar_en_bd(estudio: int, nombre: str, ruta_relativa: str):
 
 def _estudios_por_fecha(fecha_inicio: str, fecha_fin: str):
     """
-    Devuelve lista de (con_estudio, autoid) de sis_maes en ZeusSalud
-    para estudios de imágenes diagnósticas en el rango de fechas.
+    Devuelve lista de (con_estudio, siesa_id) donde siesa_id = sis_deta.id,
+    que es el parámetro 'id' que requiere el URL de reporte de SIESA.
     id_sede=3 → SEDE 02 (TAC, Resonancia, RX, Mamografía, PET/CT)
     id_sede=2 → SEDE 01 (Ecografías y otros procedimientos imagen)
     """
     with connections["zeussalud"].cursor() as cursor:
         cursor.execute(
             """
-            SELECT con_estudio, autoid
-            FROM sis_maes
-            WHERE CAST(fecha_ing AS DATE) BETWEEN %s AND %s
-              AND id_sede IN (2, 3)
-              AND estado = 'A'
-            ORDER BY fecha_ing
+            SELECT sm.con_estudio, MIN(sd.id) AS siesa_id
+            FROM sis_maes sm
+            JOIN sis_deta sd ON sd.estudio = sm.con_estudio
+            WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
+              AND sm.id_sede IN (2, 3)
+              AND sm.estado = 'A'
+            GROUP BY sm.con_estudio
+            ORDER BY sm.con_estudio
             """,
             [fecha_inicio, fecha_fin],
         )
