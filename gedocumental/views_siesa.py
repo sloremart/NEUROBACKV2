@@ -32,6 +32,68 @@ from rest_framework.decorators import api_view
 
 from gedocumental.models import ArchivoFacturacion
 
+
+def _destablar_lectura(html: str) -> str:
+    """
+    Reemplaza la tabla externa de LECTURA (única con <tr></tr> vacío inicial)
+    por un <div>, y convierte la tabla interna (label + contenido) a divs.
+    Esto permite que wkhtmltopdf corte el contenido entre páginas sin dejar
+    un espacio vacío en la primera hoja.
+    """
+    outer_open_re = re.compile(
+        r'<table\b[^>]+border=["\']1["\'][^>]+>\s*<tr></tr>\s*<tr>\s*'
+        r'<td\b[^>]+border:solid[^>]*>',
+        re.DOTALL | re.IGNORECASE,
+    )
+    m = outer_open_re.search(html)
+    if not m:
+        return html
+
+    after_open = m.end()
+
+    # Buscar el cierre de la tabla externa contando profundidad
+    depth = 0
+    pos = after_open
+    outer_close_start = None
+    while pos < len(html):
+        next_open  = html.lower().find('<table',  pos)
+        next_close = html.lower().find('</table>', pos)
+        if next_open != -1 and (next_close == -1 or next_open < next_close):
+            depth += 1
+            pos = next_open + 1
+        elif next_close != -1:
+            if depth == 0:
+                outer_close_start = next_close
+                break
+            depth -= 1
+            pos = next_close + 1
+        else:
+            break
+
+    if outer_close_start is None:
+        return html
+
+    outer_close_end = outer_close_start + len('</table>')
+
+    # Extraer contenido interior (quitar el </td></tr> previo al </table> externo)
+    inner = html[after_open:outer_close_start]
+    inner = re.sub(r'\s*</td>\s*</tr>\s*$', '', inner.rstrip(), flags=re.IGNORECASE)
+
+    # Convertir tabla interna (LECTURA label + párrafo) a divs
+    inner = re.sub(r'<table\b[^>]*>', '<div style="width:100%;">', inner, flags=re.IGNORECASE)
+    inner = re.sub(r'</table>', '</div>', inner, flags=re.IGNORECASE)
+    inner = re.sub(r'<tr\b[^>]*>', '<div>', inner, flags=re.IGNORECASE)
+    inner = re.sub(r'</tr>', '</div>', inner, flags=re.IGNORECASE)
+    inner = re.sub(r'<td\b([^>]*)>', r'<div\1>', inner, flags=re.IGNORECASE)
+    inner = re.sub(r'</td>', '</div>', inner, flags=re.IGNORECASE)
+
+    replacement = (
+        '<div style="border:1px solid #CECECE;margin:2px 0;padding:2px;">'
+        + inner
+        + '</div>'
+    )
+    return html[:m.start()] + replacement + html[outer_close_end:]
+
 SIESA_REPORT_URL = (
     "http://192.168.1.209:8091/ZeusSalud/Reportes/CLIENTE//html/"
     "reporte_paraclinicoFormato.php"
@@ -146,14 +208,8 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
         resp.encoding = "utf-8"
         html = resp.text
 
-        # display:block en <td> elimina contexto de tabla → permite page-break-inside
-        # (page-break-inside:auto en CSS no funciona para <td> en wkhtmltopdf)
-        html = re.sub(
-            r'style="border:solid;\s*border-width:1px;\s*border-color:#CECECE;"',
-            'style="display:block;border:1px solid #CECECE;page-break-inside:auto;"',
-            html,
-            flags=re.IGNORECASE,
-        )
+        # Convertir tablas de LECTURA a divs para permitir saltos de página
+        html = _destablar_lectura(html)
 
         # Anclar URLs relativas al servidor SIESA
         html = html.replace(
