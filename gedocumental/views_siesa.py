@@ -337,6 +337,7 @@ def _estudios_por_fecha(fecha_inicio: str, fecha_fin: str):
             WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
               AND sm.id_sede IN (2, 3)
               AND sm.estado = 'A'
+              AND LEFT(sd.cups, 2) IN ('87', '88')
             GROUP BY sm.con_estudio
             ORDER BY sm.con_estudio
             """,
