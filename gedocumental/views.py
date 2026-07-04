@@ -2649,14 +2649,14 @@ def radicar_other_view(request, numero_admision, idusuario):
         except CustomUser.DoesNotExist:
             return JsonResponse({"success": False, "detail": "Usuario no encontrado."}, status=404)
 
-        archivos_para_copiar = []
+        merger = PdfMerger()
         for archivo in archivos_data:
             tipo_archivo = archivo.get('Tipo')
             ruta_origen_relative = unquote(archivo.get('RutaArchivo'))
             ruta_origen_relative = ruta_origen_relative.replace(settings.MEDIA_URL, "").lstrip('/')
             ruta_origen = os.path.normpath(os.path.join(settings.MEDIA_ROOT, ruta_origen_relative))
             if os.path.exists(ruta_origen):
-                archivos_para_copiar.append((tipo_archivo, ruta_origen))
+                merger.append(ruta_origen)
             else:
                 raise FileNotFoundError(f"No se encontró el archivo {tipo_archivo} en {ruta_origen}")
 
@@ -2697,10 +2697,9 @@ def radicar_other_view(request, numero_admision, idusuario):
         carpeta_nombre_archivo = os.path.join(settings.MEDIA_ROOT, 'gdocumental', 'Radicacion', entidad_carpeta, fecha_hoy, nombre_usuario)
         os.makedirs(carpeta_nombre_archivo, exist_ok=True)
 
-        for tipo_archivo, ruta_origen in archivos_para_copiar:
-            extension = os.path.splitext(ruta_origen)[1]
-            nuevo_nombre = f"{tipo_archivo}_{nombre_archivo}{extension}"
-            shutil.copy(ruta_origen, os.path.join(carpeta_nombre_archivo, nuevo_nombre))
+        ruta_destino_merged = os.path.join(carpeta_nombre_archivo, f"{prefijo}{factura_numero}.pdf")
+        merger.write(ruta_destino_merged)
+        merger.close()
 
         archivos_a_verificar.update(Radicado=True)
 
