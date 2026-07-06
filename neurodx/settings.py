@@ -118,7 +118,7 @@ DATABASES = {
     # hcresult: base de datos del portal de resultados (MySQL)
     'hcresult': {
         'ENGINE': 'django.db.backends.mysql',
-        'HOST': '192.168.1.178',
+        'HOST': '192.168.1.211',
         'PORT': '3306',
         'USER': 'root',
         'PASSWORD': 'Neuro2023',
