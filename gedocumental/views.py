@@ -2418,7 +2418,7 @@ def radicar_capitalsalud_view(request, numero_admision, idusuario):
         else:
             print(f"No se encontró la carpeta de origen {carpeta_json_txt} para los archivos .json, .txt y .xml")
 
-        zip_name = f"FEV_901119103_{prefijo}{factura_numero}.zip"
+        zip_name = f"901119103_{prefijo}{factura_numero}.zip"
         zip_path = os.path.join(carpeta_nombre_archivo, zip_name)
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             for file in archivos_para_zip:
