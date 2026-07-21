@@ -16,6 +16,7 @@ Endpoints:
 """
 
 import base64
+import html as html_lib
 import hashlib
 import os
 import re
@@ -212,9 +213,9 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
         # SIESA devuelve ISO-8859-1; decodificar correctamente antes de escribir UTF-8
         html = resp.content.decode(resp.encoding or 'iso-8859-1', errors='replace')
         # Si el informe no tiene lectura dictada, no generar PDF
-        # Eliminar etiquetas HTML antes de buscar, para no confundir '<' con contenido real
-        html_texto = re.sub(r'<[^>]+>', ' ', html)
-        if not re.search(r'ATENDIDO POR:\s*\S', html_texto, re.IGNORECASE):
+        # Quitar etiquetas HTML, convertir entidades (&nbsp; etc.) y buscar letra real
+        html_texto = html_lib.unescape(re.sub(r'<[^>]+>', ' ', html))
+        if not re.search(r'ATENDIDO POR:\s{0,20}[A-Za-záéíóúÁÉÍÓÚñÑ]', html_texto, re.IGNORECASE):
             raise SinLecturaError("El informe aún no tiene lectura dictada en SIESA.")
         # Actualizar declaración charset para que wkhtmltopdf lea el archivo como UTF-8
         html = re.sub(
