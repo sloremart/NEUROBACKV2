@@ -33,6 +33,10 @@ from rest_framework.decorators import api_view
 from gedocumental.models import ArchivoFacturacion
 
 
+class SinLecturaError(Exception):
+    """El reporte de SIESA existe pero no tiene lectura dictada aún."""
+
+
 def _destablar_lectura(html: str) -> str:
     """
     Reemplaza la tabla externa de LECTURA (única con <tr></tr> vacío inicial)
@@ -207,6 +211,9 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
         resp = session.get(url, timeout=30)
         # SIESA devuelve ISO-8859-1; decodificar correctamente antes de escribir UTF-8
         html = resp.content.decode(resp.encoding or 'iso-8859-1', errors='replace')
+        # Si el informe no tiene lectura dictada, no generar PDF
+        if not re.search(r'ATENDIDO POR:\s*\S', html, re.IGNORECASE):
+            raise SinLecturaError("El informe aún no tiene lectura dictada en SIESA.")
         # Actualizar declaración charset para que wkhtmltopdf lea el archivo como UTF-8
         html = re.sub(
             r'<meta[^>]+charset=["\']?[a-zA-Z0-9_-]+["\']?[^>]*/?>',
@@ -564,6 +571,8 @@ def generar_pdfs_siesa_lote(request):
             ruta_relativa, _, nombre = _guardar_pdf(con_estudio, pdf_bytes)
             _registrar_en_bd(con_estudio, nombre, ruta_relativa)
             resultados["generados"].append(con_estudio)
+        except SinLecturaError:
+            resultados["omitidos"].append(con_estudio)
         except Exception as e:
             resultados["errores"].append({"estudio": con_estudio, "error": str(e)})
 
