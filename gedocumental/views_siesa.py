@@ -283,6 +283,8 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
     session = _get_siesa_session()
     try:
         return _do_fetch(session)
+    except SinLecturaError:
+        raise
     except Exception:
         global _siesa_session_cache
         _siesa_session_cache = None
