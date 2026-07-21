@@ -317,19 +317,21 @@ def _ya_existe_resultado(estudio: int) -> bool:
 
 
 def _registrar_en_bd(estudio: int, nombre: str, ruta_relativa: str):
-    """Registra el PDF generado en la tabla archivos."""
-    ArchivoFacturacion.objects.create(
+    """Registra el PDF generado en la tabla archivos (upsert para evitar duplicados)."""
+    ArchivoFacturacion.objects.update_or_create(
         Admision_id=estudio,
         Tipo="RESULTADO",
-        NombreArchivo=nombre,
-        RutaArchivo=ruta_relativa,
-        NumeroAdmision=str(estudio),
-        FechaCreacionArchivo=datetime.now(),
-        FechaCreacionAntares=datetime.now(),
-        RevisionPrimera=False,
-        RevisionSegunda=False,
-        RevisionTercera=False,
-        Radicado=False,
+        defaults={
+            "NombreArchivo": nombre,
+            "RutaArchivo": ruta_relativa,
+            "NumeroAdmision": str(estudio),
+            "FechaCreacionArchivo": datetime.now(),
+            "FechaCreacionAntares": datetime.now(),
+            "RevisionPrimera": False,
+            "RevisionSegunda": False,
+            "RevisionTercera": False,
+            "Radicado": False,
+        },
     )
 
 
