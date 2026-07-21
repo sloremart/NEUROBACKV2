@@ -212,7 +212,9 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
         # SIESA devuelve ISO-8859-1; decodificar correctamente antes de escribir UTF-8
         html = resp.content.decode(resp.encoding or 'iso-8859-1', errors='replace')
         # Si el informe no tiene lectura dictada, no generar PDF
-        if not re.search(r'ATENDIDO POR:\s*\S', html, re.IGNORECASE):
+        # Eliminar etiquetas HTML antes de buscar, para no confundir '<' con contenido real
+        html_texto = re.sub(r'<[^>]+>', ' ', html)
+        if not re.search(r'ATENDIDO POR:\s*\S', html_texto, re.IGNORECASE):
             raise SinLecturaError("El informe aún no tiene lectura dictada en SIESA.")
         # Actualizar declaración charset para que wkhtmltopdf lea el archivo como UTF-8
         html = re.sub(
