@@ -216,7 +216,7 @@ def _fetch_pdf_siesa(estudio: int, id_admision: int) -> bytes:
         # Quitar etiquetas HTML, convertir entidades (&nbsp; etc.) y buscar letra real
         html_texto = html_lib.unescape(re.sub(r'<[^>]+>', ' ', html))
         m = re.search(r'ATENDIDO POR:(.{0,80})', html_texto, re.IGNORECASE)
-        print(f"[DEBUG SIESA] ATENDIDO POR contexto: {repr(m.group(1)) if m else 'NO ENCONTRADO'}", flush=True)
+        print(f"[DEBUG SIESA] estudio={estudio} id={id_admision} ATENDIDO POR: {repr(m.group(1)) if m else 'NO ENCONTRADO'}", flush=True)
         if not re.search(r'ATENDIDO POR:\s{0,20}[A-Za-záéíóúÁÉÍÓÚñÑ]', html_texto, re.IGNORECASE):
             raise SinLecturaError("El informe aún no tiene lectura dictada en SIESA.")
         # Actualizar declaración charset para que wkhtmltopdf lea el archivo como UTF-8
