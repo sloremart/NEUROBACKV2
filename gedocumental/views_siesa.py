@@ -637,17 +637,19 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
     usuario_session = getattr(settings, "SIESA_USUARIO_SESSION", "")
 
     def _do_fetch_enfermeria(s: requests.Session) -> bytes:
+        import time
+
         # Paso 1: obtener parámetros del formulario FastReport
         r1 = s.post(
             SIESA_FORMULARIO_URL,
             data={
-                "estudio":             estudio,
-                "ImpHC":               0,
-                "ImpNotasEnfermeria":  1,
-                "UsuarioSession":      usuario_session,
-                "pdf":                 1,
+                "estudio":              estudio,
+                "ImpHC":                0,
+                "ImpNotasEnfermeria":   1,
+                "UsuarioSession":       usuario_session,
+                "pdf":                  1,
                 "generarNombreArchivo": 1,
-                "reportName":          "HistoriaClinicaGeneral",
+                "reportName":           "HistoriaClinicaGeneral",
             },
             timeout=30,
         )
@@ -658,35 +660,26 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
         if not form_fields:
             raise Exception("No se obtuvieron campos del formulario FastReport")
 
-        # Paso 2: enviar al renderer FastReport para generar el reporte
+        # El nombre del PDF es determinista: HCE{UsuarioSession}.pdf
+        nombre_pdf = form_fields.get("nombreArchivoPdf", f"HCE{usuario_session}.pdf")
+
+        # Paso 2: POST a c_informe_view.aspx — genera y escribe el PDF en disco
         r2 = s.post(SIESA_REPORT_VIEW_URL, data=form_fields, timeout=60)
         r2.raise_for_status()
 
-        # Paso 3: extraer hash del reporte generado
-        match = re.search(r"frxreport=([^'\"&\s]+)", r2.text)
-        if not match:
-            raise Exception(
-                f"No se encontró el hash frxreport en la respuesta de SIESA. "
-                f"Primeros 500 chars: {r2.text[:500]}"
-            )
-        frx_report = match.group(1)
-
-        # Paso 4: descargar el PDF (FastReport genera el archivo de forma asíncrona)
-        import time
-        time.sleep(3)
-        r3 = s.get(
-            f"{SIESA_EXPORT_BASE_URL}FastReport.Export.aspx?frxprint=pdf&frxreport={frx_report}",
-            timeout=30,
-        )
+        # Paso 3: descargar el PDF directamente desde la carpeta Temp de SIESA
+        # c_informe_view.aspx escribe el PDF en ZeusSalud/Archivos/CLIENTE/Temp/
+        time.sleep(2)
+        pdf_url = f"http://192.168.1.209:8091/ZeusSalud/Archivos/CLIENTE/Temp/{nombre_pdf}"
+        r3 = s.get(pdf_url, timeout=30)
         r3.raise_for_status()
-        # Validar por magic bytes en lugar de Content-Type (FastReport puede devolver octet-stream)
+
         if not r3.content.startswith(b"%PDF"):
-            ct = r3.headers.get("Content-Type", "desconocido")
             raise Exception(
-                f"La respuesta no es un PDF. Status: {r3.status_code}. "
-                f"Content-Type: {ct}. Hash: {frx_report}. "
-                f"Headers: {dict(r3.headers)}. "
-                f"Inicio: {r3.content[:500]}"
+                f"El archivo descargado no es un PDF. "
+                f"URL: {pdf_url}. Status: {r3.status_code}. "
+                f"Content-Type: {r3.headers.get('Content-Type', '?')}. "
+                f"Inicio: {r3.content[:300]}"
             )
         return r3.content
 
