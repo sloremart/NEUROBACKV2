@@ -248,6 +248,15 @@ CORS_ALLOW_HEADERS = [
 
 JWT_EXPIRATION_DELTA = datetime.timedelta(minutes=15)
 
+# SIESA — credenciales de acceso al sistema ZeusSalud web
+SIESA_USUARIO         = os.environ.get("SIESA_USUARIO", "10083")
+SIESA_CLAVE           = os.environ.get("SIESA_CLAVE", "")
+SIESA_BD_SERVIDOR     = os.environ.get("SIESA_BD_SERVIDOR", "192.168.1.207")
+SIESA_BD_NOMBRE       = os.environ.get("SIESA_BD_NOMBRE", "ZeusSalud_Neuro")
+SIESA_BD_USUARIO      = os.environ.get("SIESA_BD_USUARIO", "sa")
+SIESA_BD_CLAVE        = os.environ.get("SIESA_BD_CLAVE", "")
+SIESA_USUARIO_SESSION = int(os.environ.get("SIESA_USUARIO_SESSION", "10083"))
+
 try:
     from .settings_local import *
 except ImportError:

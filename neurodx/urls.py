@@ -44,7 +44,7 @@ from gedocumental.views import (
     radicar_other_view,
 )
 from gedocumental.utils.codigoentidad import obtener_hallazgos
-from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote, debug_siesa_login
+from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote, debug_siesa_login, generar_pdf_enfermeria, generar_pdfs_enfermeria_lote
 
 # =============================================================================
 # MÓDULO: Auth  →  api/v2/auth/
@@ -93,6 +93,8 @@ gedocumental_urls = [
     path('generar-pdf-siesa/',       generar_pdf_siesa,          name='v2-generar-pdf-siesa'),
     path('generar-pdfs-siesa/',      generar_pdfs_siesa_lote,    name='v2-generar-pdfs-siesa-lote'),
     path('debug-siesa/',             debug_siesa_login,          name='v2-debug-siesa'),
+    path('generar-pdf-enfermeria/',  generar_pdf_enfermeria,       name='v2-generar-pdf-enfermeria'),
+    path('generar-pdfs-enfermeria/', generar_pdfs_enfermeria_lote, name='v2-generar-pdfs-enfermeria'),
 ]
 
 # =============================================================================

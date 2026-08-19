@@ -594,3 +594,219 @@ def generar_pdfs_siesa_lote(request):
         },
         status=200,
     )
+
+
+# ---------------------------------------------------------------------------
+# Notas de Enfermería — Administración de Medicamentos (ufuncional = 12)
+# ---------------------------------------------------------------------------
+#
+# Flujo SIESA:
+#   1. POST FormularioFastReport.php  → devuelve form HTML con parámetros
+#   2. POST c_informe_view.aspx       → genera el PDF en FastReport, devuelve HTML
+#   3. GET  FastReport.Export.aspx?frxprint=pdf&frxreport={hash} → PDF bytes
+#
+# Endpoint:
+#   GET /api/v2/gedocumental/generar-pdfs-enfermeria/?fecha_inicio=YYYY-MM-DD&fecha_fin=YYYY-MM-DD
+# ---------------------------------------------------------------------------
+
+SIESA_FORMULARIO_URL  = "http://192.168.1.209:8091/ZeusSalud/ips/App/controlador/General/FormularioFastReport.php"
+SIESA_REPORT_VIEW_URL = "http://192.168.1.209:8091/ZeusSalud/Reportes/FastReport/Pages/c_informe_view.aspx"
+SIESA_EXPORT_BASE_URL = "http://192.168.1.209:8091/ZeusSalud/Reportes/FastReport/Pages/"
+
+
+def _parse_hidden_inputs(html: str) -> dict:
+    """Extrae todos los campos type=hidden de un bloque HTML de formulario."""
+    fields = {}
+    for m in re.finditer(r"<input[^>]+>", html, re.IGNORECASE):
+        tag = m.group(0)
+        if not re.search(r'type=["\']?hidden["\']?', tag, re.IGNORECASE):
+            continue
+        name  = re.search(r"name=[\"']([^\"']+)[\"']", tag)
+        value = re.search(r"value=[\"']([^\"']*)[\"']", tag)
+        if name:
+            fields[name.group(1)] = value.group(1) if value else ""
+    return fields
+
+
+def _fetch_pdf_enfermeria(estudio: int) -> bytes:
+    """
+    Descarga el PDF de nota de enfermería de SIESA para un estudio
+    de administración de medicamentos (ufuncional = 12).
+    """
+    session = _get_siesa_session()
+    usuario_session = getattr(settings, "SIESA_USUARIO_SESSION", "")
+
+    def _do_fetch_enfermeria(s: requests.Session) -> bytes:
+        # Paso 1: obtener parámetros del formulario FastReport
+        r1 = s.post(
+            SIESA_FORMULARIO_URL,
+            data={
+                "estudio":             estudio,
+                "ImpHC":               0,
+                "ImpNotasEnfermeria":  1,
+                "UsuarioSession":      usuario_session,
+                "pdf":                 1,
+                "generarNombreArchivo": 1,
+                "reportName":          "HistoriaClinicaGeneral",
+            },
+            timeout=30,
+        )
+        r1.raise_for_status()
+        payload_html = r1.json().get("payload", "")
+        form_fields  = _parse_hidden_inputs(payload_html)
+
+        if not form_fields:
+            raise Exception("No se obtuvieron campos del formulario FastReport")
+
+        # Paso 2: enviar al renderer FastReport para generar el reporte
+        r2 = s.post(SIESA_REPORT_VIEW_URL, data=form_fields, timeout=60)
+        r2.raise_for_status()
+
+        # Paso 3: extraer hash del reporte generado
+        match = re.search(r"frxreport=([a-f0-9]+)", r2.text)
+        if not match:
+            raise Exception("No se encontró el hash frxreport en la respuesta de SIESA")
+        frx_report = match.group(1)
+
+        # Paso 4: descargar el PDF
+        r3 = s.get(
+            f"{SIESA_EXPORT_BASE_URL}FastReport.Export.aspx?frxprint=pdf&frxreport={frx_report}",
+            timeout=30,
+        )
+        r3.raise_for_status()
+        if "pdf" not in r3.headers.get("Content-Type", "").lower():
+            raise Exception("La respuesta de FastReport no es un PDF válido")
+        return r3.content
+
+    try:
+        return _do_fetch_enfermeria(session)
+    except Exception:
+        global _siesa_session_cache
+        _siesa_session_cache = None
+        session = _get_siesa_session()
+        return _do_fetch_enfermeria(session)
+
+
+def _estudios_enfermeria_por_fecha(fecha_inicio: str, fecha_fin: str) -> list:
+    """
+    Devuelve lista de con_estudio para estudios de administración de
+    medicamentos (ufuncional = 12) en el rango de fechas dado.
+    """
+    with connections["zeussalud"].cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT DISTINCT sm.con_estudio
+            FROM sis_maes sm
+            JOIN sis_deta sd ON sd.estudio = sm.con_estudio
+            WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
+              AND sm.id_sede = 2
+              AND sm.estado = 'A'
+              AND sm.ufuncional = 12
+            ORDER BY sm.con_estudio
+            """,
+            [fecha_inicio, fecha_fin],
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+
+@api_view(["GET"])
+def generar_pdf_enfermeria(request):
+    """
+    Genera o regenera el PDF de nota de enfermería para UN estudio puntual.
+
+    GET /api/v2/gedocumental/generar-pdf-enfermeria/?estudio=11012
+    GET /api/v2/gedocumental/generar-pdf-enfermeria/?estudio=11012&force=1
+    """
+    estudio_str = request.GET.get("estudio", "").strip()
+    force       = request.GET.get("force", "0") == "1"
+
+    if not estudio_str:
+        return JsonResponse({"success": False, "detail": "Falta el parámetro 'estudio'."}, status=400)
+
+    try:
+        estudio = int(estudio_str)
+    except ValueError:
+        return JsonResponse({"success": False, "detail": "El parámetro 'estudio' debe ser numérico."}, status=400)
+
+    if not force and _ya_existe_resultado(estudio):
+        return JsonResponse(
+            {"success": True, "detail": f"El PDF del estudio {estudio} ya existe.", "regenerado": False},
+            status=200,
+        )
+
+    try:
+        pdf_bytes = _fetch_pdf_enfermeria(estudio)
+    except Exception as e:
+        return JsonResponse(
+            {"success": False, "detail": f"Error al obtener el PDF de SIESA: {e}"},
+            status=502,
+        )
+
+    ruta_relativa, _, nombre = _guardar_pdf(estudio, pdf_bytes)
+    _registrar_en_bd(estudio, nombre, ruta_relativa)
+
+    return JsonResponse(
+        {
+            "success": True,
+            "detail":     f"PDF del estudio {estudio} generado correctamente.",
+            "archivo":    nombre,
+            "ruta":       ruta_relativa,
+            "regenerado": force,
+        },
+        status=201,
+    )
+
+
+@api_view(["GET"])
+def generar_pdfs_enfermeria_lote(request):
+    """
+    Procesa en lote las notas de enfermería de administración de medicamentos.
+
+    Query params:
+      - fecha_inicio: YYYY-MM-DD
+      - fecha_fin:    YYYY-MM-DD
+      - force:        1 para regenerar aunque ya existan (opcional)
+    """
+    fecha_inicio = request.GET.get("fecha_inicio")
+    fecha_fin    = request.GET.get("fecha_fin")
+    force        = request.GET.get("force", "0") == "1"
+
+    if not fecha_inicio or not fecha_fin:
+        return JsonResponse(
+            {"success": False, "detail": "Se requieren 'fecha_inicio' y 'fecha_fin'."},
+            status=400,
+        )
+
+    try:
+        estudios = _estudios_enfermeria_por_fecha(fecha_inicio, fecha_fin)
+    except Exception as e:
+        return JsonResponse(
+            {"success": False, "detail": f"Error al consultar Zeus: {e}"},
+            status=500,
+        )
+
+    resultados = {"generados": [], "omitidos": [], "errores": []}
+
+    for con_estudio in estudios:
+        if not force and _ya_existe_resultado(con_estudio):
+            resultados["omitidos"].append(con_estudio)
+            continue
+        try:
+            pdf_bytes     = _fetch_pdf_enfermeria(con_estudio)
+            ruta_relativa, _, nombre = _guardar_pdf(con_estudio, pdf_bytes)
+            _registrar_en_bd(con_estudio, nombre, ruta_relativa)
+            resultados["generados"].append(con_estudio)
+        except Exception as e:
+            resultados["errores"].append({"estudio": con_estudio, "error": str(e)})
+
+    return JsonResponse(
+        {
+            "success": True,
+            "total":     len(estudios),
+            "generados": len(resultados["generados"]),
+            "omitidos":  len(resultados["omitidos"]),
+            "errores":   len(resultados["errores"]),
+            "detalle":   resultados,
+        },
+        status=200,
+    )
