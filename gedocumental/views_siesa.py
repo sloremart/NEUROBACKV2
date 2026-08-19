@@ -671,7 +671,9 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
             )
         frx_report = match.group(1)
 
-        # Paso 4: descargar el PDF
+        # Paso 4: descargar el PDF (FastReport genera el archivo de forma asíncrona)
+        import time
+        time.sleep(3)
         r3 = s.get(
             f"{SIESA_EXPORT_BASE_URL}FastReport.Export.aspx?frxprint=pdf&frxreport={frx_report}",
             timeout=30,
@@ -681,9 +683,10 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
         if not r3.content.startswith(b"%PDF"):
             ct = r3.headers.get("Content-Type", "desconocido")
             raise Exception(
-                f"La respuesta no es un PDF. Content-Type: {ct}. "
-                f"Hash usado: {frx_report}. "
-                f"Inicio respuesta: {r3.content[:300]}"
+                f"La respuesta no es un PDF. Status: {r3.status_code}. "
+                f"Content-Type: {ct}. Hash: {frx_report}. "
+                f"Headers: {dict(r3.headers)}. "
+                f"Inicio: {r3.content[:500]}"
             )
         return r3.content
 
