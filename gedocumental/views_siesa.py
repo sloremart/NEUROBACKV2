@@ -663,9 +663,12 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
         r2.raise_for_status()
 
         # Paso 3: extraer hash del reporte generado
-        match = re.search(r"frxreport=([a-f0-9]+)", r2.text)
+        match = re.search(r"frxreport=([^'\"&\s]+)", r2.text)
         if not match:
-            raise Exception("No se encontró el hash frxreport en la respuesta de SIESA")
+            raise Exception(
+                f"No se encontró el hash frxreport en la respuesta de SIESA. "
+                f"Primeros 500 chars: {r2.text[:500]}"
+            )
         frx_report = match.group(1)
 
         # Paso 4: descargar el PDF
@@ -674,8 +677,14 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
             timeout=30,
         )
         r3.raise_for_status()
-        if "pdf" not in r3.headers.get("Content-Type", "").lower():
-            raise Exception("La respuesta de FastReport no es un PDF válido")
+        # Validar por magic bytes en lugar de Content-Type (FastReport puede devolver octet-stream)
+        if not r3.content.startswith(b"%PDF"):
+            ct = r3.headers.get("Content-Type", "desconocido")
+            raise Exception(
+                f"La respuesta no es un PDF. Content-Type: {ct}. "
+                f"Hash usado: {frx_report}. "
+                f"Inicio respuesta: {r3.content[:300]}"
+            )
         return r3.content
 
     try:
