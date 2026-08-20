@@ -20,6 +20,7 @@ import html as html_lib
 import hashlib
 import os
 import re
+import shutil
 import stat
 from datetime import datetime
 
@@ -309,6 +310,13 @@ def _guardar_pdf(estudio: int, pdf_bytes: bytes) -> str:
     return ruta_relativa, ruta_absoluta, nombre
 
 
+def _copiar_a_examenes(ruta_absoluta: str, nombre: str) -> None:
+    """Copia el PDF al directorio del portal de resultados (/media/disco1/examenes/)."""
+    destino_dir = "/media/disco1/examenes"
+    os.makedirs(destino_dir, exist_ok=True)
+    shutil.copy2(ruta_absoluta, os.path.join(destino_dir, nombre))
+
+
 def _ya_existe_resultado(estudio: int) -> bool:
     """Devuelve True si ya hay un archivo RESULTADO para este estudio."""
     return ArchivoFacturacion.objects.filter(
@@ -409,6 +417,7 @@ def generar_pdf_siesa(request):
 
     ruta_relativa, ruta_absoluta, nombre = _guardar_pdf(estudio, pdf_bytes)
     _registrar_en_bd(estudio, nombre, ruta_relativa)
+    _copiar_a_examenes(ruta_absoluta, nombre)
 
     return JsonResponse(
         {
@@ -575,8 +584,9 @@ def generar_pdfs_siesa_lote(request):
 
         try:
             pdf_bytes = _fetch_pdf_siesa(con_estudio, autoid)
-            ruta_relativa, _, nombre = _guardar_pdf(con_estudio, pdf_bytes)
+            ruta_relativa, ruta_absoluta, nombre = _guardar_pdf(con_estudio, pdf_bytes)
             _registrar_en_bd(con_estudio, nombre, ruta_relativa)
+            _copiar_a_examenes(ruta_absoluta, nombre)
             resultados["generados"].append(con_estudio)
         except SinLecturaError:
             resultados["omitidos"].append(con_estudio)
