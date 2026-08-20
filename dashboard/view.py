@@ -1598,3 +1598,258 @@ class CitasMedicoView(APIView):
 
         except Exception as e:
             return Response({'error': str(e)}, status=500)
+
+
+# ---------------------------------------------------------------------------
+# Mapa de unidades funcionales de ZeusSalud (ufuncional en sis_maes)
+# ---------------------------------------------------------------------------
+_UFUNCIONAL_NOMBRES = {
+    1:  "Consulta Fisiatría 1ª vez",
+    2:  "Radiología (RX)",
+    3:  "Tomografía (TAC)",
+    4:  "Resonancia Magnética",
+    5:  "Mamografía",
+    6:  "Ecografía",
+    7:  "Consulta Fisiatría Control",
+    8:  "Consulta Neurología 1ª vez",
+    9:  "Consulta Neurología Control",
+    10: "Consulta Neuropediatría 1ª vez",
+    11: "Consulta Neuropediatría Control",
+    12: "Administración de Medicamentos",
+    13: "Polisomnografía",
+    14: "EEG / Videotelemetría",
+    15: "Procedimientos Fisiatría",
+    16: "Procedimientos Neurología",
+    17: "Soporte Sedación",
+    18: "PET / CT",
+}
+
+
+class ProduccionMensualView(APIView):
+    """
+    Producción mensual de servicios agrupada por unidad funcional.
+
+    GET /api/v2/dashboard/produccion-mensual/
+    Params:
+      - meses (int, default 12): cuántos meses hacia atrás incluir
+      - ufuncional (int, opcional): filtrar por una sola unidad funcional
+    """
+
+    def get(self, request):
+        try:
+            meses = int(request.GET.get('meses', 12))
+            ufuncional_filtro = request.GET.get('ufuncional')
+
+            filtro_uf = ""
+            params_extra = []
+            if ufuncional_filtro:
+                filtro_uf = "AND sm.ufuncional = %s"
+                params_extra = [int(ufuncional_filtro)]
+
+            with connections['zeussalud'].cursor() as cursor:
+                cursor.execute(f"""
+                    SELECT
+                        FORMAT(sm.fecha_ing, 'yyyy-MM')  AS mes,
+                        sm.ufuncional,
+                        COUNT(DISTINCT sm.autoid)         AS cantidad,
+                        ISNULL(SUM(sd.vlr_servicio * sd.cantidad), 0) AS valor_bruto
+                    FROM sis_maes sm
+                    LEFT JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                    WHERE sm.fecha_ing >= DATEADD(MONTH, -%s, CAST(GETDATE() AS DATE))
+                      AND sm.estado   = 'A'
+                      AND sm.Prefijo != 'MGL'
+                      {filtro_uf}
+                    GROUP BY FORMAT(sm.fecha_ing, 'yyyy-MM'), sm.ufuncional
+                    ORDER BY mes, sm.ufuncional
+                """, [meses] + params_extra)
+                rows = cursor.fetchall()
+
+            # ── Estructurar en series por unidad funcional ──────────────────
+            series_map   = defaultdict(lambda: defaultdict(lambda: {"cantidad": 0, "valor": 0}))
+            meses_set    = set()
+
+            for mes, uf, cantidad, valor in rows:
+                meses_set.add(mes)
+                nombre = _UFUNCIONAL_NOMBRES.get(uf, f"Servicio {uf}")
+                series_map[nombre][mes]["cantidad"] += int(cantidad)
+                series_map[nombre][mes]["valor"]    += float(valor)
+
+            meses_ordenados = sorted(meses_set)
+
+            series = [
+                {
+                    "servicio":    nombre,
+                    "ufuncional":  next(
+                        (k for k, v in _UFUNCIONAL_NOMBRES.items() if v == nombre), None
+                    ),
+                    "datos": [
+                        {
+                            "mes":      mes,
+                            "cantidad": serie_meses[mes]["cantidad"],
+                            "valor":    round(serie_meses[mes]["valor"], 2),
+                        }
+                        for mes in meses_ordenados
+                    ],
+                    "total_cantidad": sum(d["cantidad"] for d in serie_meses.values()),
+                    "total_valor":    round(sum(d["valor"] for d in serie_meses.values()), 2),
+                }
+                for nombre, serie_meses in sorted(series_map.items())
+            ]
+
+            return Response({
+                "success":  True,
+                "meses":    meses_ordenados,
+                "series":   series,
+                "total_cantidad": sum(s["total_cantidad"] for s in series),
+                "total_valor":    round(sum(s["total_valor"] for s in series), 2),
+            })
+
+        except Exception as e:
+            return Response({"success": False, "error": str(e)}, status=500)
+
+
+class ResultadosEstudiosView(APIView):
+    """
+    Resultados de estudios entregados vs realizados, con tiempo promedio
+    dictación → entrega.
+
+    GET /api/v2/dashboard/resultados-estudios/
+    Params:
+      - meses (int, default 3): ventana hacia atrás para los resultados entregados
+    """
+
+    def get(self, request):
+        try:
+            meses = int(request.GET.get('meses', 3))
+
+            # ── 1. Resultados entregados (hcresult) ────────────────────────
+            with connections['hcresult'].cursor() as cursor:
+                cursor.execute("""
+                    SELECT
+                        DATE_FORMAT(er.fecha_resultado, '%%Y-%%m') AS mes,
+                        e.nombre                                    AS tipo_examen,
+                        COUNT(*)                                    AS cantidad,
+                        AVG(DATEDIFF(er.fecha_resultado, er.fecha_examen)) AS dias_promedio
+                    FROM examen_resultado er
+                    JOIN examen e ON e.id = er.examen
+                    WHERE er.fecha_resultado >= DATE_SUB(NOW(), INTERVAL %s MONTH)
+                      AND er.estado = 1
+                    GROUP BY mes, e.nombre
+                    ORDER BY mes, e.nombre
+                """, [meses])
+                resultados_rows = cursor.fetchall()
+
+            # ── 2. Total de resultados entregados en el período ────────────
+            with connections['hcresult'].cursor() as cursor:
+                cursor.execute("""
+                    SELECT COUNT(*) AS total, COUNT(DISTINCT er.numero_ingreso) AS admisiones_distintas
+                    FROM examen_resultado er
+                    WHERE er.fecha_resultado >= DATE_SUB(NOW(), INTERVAL %s MONTH)
+                      AND er.estado = 1
+                """, [meses])
+                fila_total = cursor.fetchone()
+                total_resultados = int(fila_total[0]) if fila_total else 0
+                admisiones_con_resultado = int(fila_total[1]) if fila_total else 0
+
+            # ── 3. Estudios realizados en el mismo período (ZeusSalud) ─────
+            with connections['zeussalud'].cursor() as cursor:
+                cursor.execute("""
+                    SELECT
+                        FORMAT(sm.fecha_ing, 'yyyy-MM') AS mes,
+                        COUNT(DISTINCT sm.autoid)        AS cantidad
+                    FROM sis_maes sm
+                    WHERE sm.fecha_ing >= DATEADD(MONTH, -%s, CAST(GETDATE() AS DATE))
+                      AND sm.estado   = 'A'
+                      AND sm.Prefijo != 'MGL'
+                    GROUP BY FORMAT(sm.fecha_ing, 'yyyy-MM')
+                    ORDER BY mes
+                """, [meses])
+                estudios_rows = cursor.fetchall()
+
+            # ── 4. Estudios recientes sin resultado aún ────────────────────
+            # Admisiones de los últimos 30 días sin registro en hcresult
+            with connections['zeussalud'].cursor() as cursor:
+                cursor.execute("""
+                    SELECT TOP 50
+                        sm.con_estudio,
+                        CONVERT(VARCHAR(10), sm.fecha_ing, 23) AS fecha_ing,
+                        sm.ufuncional,
+                        sm.EPSPaciente
+                    FROM sis_maes sm
+                    WHERE sm.fecha_ing >= DATEADD(DAY, -30, CAST(GETDATE() AS DATE))
+                      AND sm.estado   = 'A'
+                      AND sm.Prefijo != 'MGL'
+                    ORDER BY sm.fecha_ing DESC
+                """)
+                estudios_recientes = [
+                    {
+                        "estudio":    row[0],
+                        "fecha":      row[1],
+                        "servicio":   _UFUNCIONAL_NOMBRES.get(row[2], f"Servicio {row[2]}"),
+                        "entidad":    row[3],
+                    }
+                    for row in cursor.fetchall()
+                ]
+
+            # Estudios recientes que YA tienen resultado
+            with connections['hcresult'].cursor() as cursor:
+                cursor.execute("""
+                    SELECT DISTINCT numero_ingreso
+                    FROM examen_resultado
+                    WHERE fecha_resultado >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                      AND estado = 1
+                """)
+                con_resultado_set = {row[0] for row in cursor.fetchall()}
+
+            pendientes = [
+                e for e in estudios_recientes
+                if e["estudio"] not in con_resultado_set
+            ]
+
+            # ── Armar respuesta ────────────────────────────────────────────
+            por_mes_entregados = defaultdict(lambda: {"cantidad": 0, "dias_promedio": 0})
+            for mes, tipo, cantidad, dias in resultados_rows:
+                por_mes_entregados[mes]["cantidad"] += int(cantidad)
+                # promedio ponderado simple
+                por_mes_entregados[mes]["dias_promedio"] = round(
+                    (por_mes_entregados[mes]["dias_promedio"] + float(dias or 0)) / 2, 1
+                )
+
+            por_mes_realizados = {mes: int(cant) for mes, cant in estudios_rows}
+
+            por_tipo = defaultdict(lambda: {"cantidad": 0, "dias_promedio": 0})
+            for mes, tipo, cantidad, dias in resultados_rows:
+                por_tipo[tipo]["cantidad"] += int(cantidad)
+                por_tipo[tipo]["dias_promedio"] = round(
+                    (por_tipo[tipo]["dias_promedio"] + float(dias or 0)) / 2, 1
+                )
+
+            todos_meses = sorted(
+                set(list(por_mes_entregados.keys()) + list(por_mes_realizados.keys()))
+            )
+
+            timeline = [
+                {
+                    "mes":         mes,
+                    "entregados":  por_mes_entregados[mes]["cantidad"],
+                    "realizados":  por_mes_realizados.get(mes, 0),
+                    "dias_promedio": por_mes_entregados[mes]["dias_promedio"],
+                }
+                for mes in todos_meses
+            ]
+
+            return Response({
+                "success":                True,
+                "periodo_meses":          meses,
+                "total_resultados":       total_resultados,
+                "admisiones_con_resultado": admisiones_con_resultado,
+                "por_tipo_examen":        [
+                    {"tipo": t, **v} for t, v in sorted(por_tipo.items())
+                ],
+                "timeline":               timeline,
+                "pendientes_30d":         pendientes,
+                "pendientes_30d_total":   len(pendientes),
+            })
+
+        except Exception as e:
+            return Response({"success": False, "error": str(e)}, status=500)
