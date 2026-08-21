@@ -105,6 +105,7 @@ urlpatterns = [
     path('api/v2/auth/',                include(auth_urls)),
     path('api/v2/gedocumental/',        include(gedocumental_urls)),
     path('api/v2/programacionpagos/',   include('programacionpagos.urls')),
+    path('api/v2/dashboard/',           include('dashboard.urls')),
     path('api/v2/',                     include('resultadosgedocumental.urls')),
     # ── Endpoints legacy (sin prefijo gedocumental/) ─────────────────────────
     path('api/v2/descargar/<int:id_archivo>/',        downloadFile,                            name='v2-descargar-legacy'),
