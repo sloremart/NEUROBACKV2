@@ -159,74 +159,60 @@ class DashboardFacturacionEntidadView(APIView):
 class DashboardAgendadasView(APIView):
     def get(self, request):
         hoy = datetime.now().date()
+        fecha_inicio_str = request.GET.get('fecha_inicio')
+        fecha_fin_str    = request.GET.get('fecha_fin')
 
-        # Paso 1: Obtener citas del día con nombre de entidad (ZeusSalud: citas + sis_empre)
+        try:
+            fecha_inicio = datetime.strptime(fecha_inicio_str, '%Y-%m-%d').date() if fecha_inicio_str else hoy
+            fecha_fin    = datetime.strptime(fecha_fin_str,    '%Y-%m-%d').date() if fecha_fin_str    else hoy
+        except ValueError:
+            return Response({"error": "Formato de fecha inválido. Use YYYY-MM-DD."}, status=400)
+
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute('''
-                SELECT c.id, c.empresa, se.nombre AS NombreEntidad
+                SELECT
+                    CONVERT(date, c.fecha)                        AS fecha_cita,
+                    COALESCE(se.nombre, c.empresa, 'Sin entidad') AS NombreEntidad,
+                    COALESCE(sa.nombre, 'Sin servicio')           AS NombreServicio,
+                    COUNT(c.id)                                   AS num_citas
                 FROM citas c
-                LEFT JOIN sis_empre se ON c.empresa = se.codigo
-                WHERE CONVERT(date, c.fecha) = %s
+                LEFT JOIN sis_empre  se ON se.codigo = c.empresa
+                LEFT JOIN sis_asunto sa ON sa.id     = c.asunto
+                WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                   AND c.estado != 'CA'
-            ''', [hoy])
-            citas_info = cursor.fetchall()
+                GROUP BY CONVERT(date, c.fecha),
+                         COALESCE(se.nombre, c.empresa, 'Sin entidad'),
+                         COALESCE(sa.nombre, 'Sin servicio')
+                ORDER BY fecha_cita
+            ''', [fecha_inicio, fecha_fin])
+            rows = cursor.fetchall()
 
-        if not citas_info:
-            return Response({"servicios": [], "entidades": [], "usuarios": []})
+        entidad_citas   = defaultdict(int)
+        servicio_citas  = defaultdict(int)
+        timeline        = defaultdict(int)
 
-        idcita_to_entidad = {}
-        for idcita, empresa, nombre_entidad in citas_info:
-            idcita_to_entidad[idcita] = nombre_entidad or empresa or 'Entidad desconocida'
+        for fecha_cita, nombre_entidad, nombre_servicio, num_citas in rows:
+            fecha_str = fecha_cita.strftime('%Y-%m-%d') if hasattr(fecha_cita, 'strftime') else str(fecha_cita)[:10]
+            entidad_citas[nombre_entidad]  += num_citas
+            servicio_citas[nombre_servicio] += num_citas
+            timeline[fecha_str]             += num_citas
 
-        idcitas = list(idcita_to_entidad.keys())
-
-        # Paso 2: Buscar procedimientos en citas_procedimientos con nombre de servicio desde sis_proc
-        registros_validos = []
-        if idcitas:
-            lotes = [idcitas[i:i + 1000] for i in range(0, len(idcitas), 1000)]
-            with connections['zeussalud'].cursor() as cursor:
-                for lote in lotes:
-                    formato = ','.join(['%s'] * len(lote))
-                    cursor.execute(f'''
-                        SELECT cp.id_cita,
-                               COALESCE(sp.nombreve, 'Servicio desconocido') AS NombreServicio,
-                               0 AS VrUnitario,
-                               cp.Cantidad
-                        FROM citas_procedimientos cp
-                        LEFT JOIN sis_proc sp ON cp.id_procedimiento = sp.codigo
-                        WHERE cp.id_cita IN ({formato})
-                    ''', lote)
-                    registros_validos.extend(cursor.fetchall())
-
-        if not registros_validos:
-            return Response({"servicios": [], "entidades": [], "usuarios": []})
-
-        # Paso 3: Agrupar por servicio y entidad
-        servicio_totales = defaultdict(float)
-        entidad_citas = defaultdict(set)
-
-        for idcita, nombre_servicio, vr_unitario, cantidad in registros_validos:
-            total = float(vr_unitario) * float(cantidad)
-            entidad = idcita_to_entidad.get(idcita, 'Entidad desconocida')
-
-            servicio_totales[nombre_servicio] += total
-            entidad_citas[entidad].add(idcita)
-
-        # Construir JSON de salida
-        servicios_data = [
-            {"nombre": nombre, "total": round(valor, 2)}
-            for nombre, valor in servicio_totales.items()
-        ]
-
-        entidades_data = [
-            {"nombre": nombre, "citas": len(citas)}
-            for nombre, citas in entidad_citas.items()
-        ]
+        total = sum(entidad_citas.values())
 
         return Response({
-            "servicios": servicios_data,
-            "entidades": entidades_data,
-            "usuarios": []
+            "entidades": sorted(
+                [{"nombre": k, "citas": v} for k, v in entidad_citas.items()],
+                key=lambda x: -x["citas"]
+            ),
+            "servicios": sorted(
+                [{"nombre": k, "total": v} for k, v in servicio_citas.items()],
+                key=lambda x: -x["total"]
+            ),
+            "timeline": [{"fecha": k, "citas": v} for k, v in sorted(timeline.items())],
+            "usuarios": [],
+            "total": total,
+            "fecha_inicio": str(fecha_inicio),
+            "fecha_fin": str(fecha_fin),
         })
 
 
