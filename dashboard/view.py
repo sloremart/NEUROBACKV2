@@ -171,46 +171,105 @@ class DashboardAgendadasView(APIView):
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute('''
                 SELECT
-                    CONVERT(date, c.fecha)                        AS fecha_cita,
-                    COALESCE(se.nombre, c.empresa, 'Sin entidad') AS NombreEntidad,
-                    COALESCE(sa.nombre, 'Sin servicio')           AS NombreServicio,
-                    COUNT(c.id)                                   AS num_citas
-                FROM citas c
-                LEFT JOIN sis_empre  se ON se.codigo = c.empresa
-                LEFT JOIN sis_asunto sa ON sa.id     = c.asunto
-                WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
-                  AND c.estado != 'CA'
-                GROUP BY CONVERT(date, c.fecha),
-                         COALESCE(se.nombre, c.empresa, 'Sin entidad'),
-                         COALESCE(sa.nombre, 'Sin servicio')
-                ORDER BY fecha_cita
-            ''', [fecha_inicio, fecha_fin])
+                    cb.fecha_cita,
+                    cb.NombreEntidad,
+                    cb.NombreServicio,
+                    COUNT(cb.id_cita)                          AS num_citas,
+                    SUM(COALESCE(vc.valor, vip.valor, 0))      AS valor_total,
+                    SUM(cb.copago)                             AS total_copago,
+                    SUM(cb.pagado)                             AS total_pagado
+                FROM (
+                    SELECT
+                        c.id    AS id_cita,
+                        c.contrato,
+                        CONVERT(date, c.fecha)                        AS fecha_cita,
+                        COALESCE(se.nombre, c.empresa, 'Sin entidad') AS NombreEntidad,
+                        COALESCE(sa.nombre, 'Sin servicio')           AS NombreServicio,
+                        COALESCE(c.copago, 0)                         AS copago,
+                        COALESCE(c.pagado, 0)                         AS pagado
+                    FROM citas c
+                    LEFT JOIN sis_empre  se ON se.codigo = c.empresa
+                    LEFT JOIN sis_asunto sa ON sa.id     = c.asunto
+                    WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
+                      AND c.estado != 'CA'
+                ) cb
+                LEFT JOIN (
+                    SELECT IdCita AS id_cita, SUM(ISNULL(Valor, 0)) AS valor
+                    FROM citas_procedimientos_asuntos
+                    GROUP BY IdCita
+                ) vc ON vc.id_cita = cb.id_cita
+                LEFT JOIN (
+                    SELECT cp.id_cita,
+                           SUM(COALESCE(spp_exact.Precio, spp_base.Precio, 0)) AS valor
+                    FROM citas_procedimientos cp
+                    JOIN citas cs ON cs.id = cp.id_cita
+                    LEFT JOIN contratos ct ON ct.codigo = cs.contrato
+                    LEFT JOIN sis_proc_precios spp_exact
+                        ON  spp_exact.Cod_manual   = ct.manual
+                        AND spp_exact.Codigo_proc  = cp.id_procedimiento
+                        AND spp_exact.Tipo_proc    = '256'
+                    LEFT JOIN sis_proc_precios spp_base
+                        ON  spp_base.Cod_manual   = ct.manual
+                        AND spp_base.Codigo_proc  = LEFT(cp.id_procedimiento,
+                                                        CHARINDEX('-', cp.id_procedimiento + '-') - 1)
+                        AND spp_base.Tipo_proc    = '256'
+                    WHERE CONVERT(date, cs.fecha) BETWEEN %s AND %s
+                      AND cs.estado != 'CA'
+                    GROUP BY cp.id_cita
+                ) vip ON vip.id_cita = cb.id_cita
+                GROUP BY cb.fecha_cita, cb.NombreEntidad, cb.NombreServicio
+                ORDER BY cb.fecha_cita
+            ''', [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin])
             rows = cursor.fetchall()
 
-        entidad_citas   = defaultdict(int)
-        servicio_citas  = defaultdict(int)
-        timeline        = defaultdict(int)
+        def _categoria(nombre):
+            n = nombre.upper()
+            if 'CONSULTA' in n:
+                return 'Consultas'
+            if any(x in n for x in ['RX', 'TOMOGRAF', 'RESONANCI', 'MAMOGRAF', 'ECOGRAF', 'PET/CT', 'PET CT']):
+                return 'Imágenes'
+            if any(x in n for x in ['POLISOMNOGRAF', 'ELECTROENCEFALOGR', 'PROCEDIMIENTO', 'SOPORTE', 'SEDACI', 'VIDEOTELEMETR', 'APLICACION']):
+                return 'Procedimientos'
+            return 'Otros'
 
-        for fecha_cita, nombre_entidad, nombre_servicio, num_citas in rows:
+        entidad_citas  = defaultdict(int)
+        entidad_valor  = defaultdict(float)
+        servicio_citas = defaultdict(int)
+        servicio_valor = defaultdict(float)
+        timeline       = defaultdict(int)
+        total_valor    = 0.0
+        total_copago   = 0.0
+        total_pagado   = 0.0
+
+        for fecha_cita, nombre_entidad, nombre_servicio, num_citas, valor_t, cop, pag in rows:
             fecha_str = fecha_cita.strftime('%Y-%m-%d') if hasattr(fecha_cita, 'strftime') else str(fecha_cita)[:10]
             entidad_citas[nombre_entidad]  += num_citas
+            entidad_valor[nombre_entidad]  += float(valor_t or 0)
             servicio_citas[nombre_servicio] += num_citas
+            servicio_valor[nombre_servicio] += float(valor_t or 0)
             timeline[fecha_str]             += num_citas
+            total_valor                     += float(valor_t or 0)
+            total_copago                    += float(cop or 0)
+            total_pagado                    += float(pag or 0)
 
         total = sum(entidad_citas.values())
 
         return Response({
             "entidades": sorted(
-                [{"nombre": k, "citas": v} for k, v in entidad_citas.items()],
+                [{"nombre": k, "citas": v, "valor": round(entidad_valor[k])} for k, v in entidad_citas.items()],
                 key=lambda x: -x["citas"]
             ),
             "servicios": sorted(
-                [{"nombre": k, "total": v} for k, v in servicio_citas.items()],
+                [{"nombre": k, "total": v, "valor": round(servicio_valor[k]),
+                  "categoria": _categoria(k)} for k, v in servicio_citas.items()],
                 key=lambda x: -x["total"]
             ),
             "timeline": [{"fecha": k, "citas": v} for k, v in sorted(timeline.items())],
             "usuarios": [],
             "total": total,
+            "total_valor_consultas": round(total_valor),
+            "total_copago": round(total_copago),
+            "total_pagado": round(total_pagado),
             "fecha_inicio": str(fecha_inicio),
             "fecha_fin": str(fecha_fin),
         })
