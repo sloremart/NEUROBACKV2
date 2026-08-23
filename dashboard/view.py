@@ -262,7 +262,7 @@ class DashboardAgendadasView(APIView):
             "servicios": sorted(
                 [{"nombre": k, "total": v, "valor": round(servicio_valor[k]),
                   "categoria": _categoria(k)} for k, v in servicio_citas.items()],
-                key=lambda x: -x["total"]
+                key=lambda x: x["nombre"]
             ),
             "timeline": [{"fecha": k, "citas": v} for k, v in sorted(timeline.items())],
             "usuarios": [],
