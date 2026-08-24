@@ -174,13 +174,14 @@ class DashboardAgendadasView(APIView):
                     cb.fecha_cita,
                     cb.NombreEntidad,
                     cb.NombreServicio,
-                    COUNT(cb.id_cita)                          AS num_citas,
+                    COUNT(DISTINCT cb.autoid_paciente)         AS num_citas,
                     SUM(COALESCE(vc.valor, vip.valor, 0))      AS valor_total,
                     SUM(cb.copago)                             AS total_copago,
                     SUM(cb.pagado)                             AS total_pagado
                 FROM (
                     SELECT
                         c.id    AS id_cita,
+                        c.autoid AS autoid_paciente,
                         c.contrato,
                         CONVERT(date, c.fecha)                        AS fecha_cita,
                         LTRIM(RTRIM(COALESCE(se.nombre, c.empresa, 'Sin entidad'))) AS NombreEntidad,
