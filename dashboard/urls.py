@@ -6,6 +6,7 @@ from dashboard.view import (
     EstadoCarteraTodasEntidades, EstadoCarteraPorNit, RecaudoPeriodoView,
     MedicosView, CitasMedicoView,
     ProduccionMensualView, ResultadosEstudiosView,
+    DashboardFacturacionNuevoView,
 )
 
 
@@ -21,4 +22,5 @@ urlpatterns = [
     path('citas-medico/',          CitasMedicoView.as_view(),                   name='citas-medico'),
     path('produccion-mensual/',    ProduccionMensualView.as_view(),             name='produccion-mensual'),
     path('resultados-estudios/',   ResultadosEstudiosView.as_view(),            name='resultados-estudios'),
+    path('facturacion-nuevo/',     DashboardFacturacionNuevoView.as_view(),     name='facturacion-nuevo'),
 ]

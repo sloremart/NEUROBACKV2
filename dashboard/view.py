@@ -1414,13 +1414,228 @@ class DashboardRiesgoCompartidoView(APIView):
             "fecha_fin": fecha_fin.strftime("%d/%m/%Y"),
             "grupos": resultado
         })
-        
-        
-        
-        
-        
-        
-        
+
+
+# ── Grupos MRC para contratos 5 y 6 (SANITAS MRC SUBSIDIADO / CONTRIBUTIVO) ──────────────
+GRUPOS_MRC = {
+    "ELECTROENCEFALOGRAMAS": {
+        "cups": {"891402", "891901", "891402-1", "891402PED", "891901-1",
+                 "891901PED", "891401", "891401PED"},
+        "tarifa": 198465,
+        "min": 140, "ref": 156, "max": 172,
+        "valor_mes": 30960555,
+    },
+    "BLOQUEOS": {
+        "cups": {"053106", "053105", "053111"},
+        "tarifa": 111303,
+        "min": 55, "ref": 61, "max": 67,
+        "valor_mes": 6789478,
+    },
+    "APLICACIÓN DE TOXINA / SUSTANCIAS": {
+        "cups": {"861411", "48201"},
+        "tarifa": 270831,
+        "min": 16, "ref": 18, "max": 20,
+        "valor_mes": 4874958,
+    },
+    "POLISOMNOGRAFÍAS": {
+        "cups": {"891704", "891703", "891704-1", "891704PED",
+                 "891703-1", "891703PED"},
+        "tarifa": 612433,
+        "min": 42, "ref": 47, "max": 52,
+        "valor_mes": 35070488,
+    },
+    "OTROS PROCEDIMIENTOS NEUROLOGÍA": {
+        "cups": {"891515", "891514", "930820", "891511", "891509",
+                 "930860", "891530", "952303", "954626", "952302",
+                 "930103", "930821", "954624", "954625"},
+        "tarifa": 37613,
+        "min": 972, "ref": 1080, "max": 1188,
+        "valor_mes": 35070488,
+    },
+}
+
+CUPS_ECOGRAFIA_DOPPLER = {
+    "882298", "882317", "882308", "882318", "882112", "882203",
+    "881511", "881362", "882222", "882307", "882309", "882316",
+    "882132", "882296", "882282", "881360",
+}
+
+
+class DashboardFacturacionNuevoView(APIView):
+    def get(self, request):
+        hoy = datetime.now().date()
+        fecha_inicio_str = request.GET.get('fecha_inicio')
+        fecha_fin_str    = request.GET.get('fecha_fin')
+
+        try:
+            fecha_inicio = (datetime.strptime(fecha_inicio_str, '%Y-%m-%d').date()
+                            if fecha_inicio_str else hoy.replace(day=1))
+            fecha_fin = (datetime.strptime(fecha_fin_str, '%Y-%m-%d').date()
+                         if fecha_fin_str else hoy)
+        except ValueError:
+            return Response({"error": "Formato inválido. Use YYYY-MM-DD."}, status=400)
+
+        if fecha_fin > hoy:
+            fecha_fin = hoy
+
+        # ── Facturación regular (no MRC) ──────────────────────────────────────
+        with connections['zeussalud'].cursor() as cursor:
+            cursor.execute('''
+                SELECT
+                    LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, 'Sin entidad'))) AS entidad,
+                    COUNT(sm.autoid)      AS admisiones,
+                    SUM(sm.vlr_factura)   AS valor,
+                    CONVERT(date, sm.fecha_ing) AS fecha
+                FROM sis_maes sm
+                LEFT JOIN sis_empre se ON se.codigo = sm.EPSPaciente
+                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
+                  AND sm.contabilizado = 1
+                  AND sm.contrato NOT IN (5, 6)
+                  AND sm.Prefijo != 'MGL'
+                GROUP BY
+                    LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, 'Sin entidad'))),
+                    CONVERT(date, sm.fecha_ing)
+                ORDER BY fecha, valor DESC
+            ''', [fecha_inicio, fecha_fin])
+            rows_regular = cursor.fetchall()
+
+        entidad_totals = defaultdict(lambda: {'valor': 0.0, 'admisiones': 0})
+        timeline_regular = defaultdict(lambda: {'valor': 0.0, 'admisiones': 0})
+
+        for entidad, admisiones, valor, fecha in rows_regular:
+            v = float(valor or 0)
+            entidad_totals[entidad]['valor'] += v
+            entidad_totals[entidad]['admisiones'] += admisiones
+            fecha_str = fecha.strftime('%Y-%m-%d') if hasattr(fecha, 'strftime') else str(fecha)[:10]
+            timeline_regular[fecha_str]['valor'] += v
+            timeline_regular[fecha_str]['admisiones'] += admisiones
+
+        entidades_list = sorted(
+            [{'nombre': k, 'valor': round(v['valor']), 'admisiones': v['admisiones']}
+             for k, v in entidad_totals.items()],
+            key=lambda x: -x['valor']
+        )
+        total_regular = sum(e['valor'] for e in entidades_list)
+        total_admisiones_regular = sum(e['admisiones'] for e in entidades_list)
+
+        # ── MRC (contratos 5 y 6) ─────────────────────────────────────────────
+        with connections['zeussalud'].cursor() as cursor:
+            cursor.execute('''
+                SELECT
+                    sd.cups,
+                    LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups))) AS nombre_servicio,
+                    SUM(sd.cantidad)                             AS cantidad,
+                    SUM(sd.cantidad * sd.vlr_servicio)           AS valor
+                FROM sis_maes sm
+                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                LEFT JOIN sis_proc sp ON sp.cups = sd.cups
+                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
+                  AND sm.contabilizado = 1
+                  AND sm.contrato IN (5, 6)
+                  AND sm.Prefijo != 'MGL'
+                GROUP BY sd.cups, LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups)))
+                ORDER BY cantidad DESC
+            ''', [fecha_inicio, fecha_fin])
+            rows_mrc = cursor.fetchall()
+
+        cups_data = {}
+        for cups, nombre, cantidad, valor in rows_mrc:
+            c = str(cups or '').strip()
+            if c not in cups_data:
+                cups_data[c] = {'cups': c, 'nombre': nombre, 'cantidad': 0.0, 'valor': 0.0}
+            cups_data[c]['cantidad'] += float(cantidad or 0)
+            cups_data[c]['valor'] += float(valor or 0)
+
+        cups_en_grupo = set()
+        grupos_resultado = []
+
+        for nombre_grupo, config in GRUPOS_MRC.items():
+            qty = 0.0
+            val = 0.0
+            cups_grupo = []
+            for cups in config['cups']:
+                if cups in cups_data:
+                    d = cups_data[cups]
+                    qty += d['cantidad']
+                    val += d['valor']
+                    cups_grupo.append(d)
+                    cups_en_grupo.add(cups)
+            if qty == 0:
+                continue
+
+            if qty < config['min']:
+                estado = 'bajo'
+                valor_calc = config['tarifa'] * qty
+            elif qty <= config['max']:
+                estado = 'en_rango'
+                valor_calc = config['valor_mes']
+            else:
+                exceso = qty - config['max']
+                estado = 'sobre'
+                valor_calc = config['valor_mes'] + (exceso * config['tarifa'] / 2)
+
+            grupos_resultado.append({
+                'grupo': nombre_grupo,
+                'cantidad': round(qty),
+                'valor': round(val),
+                'valor_calculado': round(valor_calc),
+                'min': config['min'],
+                'ref': config['ref'],
+                'max': config['max'],
+                'valor_mes': config['valor_mes'],
+                'tarifa': config['tarifa'],
+                'estado': estado,
+                'cups': sorted(cups_grupo, key=lambda x: -x['cantidad']),
+            })
+
+        ecografias = [d for c, d in cups_data.items()
+                      if c not in cups_en_grupo and c in CUPS_ECOGRAFIA_DOPPLER]
+        otros_mrc = [d for c, d in cups_data.items()
+                     if c not in cups_en_grupo and c not in CUPS_ECOGRAFIA_DOPPLER]
+
+        if ecografias:
+            grupos_resultado.insert(0, {
+                'grupo': 'ECOGRAFÍAS DOPPLER',
+                'cantidad': round(sum(d['cantidad'] for d in ecografias)),
+                'valor': round(sum(d['valor'] for d in ecografias)),
+                'valor_calculado': None,
+                'min': None, 'ref': None, 'max': None,
+                'valor_mes': None, 'tarifa': None,
+                'estado': 'sin_parametros',
+                'cups': sorted(ecografias, key=lambda x: -x['cantidad']),
+            })
+        if otros_mrc:
+            grupos_resultado.append({
+                'grupo': 'OTROS MRC',
+                'cantidad': round(sum(d['cantidad'] for d in otros_mrc)),
+                'valor': round(sum(d['valor'] for d in otros_mrc)),
+                'valor_calculado': None,
+                'min': None, 'ref': None, 'max': None,
+                'valor_mes': None, 'tarifa': None,
+                'estado': 'sin_parametros',
+                'cups': sorted(otros_mrc, key=lambda x: -x['cantidad']),
+            })
+
+        total_mrc = sum((d.get('valor') or 0) for d in grupos_resultado)
+
+        return Response({
+            'fecha_inicio': str(fecha_inicio),
+            'fecha_fin': str(fecha_fin),
+            'regular': {
+                'total': round(total_regular),
+                'admisiones': total_admisiones_regular,
+                'entidades': entidades_list[:15],
+                'timeline': [
+                    {'fecha': k, 'valor': round(v['valor']), 'admisiones': v['admisiones']}
+                    for k, v in sorted(timeline_regular.items())
+                ],
+            },
+            'mrc': {
+                'total_valor': round(total_mrc),
+                'grupos': grupos_resultado,
+            },
+        })
+
 
 
 class MedicosView(APIView):
