@@ -179,16 +179,13 @@ class DashboardAgendadasView(APIView):
                     SUM(cb.copago)                     AS total_copago,
                     SUM(cb.pagado)                     AS total_pagado
                 FROM (
-                    -- One row per (patient, entity, service).
-                    -- The inner window is expanded ±1 day so that both the evening-arrival cita
-                    -- and the next-morning departure cita of an overnight study are captured.
-                    -- MIN(fecha) gives the arrival date; the outer WHERE then restricts to that date,
-                    -- so yesterday's departures (different patients) are not counted as today's studies.
-                    -- Prices are looked up per individual cita and MAX'd across the study's citas,
-                    -- because only the arrival slot typically carries the procedure entry.
+                    -- One row per (patient, entity, service, date): collapses multiple
+                    -- espacios (slots) booked for the same study into a single visit.
+                    -- Date is the exact scheduled date from Zeus — no hour shifts.
                     SELECT
                         c.autoid                                              AS autoid_paciente,
-                        MIN(CONVERT(date, c.fecha))                           AS fecha_cita,
+                        MIN(c.id)                                             AS id_cita,
+                        CONVERT(date, c.fecha)                                AS fecha_cita,
                         c.contrato,
                         LTRIM(RTRIM(COALESCE(se.nombre, c.empresa, 'Sin entidad'))) AS NombreEntidad,
                         LTRIM(RTRIM(COALESCE(sa.nombre, 'Sin servicio')))     AS NombreServicio,
@@ -218,24 +215,22 @@ class DashboardAgendadasView(APIView):
                             AND spp_b.Codigo_proc = LEFT(cp.id_procedimiento,
                                                     CHARINDEX('-', cp.id_procedimiento + '-') - 1)
                             AND spp_b.Tipo_proc   = '256'
-                        WHERE CONVERT(date, cs.fecha)
-                              BETWEEN DATEADD(day, -1, %s) AND DATEADD(day, 1, %s)
+                        WHERE CONVERT(date, cs.fecha) BETWEEN %s AND %s
                           AND cs.estado != 'CA'
                         GROUP BY cp.id_cita
                     ) vip_i ON vip_i.id_cita = c.id
-                    WHERE CONVERT(date, c.fecha)
-                          BETWEEN DATEADD(day, -1, %s) AND DATEADD(day, 1, %s)
+                    WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                       AND c.estado != 'CA'
                     GROUP BY
                         c.autoid,
                         c.contrato,
+                        CONVERT(date, c.fecha),
                         LTRIM(RTRIM(COALESCE(se.nombre, c.empresa, 'Sin entidad'))),
                         LTRIM(RTRIM(COALESCE(sa.nombre, 'Sin servicio')))
                 ) cb
-                WHERE cb.fecha_cita BETWEEN %s AND %s
                 GROUP BY cb.fecha_cita, cb.NombreEntidad, cb.NombreServicio
                 ORDER BY cb.fecha_cita
-            ''', [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin, fecha_inicio, fecha_fin])
+            ''', [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin])
             rows = cursor.fetchall()
 
         def _categoria(nombre):
