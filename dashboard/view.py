@@ -174,30 +174,57 @@ class DashboardAgendadasView(APIView):
                     cb.fecha_cita,
                     cb.NombreEntidad,
                     cb.NombreServicio,
-                    COUNT(DISTINCT cb.autoid_paciente)         AS num_citas,
-                    SUM(COALESCE(vc.valor, vip.valor, 0))      AS valor_total,
-                    SUM(cb.copago)                             AS total_copago,
-                    SUM(cb.pagado)                             AS total_pagado
+                    COUNT(DISTINCT cb.autoid_paciente) AS num_citas,
+                    SUM(cb.valor_total)                AS valor_total,
+                    SUM(cb.copago)                     AS total_copago,
+                    SUM(cb.pagado)                     AS total_pagado
                 FROM (
-                    -- One row per (patient, entity, service): use earliest slot as the visit date.
-                    -- This collapses multi-slot studies (e.g., poliso overnight = 2 citas on
-                    -- consecutive dates) into a single visit so they are not double-counted.
+                    -- One row per (patient, entity, service).
+                    -- The inner window is expanded ±1 day so that both the evening-arrival cita
+                    -- and the next-morning departure cita of an overnight study are captured.
+                    -- MIN(fecha) gives the arrival date; the outer WHERE then restricts to that date,
+                    -- so yesterday's departures (different patients) are not counted as today's studies.
+                    -- Prices are looked up per individual cita and MAX'd across the study's citas,
+                    -- because only the arrival slot typically carries the procedure entry.
                     SELECT
                         c.autoid                                              AS autoid_paciente,
-                        MIN(c.id)                                             AS id_cita,
-                        -- Shift back 12 hours so morning-departure slots (e.g. 7 AM Aug 25)
-                        -- fall on the same logical date as the evening-arrival slot (7 PM Aug 24).
-                        -- This makes a poliso study count once, on the arrival date.
-                        MIN(CONVERT(date, DATEADD(HOUR, -12, CAST(c.fecha AS DATETIME))))       AS fecha_cita,
+                        MIN(CONVERT(date, c.fecha))                           AS fecha_cita,
                         c.contrato,
                         LTRIM(RTRIM(COALESCE(se.nombre, c.empresa, 'Sin entidad'))) AS NombreEntidad,
                         LTRIM(RTRIM(COALESCE(sa.nombre, 'Sin servicio')))     AS NombreServicio,
                         SUM(COALESCE(c.copago, 0))                           AS copago,
-                        SUM(COALESCE(c.pagado, 0))                           AS pagado
+                        SUM(COALESCE(c.pagado, 0))                           AS pagado,
+                        MAX(COALESCE(vc_i.valor, vip_i.valor, 0))            AS valor_total
                     FROM citas c
-                    LEFT JOIN sis_empre  se ON se.codigo = c.empresa
-                    LEFT JOIN sis_asunto sa ON sa.id     = c.asunto
-                    WHERE CONVERT(date, DATEADD(HOUR, -12, CAST(c.fecha AS DATETIME))) BETWEEN %s AND %s
+                    LEFT JOIN sis_empre  se  ON se.codigo  = c.empresa
+                    LEFT JOIN sis_asunto sa  ON sa.id      = c.asunto
+                    LEFT JOIN (
+                        SELECT IdCita, SUM(ISNULL(Valor, 0)) AS valor
+                        FROM citas_procedimientos_asuntos
+                        GROUP BY IdCita
+                    ) vc_i ON vc_i.IdCita = c.id
+                    LEFT JOIN (
+                        SELECT cp.id_cita,
+                               SUM(COALESCE(spp_e.Precio, spp_b.Precio, 0)) AS valor
+                        FROM citas_procedimientos cp
+                        JOIN citas cs ON cs.id = cp.id_cita
+                        LEFT JOIN contratos ct ON ct.codigo = cs.contrato
+                        LEFT JOIN sis_proc_precios spp_e
+                            ON spp_e.Cod_manual  = ct.manual
+                            AND spp_e.Codigo_proc = cp.id_procedimiento
+                            AND spp_e.Tipo_proc   = '256'
+                        LEFT JOIN sis_proc_precios spp_b
+                            ON spp_b.Cod_manual  = ct.manual
+                            AND spp_b.Codigo_proc = LEFT(cp.id_procedimiento,
+                                                    CHARINDEX('-', cp.id_procedimiento + '-') - 1)
+                            AND spp_b.Tipo_proc   = '256'
+                        WHERE CONVERT(date, cs.fecha)
+                              BETWEEN DATEADD(day, -1, %s) AND DATEADD(day, 1, %s)
+                          AND cs.estado != 'CA'
+                        GROUP BY cp.id_cita
+                    ) vip_i ON vip_i.id_cita = c.id
+                    WHERE CONVERT(date, c.fecha)
+                          BETWEEN DATEADD(day, -1, %s) AND DATEADD(day, 1, %s)
                       AND c.estado != 'CA'
                     GROUP BY
                         c.autoid,
@@ -205,33 +232,10 @@ class DashboardAgendadasView(APIView):
                         LTRIM(RTRIM(COALESCE(se.nombre, c.empresa, 'Sin entidad'))),
                         LTRIM(RTRIM(COALESCE(sa.nombre, 'Sin servicio')))
                 ) cb
-                LEFT JOIN (
-                    SELECT IdCita AS id_cita, SUM(ISNULL(Valor, 0)) AS valor
-                    FROM citas_procedimientos_asuntos
-                    GROUP BY IdCita
-                ) vc ON vc.id_cita = cb.id_cita
-                LEFT JOIN (
-                    SELECT cp.id_cita,
-                           SUM(COALESCE(spp_exact.Precio, spp_base.Precio, 0)) AS valor
-                    FROM citas_procedimientos cp
-                    JOIN citas cs ON cs.id = cp.id_cita
-                    LEFT JOIN contratos ct ON ct.codigo = cs.contrato
-                    LEFT JOIN sis_proc_precios spp_exact
-                        ON  spp_exact.Cod_manual   = ct.manual
-                        AND spp_exact.Codigo_proc  = cp.id_procedimiento
-                        AND spp_exact.Tipo_proc    = '256'
-                    LEFT JOIN sis_proc_precios spp_base
-                        ON  spp_base.Cod_manual   = ct.manual
-                        AND spp_base.Codigo_proc  = LEFT(cp.id_procedimiento,
-                                                        CHARINDEX('-', cp.id_procedimiento + '-') - 1)
-                        AND spp_base.Tipo_proc    = '256'
-                    WHERE CONVERT(date, cs.fecha) BETWEEN %s AND %s
-                      AND cs.estado != 'CA'
-                    GROUP BY cp.id_cita
-                ) vip ON vip.id_cita = cb.id_cita
+                WHERE cb.fecha_cita BETWEEN %s AND %s
                 GROUP BY cb.fecha_cita, cb.NombreEntidad, cb.NombreServicio
                 ORDER BY cb.fecha_cita
-            ''', [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin])
+            ''', [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin, fecha_inicio, fecha_fin])
             rows = cursor.fetchall()
 
         def _categoria(nombre):
