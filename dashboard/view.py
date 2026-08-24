@@ -185,7 +185,10 @@ class DashboardAgendadasView(APIView):
                     SELECT
                         c.autoid                                              AS autoid_paciente,
                         MIN(c.id)                                             AS id_cita,
-                        MIN(CONVERT(date, c.fecha))                           AS fecha_cita,
+                        -- Shift back 12 hours so morning-departure slots (e.g. 7 AM Aug 25)
+                        -- fall on the same logical date as the evening-arrival slot (7 PM Aug 24).
+                        -- This makes a poliso study count once, on the arrival date.
+                        MIN(CONVERT(date, DATEADD(HOUR, -12, c.fecha)))       AS fecha_cita,
                         c.contrato,
                         LTRIM(RTRIM(COALESCE(se.nombre, c.empresa, 'Sin entidad'))) AS NombreEntidad,
                         LTRIM(RTRIM(COALESCE(sa.nombre, 'Sin servicio')))     AS NombreServicio,
@@ -194,7 +197,7 @@ class DashboardAgendadasView(APIView):
                     FROM citas c
                     LEFT JOIN sis_empre  se ON se.codigo = c.empresa
                     LEFT JOIN sis_asunto sa ON sa.id     = c.asunto
-                    WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
+                    WHERE CONVERT(date, DATEADD(HOUR, -12, c.fecha)) BETWEEN %s AND %s
                       AND c.estado != 'CA'
                     GROUP BY
                         c.autoid,
