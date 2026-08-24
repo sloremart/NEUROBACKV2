@@ -183,8 +183,8 @@ class DashboardAgendadasView(APIView):
                         c.id    AS id_cita,
                         c.contrato,
                         CONVERT(date, c.fecha)                        AS fecha_cita,
-                        COALESCE(se.nombre, c.empresa, 'Sin entidad') AS NombreEntidad,
-                        COALESCE(sa.nombre, 'Sin servicio')           AS NombreServicio,
+                        LTRIM(RTRIM(COALESCE(se.nombre, c.empresa, 'Sin entidad'))) AS NombreEntidad,
+                        LTRIM(RTRIM(COALESCE(sa.nombre, 'Sin servicio')))           AS NombreServicio,
                         COALESCE(c.copago, 0)                         AS copago,
                         COALESCE(c.pagado, 0)                         AS pagado
                     FROM citas c
