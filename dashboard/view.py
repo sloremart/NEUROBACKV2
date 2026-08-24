@@ -179,20 +179,28 @@ class DashboardAgendadasView(APIView):
                     SUM(cb.copago)                             AS total_copago,
                     SUM(cb.pagado)                             AS total_pagado
                 FROM (
+                    -- One row per (patient, entity, service): use earliest slot as the visit date.
+                    -- This collapses multi-slot studies (e.g., poliso overnight = 2 citas on
+                    -- consecutive dates) into a single visit so they are not double-counted.
                     SELECT
-                        c.id    AS id_cita,
-                        c.autoid AS autoid_paciente,
+                        c.autoid                                              AS autoid_paciente,
+                        MIN(c.id)                                             AS id_cita,
+                        MIN(CONVERT(date, c.fecha))                           AS fecha_cita,
                         c.contrato,
-                        CONVERT(date, c.fecha)                        AS fecha_cita,
                         LTRIM(RTRIM(COALESCE(se.nombre, c.empresa, 'Sin entidad'))) AS NombreEntidad,
-                        LTRIM(RTRIM(COALESCE(sa.nombre, 'Sin servicio')))           AS NombreServicio,
-                        COALESCE(c.copago, 0)                         AS copago,
-                        COALESCE(c.pagado, 0)                         AS pagado
+                        LTRIM(RTRIM(COALESCE(sa.nombre, 'Sin servicio')))     AS NombreServicio,
+                        SUM(COALESCE(c.copago, 0))                           AS copago,
+                        SUM(COALESCE(c.pagado, 0))                           AS pagado
                     FROM citas c
                     LEFT JOIN sis_empre  se ON se.codigo = c.empresa
                     LEFT JOIN sis_asunto sa ON sa.id     = c.asunto
                     WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                       AND c.estado != 'CA'
+                    GROUP BY
+                        c.autoid,
+                        c.contrato,
+                        LTRIM(RTRIM(COALESCE(se.nombre, c.empresa, 'Sin entidad'))),
+                        LTRIM(RTRIM(COALESCE(sa.nombre, 'Sin servicio')))
                 ) cb
                 LEFT JOIN (
                     SELECT IdCita AS id_cita, SUM(ISNULL(Valor, 0)) AS valor
