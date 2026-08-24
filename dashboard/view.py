@@ -179,16 +179,17 @@ class DashboardAgendadasView(APIView):
                     SUM(cb.copago)                     AS total_copago,
                     SUM(cb.pagado)                     AS total_pagado
                 FROM (
-                    -- One row per (patient, entity, service, date): collapses multiple
-                    -- espacios (slots) booked for the same study into a single visit.
-                    -- Date is the exact scheduled date from Zeus — no hour shifts.
+                    -- One row per (patient, date, asunto): collapses all espacios
+                    -- for the same study on the same day into a single visit.
+                    -- Grouping on c.asunto (int) is robust — entity/service name
+                    -- can differ slightly between slots due to NULL empresa or
+                    -- different contrato on the second slot.
                     SELECT
                         c.autoid                                              AS autoid_paciente,
                         MIN(c.id)                                             AS id_cita,
                         CONVERT(date, c.fecha)                                AS fecha_cita,
-                        c.contrato,
-                        LTRIM(RTRIM(COALESCE(se.nombre, c.empresa, 'Sin entidad'))) AS NombreEntidad,
-                        LTRIM(RTRIM(COALESCE(sa.nombre, 'Sin servicio')))     AS NombreServicio,
+                        MIN(LTRIM(RTRIM(COALESCE(se.nombre, c.empresa, 'Sin entidad')))) AS NombreEntidad,
+                        MIN(LTRIM(RTRIM(COALESCE(sa.nombre, 'Sin servicio'))))            AS NombreServicio,
                         SUM(COALESCE(c.copago, 0))                           AS copago,
                         SUM(COALESCE(c.pagado, 0))                           AS pagado,
                         MAX(COALESCE(vc_i.valor, vip_i.valor, 0))            AS valor_total
@@ -223,10 +224,8 @@ class DashboardAgendadasView(APIView):
                       AND c.estado != 'CA'
                     GROUP BY
                         c.autoid,
-                        c.contrato,
                         CONVERT(date, c.fecha),
-                        LTRIM(RTRIM(COALESCE(se.nombre, c.empresa, 'Sin entidad'))),
-                        LTRIM(RTRIM(COALESCE(sa.nombre, 'Sin servicio')))
+                        c.asunto
                 ) cb
                 GROUP BY cb.fecha_cita, cb.NombreEntidad, cb.NombreServicio
                 ORDER BY cb.fecha_cita
