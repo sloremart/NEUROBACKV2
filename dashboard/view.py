@@ -260,10 +260,10 @@ class DashboardAgendadasView(APIView):
                 SELECT
                     COALESCE(sm.nombre, CAST(c.cod_medi AS VARCHAR(20))) AS nombre_medico,
                     COUNT(*) AS total,
-                    SUM(CASE WHEN c.estado NOT IN ('CA', 'I', 'P') AND c.estado != '' THEN 1 ELSE 0 END) AS atendidas,
+                    SUM(CASE WHEN c.estado NOT IN ('P','CA','C','I','IN','NC') AND c.estado != '' AND NOT (c.estado LIKE 'CA%' OR c.estado LIKE 'CANCE%') THEN 1 ELSE 0 END) AS atendidas,
                     SUM(CASE WHEN c.estado = 'P' THEN 1 ELSE 0 END) AS programadas,
-                    SUM(CASE WHEN c.estado = 'CA' THEN 1 ELSE 0 END) AS canceladas,
-                    SUM(CASE WHEN c.estado = 'I' THEN 1 ELSE 0 END) AS incumplidas,
+                    SUM(CASE WHEN c.estado IN ('CA','C','NC') OR c.estado LIKE 'CA%' OR c.estado LIKE 'CANCE%' THEN 1 ELSE 0 END) AS canceladas,
+                    SUM(CASE WHEN c.estado IN ('I','IN','INC') OR c.estado LIKE 'INCUMP%' THEN 1 ELSE 0 END) AS incumplidas,
                     SUM(CASE WHEN c.estado = '' THEN 1 ELSE 0 END) AS sin_estado
                 FROM (
                     SELECT c.autoid, CONVERT(date, c.fecha) AS fecha_cita, c.asunto,
@@ -294,20 +294,25 @@ class DashboardAgendadasView(APIView):
             e = (est or '').strip().upper()
             if not e or e == 'SE':
                 return 'sin_estado'
-            if e == 'CA':
+            # Cualquier variante de cancelación (CA, C, CAN, CANCE, NC…)
+            if e in ('CA', 'C', 'NC') or e.startswith('CA') or e.startswith('CANCE'):
                 return 'canceladas'
-            if e == 'I':
+            # Variantes de incumplida
+            if e in ('I', 'IN', 'INC', 'NO') or e.startswith('INCUMP'):
                 return 'incumplidas'
             if e == 'P':
                 return 'programadas'
-            # A, AT, AS, AN, y cualquier otro que no sea CA/I/P → atendida/confirmada
+            # A, AT, AS, AN, y cualquier otro estado no mapeado → atendida/confirmada
             return 'atendidas'
 
         estado_counts = {'atendidas': 0, 'incumplidas': 0, 'canceladas': 0, 'sin_estado': 0, 'programadas': 0}
+        estados_raw = {}
         for est, cnt in estado_rows:
+            estados_raw[est] = cnt
             grupo = _clasificar_estado(est)
             estado_counts[grupo] += cnt
         total_con_cancelados = sum(estado_counts.values())
+        print(f"[AGENDA] estados_raw={estados_raw} → counts={estado_counts}")
 
         entidad_citas  = defaultdict(int)
         entidad_valor  = defaultdict(float)
