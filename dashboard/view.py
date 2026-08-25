@@ -236,6 +236,48 @@ class DashboardAgendadasView(APIView):
             ''', [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin])
             rows = cursor.fetchall()
 
+        # Query 2: estado breakdown (incluye CA para las tarjetas de estado)
+        with connections['zeussalud'].cursor() as cursor:
+            cursor.execute('''
+                SELECT
+                    COALESCE(NULLIF(LTRIM(RTRIM(c.estado)), ''), 'SE') AS estado,
+                    COUNT(*) AS cnt
+                FROM (
+                    SELECT c.autoid, CONVERT(date, c.fecha) AS fecha_cita, c.asunto,
+                           MIN(LTRIM(RTRIM(COALESCE(c.estado, '')))) AS estado
+                    FROM citas c
+                    WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
+                      AND NOT (c.asunto IN (13, 14) AND c.meridiano = 'am')
+                    GROUP BY c.autoid, CONVERT(date, c.fecha), c.asunto
+                ) c
+                GROUP BY COALESCE(NULLIF(LTRIM(RTRIM(c.estado)), ''), 'SE')
+            ''', [fecha_inicio, fecha_fin])
+            estado_rows = cursor.fetchall()
+
+        # Query 3: citas por médico (incluye todos los estados)
+        with connections['zeussalud'].cursor() as cursor:
+            cursor.execute('''
+                SELECT
+                    COALESCE(sm.nombre, CAST(c.cod_medi AS VARCHAR(20))) AS nombre_medico,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN c.estado NOT IN ('CA', 'I') AND c.estado IS NOT NULL AND c.estado != '' THEN 1 ELSE 0 END) AS atendidas_confirmadas,
+                    SUM(CASE WHEN c.estado = 'I' THEN 1 ELSE 0 END) AS incumplidas,
+                    SUM(CASE WHEN c.estado = 'CA' THEN 1 ELSE 0 END) AS canceladas
+                FROM (
+                    SELECT c.autoid, CONVERT(date, c.fecha) AS fecha_cita, c.asunto,
+                           c.cod_medi,
+                           MIN(LTRIM(RTRIM(COALESCE(c.estado, '')))) AS estado
+                    FROM citas c
+                    WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
+                      AND NOT (c.asunto IN (13, 14) AND c.meridiano = 'am')
+                    GROUP BY c.autoid, CONVERT(date, c.fecha), c.asunto, c.cod_medi
+                ) c
+                LEFT JOIN sis_medi sm ON sm.codigo = c.cod_medi
+                GROUP BY sm.nombre, c.cod_medi
+                ORDER BY total DESC
+            ''', [fecha_inicio, fecha_fin])
+            medico_rows = cursor.fetchall()
+
         def _categoria(nombre):
             n = nombre.upper()
             if 'CONSULTA' in n:
@@ -245,6 +287,25 @@ class DashboardAgendadasView(APIView):
             if any(x in n for x in ['POLISOMNOGRAF', 'ELECTROENCEFALOGR', 'PROCEDIMIENTO', 'SOPORTE', 'SEDACI', 'VIDEOTELEMETR', 'APLICACION']):
                 return 'Procedimientos'
             return 'Otros'
+
+        def _clasificar_estado(est):
+            e = (est or '').strip().upper()
+            if not e or e == 'SE':
+                return 'sin_estado'
+            if e == 'CA':
+                return 'canceladas'
+            if e == 'I':
+                return 'incumplidas'
+            if e == 'P':
+                return 'programadas'
+            # A, AT, AS, AN, y cualquier otro que no sea CA/I/P → atendida/confirmada
+            return 'atendidas'
+
+        estado_counts = {'atendidas': 0, 'incumplidas': 0, 'canceladas': 0, 'sin_estado': 0, 'programadas': 0}
+        for est, cnt in estado_rows:
+            grupo = _clasificar_estado(est)
+            estado_counts[grupo] += cnt
+        total_con_cancelados = sum(estado_counts.values())
 
         entidad_citas  = defaultdict(int)
         entidad_valor  = defaultdict(float)
@@ -268,6 +329,16 @@ class DashboardAgendadasView(APIView):
 
         total = sum(entidad_citas.values())
 
+        medicos_list = []
+        for nombre_medico, total_m, atendidas_m, incumplidas_m, canceladas_m in medico_rows:
+            medicos_list.append({
+                "medico": nombre_medico,
+                "total": total_m,
+                "atendidas": int(atendidas_m or 0),
+                "incumplidas": int(incumplidas_m or 0),
+                "canceladas": int(canceladas_m or 0),
+            })
+
         return Response({
             "entidades": sorted(
                 [{"nombre": k, "citas": v, "valor": round(entidad_valor[k])} for k, v in entidad_citas.items()],
@@ -279,6 +350,15 @@ class DashboardAgendadasView(APIView):
                 key=lambda x: x["nombre"]
             ),
             "timeline": [{"fecha": k, "citas": v} for k, v in sorted(timeline.items())],
+            "medicos": medicos_list,
+            "estados": {
+                "total": total_con_cancelados,
+                "atendidas": estado_counts["atendidas"],
+                "programadas": estado_counts["programadas"],
+                "incumplidas": estado_counts["incumplidas"],
+                "canceladas": estado_counts["canceladas"],
+                "sin_estado": estado_counts["sin_estado"],
+            },
             "usuarios": [],
             "total": total,
             "total_valor_consultas": round(total_valor),
