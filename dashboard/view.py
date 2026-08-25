@@ -222,6 +222,10 @@ class DashboardAgendadasView(APIView):
                     ) vip_i ON vip_i.id_cita = c.id
                     WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                       AND c.estado != 'CA'
+                      -- Exclude poliso/videotelemetria AM slots: those are departure citas
+                      -- from a study that STARTED the previous evening and should not be
+                      -- counted as a new study on the departure date.
+                      AND NOT (c.asunto IN (13, 14) AND c.meridiano = 'am')
                     GROUP BY
                         c.autoid,
                         CONVERT(date, c.fecha),
