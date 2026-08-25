@@ -260,10 +260,10 @@ class DashboardAgendadasView(APIView):
                 SELECT
                     COALESCE(sm.nombre, CAST(c.cod_medi AS VARCHAR(20))) AS nombre_medico,
                     COUNT(*) AS total,
-                    SUM(CASE WHEN c.estado NOT IN ('P','CA','C','I','IN','NC') AND c.estado != '' AND NOT (c.estado LIKE 'CA%' OR c.estado LIKE 'CANCE%') THEN 1 ELSE 0 END) AS atendidas,
+                    SUM(CASE WHEN c.estado NOT IN ('P','CA','C','I','IN','NC') AND c.estado != '' AND NOT (c.estado LIKE 'CA%%' OR c.estado LIKE 'CANCE%%') THEN 1 ELSE 0 END) AS atendidas,
                     SUM(CASE WHEN c.estado = 'P' THEN 1 ELSE 0 END) AS programadas,
-                    SUM(CASE WHEN c.estado IN ('CA','C','NC') OR c.estado LIKE 'CA%' OR c.estado LIKE 'CANCE%' THEN 1 ELSE 0 END) AS canceladas,
-                    SUM(CASE WHEN c.estado IN ('I','IN','INC') OR c.estado LIKE 'INCUMP%' THEN 1 ELSE 0 END) AS incumplidas,
+                    SUM(CASE WHEN c.estado IN ('CA','C','NC') OR c.estado LIKE 'CA%%' OR c.estado LIKE 'CANCE%%' THEN 1 ELSE 0 END) AS canceladas,
+                    SUM(CASE WHEN c.estado IN ('I','IN','INC') OR c.estado LIKE 'INCUMP%%' THEN 1 ELSE 0 END) AS incumplidas,
                     SUM(CASE WHEN c.estado = '' THEN 1 ELSE 0 END) AS sin_estado
                 FROM (
                     SELECT c.autoid, CONVERT(date, c.fecha) AS fecha_cita, c.asunto,
