@@ -254,15 +254,17 @@ class DashboardAgendadasView(APIView):
             ''', [fecha_inicio, fecha_fin])
             estado_rows = cursor.fetchall()
 
-        # Query 3: citas por médico (incluye todos los estados)
+        # Query 3: citas por médico con breakdown correcto de estados
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute('''
                 SELECT
                     COALESCE(sm.nombre, CAST(c.cod_medi AS VARCHAR(20))) AS nombre_medico,
                     COUNT(*) AS total,
-                    SUM(CASE WHEN c.estado NOT IN ('CA', 'I') AND c.estado IS NOT NULL AND c.estado != '' THEN 1 ELSE 0 END) AS atendidas_confirmadas,
+                    SUM(CASE WHEN c.estado NOT IN ('CA', 'I', 'P') AND c.estado != '' THEN 1 ELSE 0 END) AS atendidas,
+                    SUM(CASE WHEN c.estado = 'P' THEN 1 ELSE 0 END) AS programadas,
+                    SUM(CASE WHEN c.estado = 'CA' THEN 1 ELSE 0 END) AS canceladas,
                     SUM(CASE WHEN c.estado = 'I' THEN 1 ELSE 0 END) AS incumplidas,
-                    SUM(CASE WHEN c.estado = 'CA' THEN 1 ELSE 0 END) AS canceladas
+                    SUM(CASE WHEN c.estado = '' THEN 1 ELSE 0 END) AS sin_estado
                 FROM (
                     SELECT c.autoid, CONVERT(date, c.fecha) AS fecha_cita, c.asunto,
                            c.cod_medi,
@@ -330,13 +332,15 @@ class DashboardAgendadasView(APIView):
         total = sum(entidad_citas.values())
 
         medicos_list = []
-        for nombre_medico, total_m, atendidas_m, incumplidas_m, canceladas_m in medico_rows:
+        for nombre_medico, total_m, atendidas_m, programadas_m, canceladas_m, incumplidas_m, sin_estado_m in medico_rows:
             medicos_list.append({
                 "medico": nombre_medico,
-                "total": total_m,
+                "total": int(total_m or 0),
                 "atendidas": int(atendidas_m or 0),
-                "incumplidas": int(incumplidas_m or 0),
+                "programadas": int(programadas_m or 0),
                 "canceladas": int(canceladas_m or 0),
+                "incumplidas": int(incumplidas_m or 0),
+                "sin_estado": int(sin_estado_m or 0),
             })
 
         return Response({
