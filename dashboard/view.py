@@ -1766,6 +1766,7 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             fecha_fin = hoy
 
         with connections['zeussalud'].cursor() as cursor:
+            # Query 1: por fecha + entidad (para timeline y tabla entidades)
             cursor.execute('''
                 SELECT
                     CONVERT(date, sm.fecha_ing)                                              AS fecha,
@@ -1787,6 +1788,44 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             ''', [fecha_inicio, fecha_fin])
             rows = cursor.fetchall()
 
+            # Query 2: por servicio (ufuncional)
+            cursor.execute('''
+                SELECT
+                    sm.ufuncional,
+                    COUNT(sm.autoid)                                                         AS admisiones,
+                    SUM(CASE WHEN sm.contabilizado = 1 THEN 1 ELSE 0 END)                   AS facturadas,
+                    SUM(CASE WHEN ISNULL(sm.contabilizado, 0) != 1 THEN 1 ELSE 0 END)      AS pendientes,
+                    SUM(CASE WHEN sm.contabilizado = 1
+                             THEN COALESCE(sm.vlr_factura, 0) ELSE 0 END)                  AS valor
+                FROM sis_maes sm
+                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
+                  AND sm.Prefijo != \'MGL\'
+                  AND sm.contrato NOT IN (5, 6)
+                GROUP BY sm.ufuncional
+                ORDER BY admisiones DESC
+            ''', [fecha_inicio, fecha_fin])
+            rows_servicio = cursor.fetchall()
+
+            # Query 3: producción de cuentas médicas — quién crea facturas y cuántas por día
+            # FechaDV = fecha en que el usuario generó el documento de venta (factura)
+            cursor.execute('''
+                SELECT
+                    CONVERT(date, sm.FechaDV)              AS fecha_factura,
+                    LTRIM(RTRIM(COALESCE(u.nombre, 'Sin usuario'))) AS usuario,
+                    COUNT(sm.autoid)                        AS facturas,
+                    SUM(COALESCE(sm.vlr_factura, 0))        AS valor
+                FROM sis_maes sm
+                LEFT JOIN usuario u ON u.id = sm.UsuarioDV
+                WHERE CONVERT(date, sm.FechaDV) BETWEEN %s AND %s
+                  AND sm.contabilizado = 1
+                  AND sm.Prefijo != \'MGL\'
+                  AND sm.contrato NOT IN (5, 6)
+                  AND sm.UsuarioDV IS NOT NULL
+                GROUP BY CONVERT(date, sm.FechaDV), LTRIM(RTRIM(COALESCE(u.nombre, \'Sin usuario\')))
+                ORDER BY fecha_factura, facturas DESC
+            ''', [fecha_inicio, fecha_fin])
+            rows_usuarios = cursor.fetchall()
+
         timeline  = defaultdict(lambda: {'admisiones': 0, 'facturadas': 0, 'pendientes': 0, 'valor': 0.0})
         entidades = defaultdict(lambda: {'admisiones': 0, 'facturadas': 0, 'pendientes': 0, 'valor': 0.0})
 
@@ -1801,6 +1840,46 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             entidades[entidad]['facturadas']  += facturadas
             entidades[entidad]['pendientes']  += pendientes
             entidades[entidad]['valor']       += v
+
+        # Por servicio: mapear ufuncional → nombre
+        servicios = []
+        for uf, adm, fac, pend, val in rows_servicio:
+            nombre_uf = _UFUNCIONAL_NOMBRES.get(uf, f'Servicio {uf}') if uf else 'Sin servicio'
+            servicios.append({
+                'servicio':    nombre_uf,
+                'admisiones':  adm,
+                'facturadas':  fac,
+                'pendientes':  pend,
+                'valor':       round(float(val or 0)),
+                'tasa':        round(fac / max(adm, 1) * 100, 1),
+            })
+
+        # Producción usuarios: agregar por usuario + fecha
+        prod_usuarios = defaultdict(lambda: {'facturas': 0, 'valor': 0.0, 'dias': set()})
+        prod_timeline_usuario = []
+        for fecha_fac, usuario, facturas, valor in rows_usuarios:
+            fstr = fecha_fac.strftime('%Y-%m-%d') if hasattr(fecha_fac, 'strftime') else str(fecha_fac)[:10]
+            prod_usuarios[usuario]['facturas'] += facturas
+            prod_usuarios[usuario]['valor']    += float(valor or 0)
+            prod_usuarios[usuario]['dias'].add(fstr)
+            prod_timeline_usuario.append({
+                'fecha': fstr, 'usuario': usuario,
+                'facturas': facturas, 'valor': round(float(valor or 0)),
+            })
+
+        usuarios_resumen = sorted(
+            [
+                {
+                    'usuario':        u,
+                    'total_facturas': v['facturas'],
+                    'total_valor':    round(v['valor']),
+                    'dias_activos':   len(v['dias']),
+                    'promedio_dia':   round(v['facturas'] / max(len(v['dias']), 1), 1),
+                }
+                for u, v in prod_usuarios.items()
+            ],
+            key=lambda x: -x['total_facturas']
+        )
 
         total_adm  = sum(v['admisiones'] for v in entidades.values())
         total_fac  = sum(v['facturadas'] for v in entidades.values())
@@ -1837,6 +1916,9 @@ class DashboardAdmisionesVsFacturacionView(APIView):
                 ],
                 key=lambda x: -x['admisiones']
             ),
+            'servicios':             servicios,
+            'usuarios_resumen':      usuarios_resumen,
+            'produccion_timeline':   prod_timeline_usuario,
         })
 
 
