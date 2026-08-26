@@ -1740,6 +1740,106 @@ class DashboardFacturacionNuevoView(APIView):
 
 
 
+class DashboardAdmisionesVsFacturacionView(APIView):
+    """
+    Compara admisiones (estudios realizados) contra facturas creadas.
+    Una admisión puede quedar sin facturar el mismo día y facturarse días después.
+    Fuente: sis_maes (ZeusSalud_Neuro)
+      - fecha_ing: fecha en que se realizó el estudio/admisión
+      - contabilizado=1: ya se creó la factura
+      - vlr_factura: valor de la factura (solo válido cuando contabilizado=1)
+    """
+    def get(self, request):
+        hoy = datetime.now().date()
+        fecha_inicio_str = request.GET.get('fecha_inicio')
+        fecha_fin_str    = request.GET.get('fecha_fin')
+
+        try:
+            fecha_inicio = (datetime.strptime(fecha_inicio_str, '%Y-%m-%d').date()
+                            if fecha_inicio_str else hoy.replace(day=1))
+            fecha_fin    = (datetime.strptime(fecha_fin_str, '%Y-%m-%d').date()
+                            if fecha_fin_str else hoy)
+        except ValueError:
+            return Response({"error": "Formato inválido. Use YYYY-MM-DD."}, status=400)
+
+        if fecha_fin > hoy:
+            fecha_fin = hoy
+
+        with connections['zeussalud'].cursor() as cursor:
+            cursor.execute('''
+                SELECT
+                    CONVERT(date, sm.fecha_ing)                                              AS fecha,
+                    LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, 'Sin entidad')))         AS entidad,
+                    COUNT(sm.autoid)                                                          AS total_admisiones,
+                    SUM(CASE WHEN sm.contabilizado = 1 THEN 1 ELSE 0 END)                    AS facturadas,
+                    SUM(CASE WHEN ISNULL(sm.contabilizado, 0) != 1 THEN 1 ELSE 0 END)       AS pendientes,
+                    SUM(CASE WHEN sm.contabilizado = 1
+                             THEN COALESCE(sm.vlr_factura, 0) ELSE 0 END)                   AS valor_facturado
+                FROM sis_maes sm
+                LEFT JOIN sis_empre se ON se.codigo = sm.EPSPaciente
+                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
+                  AND sm.Prefijo != \'MGL\'
+                  AND sm.contrato NOT IN (5, 6)
+                GROUP BY
+                    CONVERT(date, sm.fecha_ing),
+                    LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, \'Sin entidad\')))
+                ORDER BY fecha, total_admisiones DESC
+            ''', [fecha_inicio, fecha_fin])
+            rows = cursor.fetchall()
+
+        timeline  = defaultdict(lambda: {'admisiones': 0, 'facturadas': 0, 'pendientes': 0, 'valor': 0.0})
+        entidades = defaultdict(lambda: {'admisiones': 0, 'facturadas': 0, 'pendientes': 0, 'valor': 0.0})
+
+        for fecha, entidad, total, facturadas, pendientes, valor in rows:
+            fstr = fecha.strftime('%Y-%m-%d') if hasattr(fecha, 'strftime') else str(fecha)[:10]
+            v    = float(valor or 0)
+            timeline[fstr]['admisiones']  += total
+            timeline[fstr]['facturadas']  += facturadas
+            timeline[fstr]['pendientes']  += pendientes
+            timeline[fstr]['valor']       += v
+            entidades[entidad]['admisiones']  += total
+            entidades[entidad]['facturadas']  += facturadas
+            entidades[entidad]['pendientes']  += pendientes
+            entidades[entidad]['valor']       += v
+
+        total_adm  = sum(v['admisiones'] for v in entidades.values())
+        total_fac  = sum(v['facturadas'] for v in entidades.values())
+        total_pend = sum(v['pendientes'] for v in entidades.values())
+        total_val  = sum(v['valor'] for v in entidades.values())
+
+        return Response({
+            'total_admisiones':     total_adm,
+            'total_facturadas':     total_fac,
+            'total_pendientes':     total_pend,
+            'total_valor':          round(total_val),
+            'tasa_facturacion':     round(total_fac / max(total_adm, 1) * 100, 1),
+            'timeline': [
+                {
+                    'fecha':      k,
+                    'admisiones': v['admisiones'],
+                    'facturadas': v['facturadas'],
+                    'pendientes': v['pendientes'],
+                    'valor':      round(v['valor']),
+                }
+                for k, v in sorted(timeline.items())
+            ],
+            'entidades': sorted(
+                [
+                    {
+                        'nombre':      k,
+                        'admisiones':  v['admisiones'],
+                        'facturadas':  v['facturadas'],
+                        'pendientes':  v['pendientes'],
+                        'valor':       round(v['valor']),
+                        'tasa':        round(v['facturadas'] / max(v['admisiones'], 1) * 100, 1),
+                    }
+                    for k, v in entidades.items()
+                ],
+                key=lambda x: -x['admisiones']
+            ),
+        })
+
+
 class MedicosView(APIView):
     def get(self, request):
         """
