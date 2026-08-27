@@ -1621,18 +1621,20 @@ class DashboardFacturacionNuevoView(APIView):
         total_admisiones_regular = sum(e['admisiones'] for e in entidades_list)
 
         # ── MRC (contratos 5 y 6) ─────────────────────────────────────────────
+        # El MRC NO filtra por contabilizado: la factura se crea UNA VEZ al final del mes.
+        # Durante el mes se cuentan todos los estudios realizados para calcular
+        # el valor ESTIMADO que se facturará según la lógica de riesgo compartido.
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute('''
                 SELECT
                     sd.cups,
                     LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups))) AS nombre_servicio,
                     SUM(sd.cantidad)                             AS cantidad,
-                    SUM(sd.cantidad * sd.vlr_servicio)           AS valor
+                    SUM(sd.cantidad * sd.vlr_servicio)           AS valor_referencia
                 FROM sis_maes sm
                 JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
                 LEFT JOIN sis_proc sp ON sp.cups = sd.cups
                 WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
-                  AND sm.contabilizado = 1
                   AND sm.contrato IN (5, 6)
                   AND sm.Prefijo != 'MGL'
                 GROUP BY sd.cups, LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups)))
@@ -1653,54 +1655,52 @@ class DashboardFacturacionNuevoView(APIView):
 
         for nombre_grupo, config in GRUPOS_MRC.items():
             qty = 0.0
-            val = 0.0
-            cups_grupo = []           # CUPS con facturación en el período
-            cups_sin_factura = []     # CUPS del grupo que aún no aparecen facturados
+            val_ref = 0.0
+            cups_grupo = []
 
             for cups in config['cups']:
                 if cups in cups_data:
                     d = cups_data[cups]
                     qty += d['cantidad']
-                    val += d['valor']
+                    val_ref += d['valor']
                     cups_grupo.append(d)
                     cups_en_grupo.add(cups)
-                else:
-                    # CUPS del grupo sin ninguna factura en el período
-                    cups_sin_factura.append({'cups': cups, 'nombre': cups, 'cantidad': 0, 'valor': 0.0})
 
+            # Semáforo y valor estimado MRC
             if qty == 0:
                 estado = 'sin_inicio'
-                valor_calc = 0.0
+                valor_estimado = 0.0
             elif qty < config['min']:
+                # Por debajo del mínimo: paga por unidad a tarifa plena
                 estado = 'bajo'
-                valor_calc = config['tarifa'] * qty
+                valor_estimado = config['tarifa'] * qty
             elif qty <= config['max']:
+                # En rango: paga el valor_mes fijo (independiente de la cantidad exacta)
                 estado = 'en_rango'
-                valor_calc = config['valor_mes']
+                valor_estimado = config['valor_mes']
             else:
+                # Por encima del máximo: valor_mes + exceso a tarifa reducida (50%)
                 exceso = qty - config['max']
                 estado = 'sobre'
-                valor_calc = config['valor_mes'] + (exceso * config['tarifa'] / 2)
+                valor_estimado = config['valor_mes'] + (exceso * config['tarifa'] / 2)
 
-            # Cuánto falta para llegar al mínimo y al máximo
             faltan_minimo = max(0, config['min'] - round(qty))
             faltan_maximo = max(0, config['max'] - round(qty))
 
             grupos_resultado.append({
-                'grupo': nombre_grupo,
-                'cantidad': round(qty),
-                'valor': round(val),
-                'valor_calculado': round(valor_calc),
-                'min': config['min'],
-                'ref': config['ref'],
-                'max': config['max'],
-                'valor_mes': config['valor_mes'],
-                'tarifa': config['tarifa'],
-                'estado': estado,
-                'faltan_minimo': faltan_minimo,
-                'faltan_maximo': faltan_maximo,
-                'cups': sorted(cups_grupo, key=lambda x: -x['cantidad']),
-                'cups_sin_factura': cups_sin_factura,
+                'grupo':           nombre_grupo,
+                'cantidad':        round(qty),
+                'valor':           round(val_ref),       # valor de referencia por CUPS (no es el facturado)
+                'valor_calculado': round(valor_estimado), # valor MRC estimado a facturar
+                'min':             config['min'],
+                'ref':             config['ref'],
+                'max':             config['max'],
+                'valor_mes':       config['valor_mes'],
+                'tarifa':          config['tarifa'],
+                'estado':          estado,
+                'faltan_minimo':   faltan_minimo,
+                'faltan_maximo':   faltan_maximo,
+                'cups':            sorted(cups_grupo, key=lambda x: -x['cantidad']),
             })
 
         ecografias = [d for c, d in cups_data.items()
