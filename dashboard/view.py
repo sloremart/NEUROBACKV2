@@ -1654,7 +1654,9 @@ class DashboardFacturacionNuevoView(APIView):
         for nombre_grupo, config in GRUPOS_MRC.items():
             qty = 0.0
             val = 0.0
-            cups_grupo = []
+            cups_grupo = []           # CUPS con facturación en el período
+            cups_sin_factura = []     # CUPS del grupo que aún no aparecen facturados
+
             for cups in config['cups']:
                 if cups in cups_data:
                     d = cups_data[cups]
@@ -1662,10 +1664,14 @@ class DashboardFacturacionNuevoView(APIView):
                     val += d['valor']
                     cups_grupo.append(d)
                     cups_en_grupo.add(cups)
-            if qty == 0:
-                continue
+                else:
+                    # CUPS del grupo sin ninguna factura en el período
+                    cups_sin_factura.append({'cups': cups, 'nombre': cups, 'cantidad': 0, 'valor': 0.0})
 
-            if qty < config['min']:
+            if qty == 0:
+                estado = 'sin_inicio'
+                valor_calc = 0.0
+            elif qty < config['min']:
                 estado = 'bajo'
                 valor_calc = config['tarifa'] * qty
             elif qty <= config['max']:
@@ -1675,6 +1681,10 @@ class DashboardFacturacionNuevoView(APIView):
                 exceso = qty - config['max']
                 estado = 'sobre'
                 valor_calc = config['valor_mes'] + (exceso * config['tarifa'] / 2)
+
+            # Cuánto falta para llegar al mínimo y al máximo
+            faltan_minimo = max(0, config['min'] - round(qty))
+            faltan_maximo = max(0, config['max'] - round(qty))
 
             grupos_resultado.append({
                 'grupo': nombre_grupo,
@@ -1687,7 +1697,10 @@ class DashboardFacturacionNuevoView(APIView):
                 'valor_mes': config['valor_mes'],
                 'tarifa': config['tarifa'],
                 'estado': estado,
+                'faltan_minimo': faltan_minimo,
+                'faltan_maximo': faltan_maximo,
                 'cups': sorted(cups_grupo, key=lambda x: -x['cantidad']),
+                'cups_sin_factura': cups_sin_factura,
             })
 
         ecografias = [d for c, d in cups_data.items()
