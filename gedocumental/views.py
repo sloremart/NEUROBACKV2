@@ -1443,8 +1443,8 @@ def radicar_salud_total_view(request, numero_admision, idusuario):
 
         zip_path = os.path.join(carpeta_nombre_archivo, f"901119103_FES{factura_numero}.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
-            zipf.write(json_temp, arcname=f"901119103_FES{factura_numero}_CUV.json")
-            zipf.write(txt_temp, arcname=f"901119103_FES{factura_numero}_RIPS.json")
+            zipf.write(json_temp, arcname=f"901119103_FES{factura_numero}_RIPS.json")
+            zipf.write(txt_temp, arcname=f"901119103_FES{factura_numero}_CUV.json")
 
         archivos_a_verificar.update(Radicado=True)
 

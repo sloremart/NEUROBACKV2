@@ -1520,6 +1520,12 @@ class DashboardRiesgoCompartidoView(APIView):
 
 # ── Grupos MRC para contratos 5 y 6 (SANITAS MRC SUBSIDIADO / CONTRIBUTIVO) ──────────────
 GRUPOS_MRC = {
+    "CONSULTA DE NEUROLOGÍA": {
+        "cups": {"890274", "890374"},
+        "tarifa": 53560,
+        "min": 325, "ref": 361, "max": 397,
+        "valor_mes": 19335160,
+    },
     "ELECTROENCEFALOGRAMAS": {
         "cups": {"891402", "891901", "891402-1", "891402PED", "891901-1",
                  "891901PED", "891401", "891401PED"},
@@ -1555,13 +1561,6 @@ GRUPOS_MRC = {
         "valor_mes": 35070488,
     },
 }
-
-CUPS_ECOGRAFIA_DOPPLER = {
-    "882298", "882317", "882308", "882318", "882112", "882203",
-    "881511", "881362", "882222", "882307", "882309", "882316",
-    "882132", "882296", "882282", "881360",
-}
-
 
 class DashboardFacturacionNuevoView(APIView):
     def get(self, request):
@@ -1622,8 +1621,9 @@ class DashboardFacturacionNuevoView(APIView):
 
         # ── MRC (contratos 5 y 6) ─────────────────────────────────────────────
         # El MRC NO filtra por contabilizado: la factura se crea UNA VEZ al final del mes.
-        # Durante el mes se cuentan todos los estudios realizados para calcular
-        # el valor ESTIMADO que se facturará según la lógica de riesgo compartido.
+        # La fecha relevante es sd.fecha_servicio (cuando se realizó el procedimiento),
+        # NO sm.fecha_ing (cuando se creó la admisión, que puede ser semanas antes).
+        # Prefijo puede ser NULL para MRC → usar ISNULL para no excluirlos.
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute('''
                 SELECT
@@ -1634,9 +1634,8 @@ class DashboardFacturacionNuevoView(APIView):
                 FROM sis_maes sm
                 JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
                 LEFT JOIN sis_proc sp ON sp.cups = sd.cups
-                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
+                WHERE CONVERT(date, sd.fecha_servicio) BETWEEN %s AND %s
                   AND sm.contrato IN (5, 6)
-                  AND sm.Prefijo != 'MGL'
                 GROUP BY sd.cups, LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups)))
                 ORDER BY cantidad DESC
             ''', [fecha_inicio, fecha_fin])
@@ -1703,33 +1702,6 @@ class DashboardFacturacionNuevoView(APIView):
                 'cups':            sorted(cups_grupo, key=lambda x: -x['cantidad']),
             })
 
-        ecografias = [d for c, d in cups_data.items()
-                      if c not in cups_en_grupo and c in CUPS_ECOGRAFIA_DOPPLER]
-        otros_mrc = [d for c, d in cups_data.items()
-                     if c not in cups_en_grupo and c not in CUPS_ECOGRAFIA_DOPPLER]
-
-        if ecografias:
-            grupos_resultado.insert(0, {
-                'grupo': 'ECOGRAFÍAS DOPPLER',
-                'cantidad': round(sum(d['cantidad'] for d in ecografias)),
-                'valor': round(sum(d['valor'] for d in ecografias)),
-                'valor_calculado': None,
-                'min': None, 'ref': None, 'max': None,
-                'valor_mes': None, 'tarifa': None,
-                'estado': 'sin_parametros',
-                'cups': sorted(ecografias, key=lambda x: -x['cantidad']),
-            })
-        if otros_mrc:
-            grupos_resultado.append({
-                'grupo': 'OTROS MRC',
-                'cantidad': round(sum(d['cantidad'] for d in otros_mrc)),
-                'valor': round(sum(d['valor'] for d in otros_mrc)),
-                'valor_calculado': None,
-                'min': None, 'ref': None, 'max': None,
-                'valor_mes': None, 'tarifa': None,
-                'estado': 'sin_parametros',
-                'cups': sorted(otros_mrc, key=lambda x: -x['cantidad']),
-            })
 
         total_mrc = sum((d.get('valor') or 0) for d in grupos_resultado)
 
@@ -1779,20 +1751,18 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             fecha_fin = hoy
 
         with connections['zeussalud'].cursor() as cursor:
-            # Query 1: por fecha + entidad (para timeline y tabla entidades)
+            # Query 1: estudios realizados por fecha + entidad (excluye registros FES que son facturas)
+            # contabilizado=1 lo pone Zeus automáticamente — no indica factura de cuentas médicas.
+            # Las facturas reales tienen Prefijo='FES' y se consultan por separado.
             cursor.execute('''
                 SELECT
-                    CONVERT(date, sm.fecha_ing)                                              AS fecha,
-                    LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, 'Sin entidad')))         AS entidad,
-                    COUNT(sm.autoid)                                                          AS total_admisiones,
-                    SUM(CASE WHEN sm.contabilizado = 1 THEN 1 ELSE 0 END)                    AS facturadas,
-                    SUM(CASE WHEN ISNULL(sm.contabilizado, 0) != 1 THEN 1 ELSE 0 END)       AS pendientes,
-                    SUM(CASE WHEN sm.contabilizado = 1
-                             THEN COALESCE(sm.vlr_factura, 0) ELSE 0 END)                   AS valor_facturado
+                    CONVERT(date, sm.fecha_ing)                                          AS fecha,
+                    LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, \'Sin entidad\'))) AS entidad,
+                    COUNT(sm.autoid)                                                     AS total_admisiones
                 FROM sis_maes sm
                 LEFT JOIN sis_empre se ON se.codigo = sm.EPSPaciente
                 WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
-                  AND sm.Prefijo != \'MGL\'
+                  AND ISNULL(sm.Prefijo, \'\') NOT IN (\'FES\', \'MGL\')
                   AND sm.contrato NOT IN (5, 6)
                 GROUP BY
                     CONVERT(date, sm.fecha_ing),
@@ -1801,40 +1771,65 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             ''', [fecha_inicio, fecha_fin])
             rows = cursor.fetchall()
 
-            # Query 2: por servicio (ufuncional)
+            # Query 1b: facturas FES emitidas en el período
+            # fecha_usuario = cuando cuentas médicas creó la factura en Zeus
+            # nom_usuario   = nombre ya almacenado en el registro (sin JOIN)
+            cursor.execute('''
+                SELECT
+                    CONVERT(date, sm.fecha_usuario)                                      AS fecha_factura,
+                    LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, \'Sin entidad\'))) AS entidad,
+                    COUNT(sm.autoid)                                                     AS facturas,
+                    SUM(COALESCE(sm.vlr_factura, 0))                                    AS valor
+                FROM sis_maes sm
+                LEFT JOIN sis_empre se ON se.codigo = sm.EPSPaciente
+                WHERE CONVERT(date, sm.fecha_usuario) BETWEEN %s AND %s
+                  AND sm.Prefijo = \'FES\'
+                  AND sm.contrato NOT IN (5, 6)
+                GROUP BY
+                    CONVERT(date, sm.fecha_usuario),
+                    LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, \'Sin entidad\')))
+                ORDER BY fecha_factura, facturas DESC
+            ''', [fecha_inicio, fecha_fin])
+            rows_fes = cursor.fetchall()
+
+            # Query 2: estudios por servicio (ufuncional) — excluye registros FES
             cursor.execute('''
                 SELECT
                     sm.ufuncional,
-                    COUNT(sm.autoid)                                                         AS admisiones,
-                    SUM(CASE WHEN sm.contabilizado = 1 THEN 1 ELSE 0 END)                   AS facturadas,
-                    SUM(CASE WHEN ISNULL(sm.contabilizado, 0) != 1 THEN 1 ELSE 0 END)      AS pendientes,
-                    SUM(CASE WHEN sm.contabilizado = 1
-                             THEN COALESCE(sm.vlr_factura, 0) ELSE 0 END)                  AS valor
+                    COUNT(sm.autoid) AS admisiones
                 FROM sis_maes sm
                 WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
-                  AND sm.Prefijo != \'MGL\'
+                  AND ISNULL(sm.Prefijo, \'\') NOT IN (\'FES\', \'MGL\')
                   AND sm.contrato NOT IN (5, 6)
                 GROUP BY sm.ufuncional
                 ORDER BY admisiones DESC
             ''', [fecha_inicio, fecha_fin])
             rows_servicio = cursor.fetchall()
 
-            # Query 3: producción de cuentas médicas — quién crea facturas y cuántas por día
-            # FechaDV = fecha en que el usuario generó el documento de venta (factura)
+            # Query 3: productividad cuentas médicas
+            # Solo incluye usuarios que históricamente han creado < 100 estudios (non-FES).
+            # Los de admisiones crean cientos de estudios; los de cuentas médicas crean casi ninguno.
             cursor.execute('''
                 SELECT
-                    CONVERT(date, sm.FechaDV)              AS fecha_factura,
-                    LTRIM(RTRIM(COALESCE(u.nombre, 'Sin usuario'))) AS usuario,
-                    COUNT(sm.autoid)                        AS facturas,
-                    SUM(COALESCE(sm.vlr_factura, 0))        AS valor
+                    CONVERT(date, sm.fecha_usuario)            AS fecha_factura,
+                    LTRIM(RTRIM(sm.nom_usuario))               AS usuario,
+                    COUNT(sm.autoid)                           AS facturas,
+                    SUM(COALESCE(sm.vlr_factura, 0))           AS valor
                 FROM sis_maes sm
-                LEFT JOIN usuario u ON u.id = sm.UsuarioDV
-                WHERE CONVERT(date, sm.FechaDV) BETWEEN %s AND %s
-                  AND sm.contabilizado = 1
-                  AND sm.Prefijo != \'MGL\'
+                WHERE CONVERT(date, sm.fecha_usuario) BETWEEN %s AND %s
+                  AND sm.Prefijo = \'FES\'
                   AND sm.contrato NOT IN (5, 6)
-                  AND sm.UsuarioDV IS NOT NULL
-                GROUP BY CONVERT(date, sm.FechaDV), LTRIM(RTRIM(COALESCE(u.nombre, \'Sin usuario\')))
+                  AND sm.nom_usuario IS NOT NULL
+                  AND LTRIM(RTRIM(sm.nom_usuario)) != \'\'
+                  AND sm.cod_usuario IN (
+                      SELECT sm2.cod_usuario
+                      FROM sis_maes sm2
+                      WHERE sm2.contrato NOT IN (5, 6)
+                        AND sm2.cod_usuario IS NOT NULL
+                      GROUP BY sm2.cod_usuario
+                      HAVING SUM(CASE WHEN ISNULL(sm2.Prefijo, \'\') NOT IN (\'FES\', \'MGL\') THEN 1 ELSE 0 END) < 100
+                  )
+                GROUP BY CONVERT(date, sm.fecha_usuario), LTRIM(RTRIM(sm.nom_usuario))
                 ORDER BY fecha_factura, facturas DESC
             ''', [fecha_inicio, fecha_fin])
             rows_usuarios = cursor.fetchall()
@@ -1842,32 +1837,30 @@ class DashboardAdmisionesVsFacturacionView(APIView):
         timeline  = defaultdict(lambda: {'admisiones': 0, 'facturadas': 0, 'pendientes': 0, 'valor': 0.0})
         entidades = defaultdict(lambda: {'admisiones': 0, 'facturadas': 0, 'pendientes': 0, 'valor': 0.0})
 
-        for fecha, entidad, total, facturadas, pendientes, valor in rows:
+        # Estudios realizados (por fecha_ing, sin FES)
+        for fecha, entidad, total in rows:
             fstr = fecha.strftime('%Y-%m-%d') if hasattr(fecha, 'strftime') else str(fecha)[:10]
-            v    = float(valor or 0)
-            timeline[fstr]['admisiones']  += total
-            timeline[fstr]['facturadas']  += facturadas
-            timeline[fstr]['pendientes']  += pendientes
-            timeline[fstr]['valor']       += v
-            entidades[entidad]['admisiones']  += total
-            entidades[entidad]['facturadas']  += facturadas
-            entidades[entidad]['pendientes']  += pendientes
-            entidades[entidad]['valor']       += v
+            timeline[fstr]['admisiones']     += total
+            entidades[entidad]['admisiones'] += total
 
-        # Por servicio: mapear ufuncional → nombre
+        # Facturas FES emitidas (por fecha_usuario)
+        fes_timeline  = defaultdict(lambda: {'facturas': 0, 'valor': 0.0})
+        fes_entidades = defaultdict(lambda: {'facturas': 0, 'valor': 0.0})
+        for fecha_fac, entidad, facturas, valor in rows_fes:
+            fstr = fecha_fac.strftime('%Y-%m-%d') if hasattr(fecha_fac, 'strftime') else str(fecha_fac)[:10]
+            v = float(valor or 0)
+            fes_timeline[fstr]['facturas']      += facturas
+            fes_timeline[fstr]['valor']         += v
+            fes_entidades[entidad]['facturas']  += facturas
+            fes_entidades[entidad]['valor']     += v
+
+        # Por servicio
         servicios = []
-        for uf, adm, fac, pend, val in rows_servicio:
+        for uf, adm in rows_servicio:
             nombre_uf = _UFUNCIONAL_NOMBRES.get(uf, f'Servicio {uf}') if uf else 'Sin servicio'
-            servicios.append({
-                'servicio':    nombre_uf,
-                'admisiones':  adm,
-                'facturadas':  fac,
-                'pendientes':  pend,
-                'valor':       round(float(val or 0)),
-                'tasa':        round(fac / max(adm, 1) * 100, 1),
-            })
+            servicios.append({'servicio': nombre_uf, 'admisiones': adm})
 
-        # Producción usuarios: agregar por usuario + fecha
+        # Productividad: facturas FES por usuario
         prod_usuarios = defaultdict(lambda: {'facturas': 0, 'valor': 0.0, 'dias': set()})
         prod_timeline_usuario = []
         for fecha_fac, usuario, facturas, valor in rows_usuarios:
@@ -1894,44 +1887,38 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             key=lambda x: -x['total_facturas']
         )
 
-        total_adm  = sum(v['admisiones'] for v in entidades.values())
-        total_fac  = sum(v['facturadas'] for v in entidades.values())
-        total_pend = sum(v['pendientes'] for v in entidades.values())
-        total_val  = sum(v['valor'] for v in entidades.values())
+        total_adm      = sum(v['admisiones'] for v in entidades.values())
+        total_facturas = sum(v['facturas'] for v in fes_entidades.values())
+        total_val      = sum(v['valor'] for v in fes_entidades.values())
 
         return Response({
-            'total_admisiones':     total_adm,
-            'total_facturadas':     total_fac,
-            'total_pendientes':     total_pend,
-            'total_valor':          round(total_val),
-            'tasa_facturacion':     round(total_fac / max(total_adm, 1) * 100, 1),
+            'total_admisiones': total_adm,
+            'total_facturadas': total_facturas,
+            'total_valor':      round(total_val),
             'timeline': [
                 {
                     'fecha':      k,
                     'admisiones': v['admisiones'],
-                    'facturadas': v['facturadas'],
-                    'pendientes': v['pendientes'],
-                    'valor':      round(v['valor']),
+                    'facturadas': fes_timeline.get(k, {}).get('facturas', 0),
+                    'valor':      round(fes_timeline.get(k, {}).get('valor', 0.0)),
                 }
                 for k, v in sorted(timeline.items())
             ],
             'entidades': sorted(
                 [
                     {
-                        'nombre':      k,
-                        'admisiones':  v['admisiones'],
-                        'facturadas':  v['facturadas'],
-                        'pendientes':  v['pendientes'],
-                        'valor':       round(v['valor']),
-                        'tasa':        round(v['facturadas'] / max(v['admisiones'], 1) * 100, 1),
+                        'nombre':     k,
+                        'admisiones': v['admisiones'],
+                        'facturadas': fes_entidades.get(k, {}).get('facturas', 0),
+                        'valor':      round(fes_entidades.get(k, {}).get('valor', 0.0)),
                     }
                     for k, v in entidades.items()
                 ],
                 key=lambda x: -x['admisiones']
             ),
-            'servicios':             servicios,
-            'usuarios_resumen':      usuarios_resumen,
-            'produccion_timeline':   prod_timeline_usuario,
+            'servicios':           servicios,
+            'usuarios_resumen':    usuarios_resumen,
+            'produccion_timeline': prod_timeline_usuario,
         })
 
 
