@@ -1794,27 +1794,53 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             ''', [fecha_inicio, fecha_fin])
             rows = cursor.fetchall()
 
-            # Query 1b: facturas FES del período
-            # Filtramos por fecha_ing (fecha del estudio en el registro FES) para que
-            # sea comparable con admisiones (también por fecha_ing). Así ambos representan
-            # el mismo universo de pacientes del período y admisiones >= facturadas siempre.
+            # Query 1b: facturas FES del período — filtradas por fecha_usuario (fecha real de emisión).
+            # Admisiones usa fecha_ing del estudio; FES usa fecha_usuario del acto de facturación.
+            # Cada métrica mide su propio período: no son directamente comparables 1:1 porque
+            # una FES emitida en agosto puede corresponder a un estudio admitido en julio.
             cursor.execute('''
                 SELECT
-                    CONVERT(date, sm.fecha_ing)                                          AS fecha_factura,
+                    CONVERT(date, sm.fecha_usuario)                                      AS fecha_factura,
                     LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, \'Sin entidad\'))) AS entidad,
                     COUNT(sm.autoid)                                                     AS facturas,
                     SUM(COALESCE(sm.vlr_factura, 0))                                    AS valor
                 FROM sis_maes sm
                 LEFT JOIN sis_empre se ON se.codigo = sm.EPSPaciente
-                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
+                WHERE CONVERT(date, sm.fecha_usuario) BETWEEN %s AND %s
                   AND sm.Prefijo = \'FES\'
                   AND sm.contrato NOT IN (5, 6)
                 GROUP BY
-                    CONVERT(date, sm.fecha_ing),
+                    CONVERT(date, sm.fecha_usuario),
                     LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, \'Sin entidad\')))
                 ORDER BY fecha_factura, facturas DESC
             ''', [fecha_inicio, fecha_fin])
             rows_fes = cursor.fetchall()
+
+            # Query 1c: resumen mensual — admisiones por mes de ingreso, FES por mes de emisión
+            cursor.execute('''
+                SELECT
+                    FORMAT(sm.fecha_ing, \'yyyy-MM\')  AS mes,
+                    COUNT(sm.autoid)                   AS admisiones
+                FROM sis_maes sm
+                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
+                  AND ISNULL(sm.Prefijo, \'\') NOT IN (\'FES\', \'MGL\')
+                  AND sm.contrato NOT IN (5, 6)
+                GROUP BY FORMAT(sm.fecha_ing, \'yyyy-MM\')
+            ''', [fecha_inicio, fecha_fin])
+            rows_mes_adm = cursor.fetchall()
+
+            cursor.execute('''
+                SELECT
+                    FORMAT(sm.fecha_usuario, \'yyyy-MM\') AS mes,
+                    COUNT(sm.autoid)                      AS fes,
+                    SUM(COALESCE(sm.vlr_factura, 0))      AS valor
+                FROM sis_maes sm
+                WHERE CONVERT(date, sm.fecha_usuario) BETWEEN %s AND %s
+                  AND sm.Prefijo = \'FES\'
+                  AND sm.contrato NOT IN (5, 6)
+                GROUP BY FORMAT(sm.fecha_usuario, \'yyyy-MM\')
+            ''', [fecha_inicio, fecha_fin])
+            rows_mes_fes = cursor.fetchall()
 
             # Query 2: estudios por servicio (ufuncional) — excluye registros FES
             cursor.execute('''
@@ -1911,6 +1937,20 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             key=lambda x: -x['total_facturas']
         )
 
+        # Resumen mensual: admisiones por mes de ingreso, FES por mes de emisión
+        mes_adm = {mes: int(adm) for mes, adm in rows_mes_adm}
+        mes_fes = {mes: {'fes': int(fes), 'valor': float(val)} for mes, fes, val in rows_mes_fes}
+        meses_todos = sorted(set(list(mes_adm.keys()) + list(mes_fes.keys())))
+        resumen_meses = [
+            {
+                'mes':        m,
+                'admisiones': mes_adm.get(m, 0),
+                'fes':        mes_fes.get(m, {}).get('fes', 0),
+                'valor':      round(mes_fes.get(m, {}).get('valor', 0.0)),
+            }
+            for m in meses_todos
+        ]
+
         total_adm      = sum(v['admisiones'] for v in entidades.values())
         total_facturas = sum(v['facturas'] for v in fes_entidades.values())
         total_val      = sum(v['valor'] for v in fes_entidades.values())
@@ -1943,6 +1983,7 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             'servicios':           servicios,
             'usuarios_resumen':    usuarios_resumen,
             'produccion_timeline': prod_timeline_usuario,
+            'resumen_meses':       resumen_meses,
         })
 
 
