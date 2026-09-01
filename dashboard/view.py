@@ -1620,49 +1620,38 @@ class DashboardFacturacionNuevoView(APIView):
         total_admisiones_regular = sum(e['admisiones'] for e in entidades_list)
 
         # ── MRC (contratos 5 y 6) ─────────────────────────────────────────────
-        # Fuente estricta: solo cups definidos en GRUPOS_MRC.
-        # Se obtienen de citas_procedimientos (procedimientos/imágenes) y
-        # citas_procedimientos_asuntos (consultas médicas), ambas con c.autoid.
-        # Estado: excluye solo canceladas (C) y anuladas (X) — en Zeus los turnos
-        # frecuentemente permanecen en 'P' aunque ya fueron atendidos.
+        # Fuente: sis_maes (admisiones MRC) + sis_deta (detalle de procedimientos).
+        # Zeus convierte el código agendado (ej: '053105-10') al código base en sis_deta
+        # (cups='053105') con sd.cantidad=10. Por eso se usa SUM(sd.cantidad): cuenta
+        # el número real de procedimientos realizados, no solo el número de admisiones.
+        # Los cups en sis_deta ya son el código base — el loop GRUPOS_MRC los matchea
+        # exactamente contra la parametrización sin necesitar quitar sufijos.
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute('''
                 SELECT
-                    cp.id_procedimiento                                           AS cups,
-                    MIN(LTRIM(RTRIM(COALESCE(sp.nombreve, cp.id_procedimiento)))) AS nombre,
-                    COUNT(DISTINCT c.autoid)                                       AS cantidad,
-                    COALESCE(SUM(spp.Precio), 0)                                  AS valor
-                FROM citas c
-                JOIN citas_procedimientos cp ON cp.id_cita = c.autoid
+                    sd.cups                                                        AS cups,
+                    MIN(LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups))))              AS nombre,
+                    SUM(sd.cantidad)                                               AS total_cantidad,
+                    COALESCE(SUM(spp.Precio * sd.cantidad), 0)                    AS valor
+                FROM sis_maes sm
+                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
                 LEFT JOIN (
                     SELECT cups, MIN(nombreve) AS nombreve FROM sis_proc GROUP BY cups
-                ) sp ON sp.cups = cp.id_procedimiento
-                LEFT JOIN contratos ct ON ct.codigo = c.contrato
+                ) sp ON sp.cups = sd.cups
+                LEFT JOIN contratos ct ON ct.codigo = sm.contrato
                 LEFT JOIN sis_proc_precios spp
                     ON spp.Cod_manual  = ct.manual
-                   AND spp.Codigo_proc = cp.id_procedimiento
+                   AND spp.Codigo_proc = sd.cups
                    AND spp.Tipo_proc   = \'256\'
-                WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
-                  AND c.contrato IN (5, 6)
-                  AND ISNULL(c.estado, \'P\') NOT IN (\'C\', \'X\')
-                GROUP BY cp.id_procedimiento
-                UNION ALL
-                SELECT
-                    cpa.CodProcedimiento                        AS cups,
-                    MIN(LTRIM(RTRIM(cpa.NomProcedimiento)))     AS nombre,
-                    COUNT(DISTINCT c.autoid)                    AS cantidad,
-                    SUM(cpa.Valor)                              AS valor
-                FROM citas c
-                JOIN citas_procedimientos_asuntos cpa ON cpa.IdCita = c.autoid
-                WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
-                  AND c.contrato IN (5, 6)
-                  AND ISNULL(c.estado, \'P\') NOT IN (\'C\', \'X\')
-                GROUP BY cpa.CodProcedimiento
-            ''', [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin])
-            rows_mrc = cursor.fetchall()
+                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
+                  AND sm.contrato IN (5, 6)
+                  AND ISNULL(sm.Prefijo, \'\') NOT IN (\'FES\', \'MGL\')
+                GROUP BY sd.cups
+            ''', [fecha_inicio, fecha_fin])
+            rows_deta = cursor.fetchall()
 
         cups_data = {}
-        for cups, nombre, cantidad, valor in rows_mrc:
+        for cups, nombre, cantidad, valor in rows_deta:
             k = str(cups or '').strip()
             if not k:
                 continue
