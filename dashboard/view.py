@@ -1620,45 +1620,40 @@ class DashboardFacturacionNuevoView(APIView):
         total_admisiones_regular = sum(e['admisiones'] for e in entidades_list)
 
         # ── MRC (contratos 5 y 6) ─────────────────────────────────────────────
-        # Fuentes combinadas para máxima cobertura:
-        #   1) sis_maes + sis_deta (COUNT DISTINCT sm.autoid) — evita multiplicación
-        #   2) citas + citas_procedimientos (c.autoid) — captura lo no registrado en sis_deta
-        #   3) citas + citas_procedimientos_asuntos (c.autoid) — consultas médicas
-        # Para cada CUPS, se prefiere sis_deta cuando tiene conteo > 0; en caso contrario
-        # se usa el conteo de citas como respaldo.
-        # NOTA: en producción citas_procedimientos.id_cita = citas.autoid (NO citas.id).
+        # Fuente principal: citas.asunto — no depende de estado (que en Zeus frecuentemente
+        # permanece 'P' incluso después de que el paciente fue atendido).
+        # Excluye sólo canceladas (C) y anuladas (X).
+        # Asuntos relevantes según CLAUDE.md:
+        #   8,9,10,11 → consultas neurología/neuropediatría → CONSULTA DE NEUROLOGÍA
+        #   13        → polisomnografías                   → POLISOMNOGRAFÍAS
+        #   14        → EEG / videotelemetría              → ELECTROENCEFALOGRAMAS
+        #   15        → procedimientos fisiatría           → BLOQUEOS / TOXINA
+        #   16        → procedimientos neurología          → OTROS PROCEDIMIENTOS
         with connections['zeussalud'].cursor() as cursor:
-            # Fuente 1: admisiones liquidadas (sis_deta), COUNT DISTINCT evita multiplicación
+            # Q1: conteo MRC por asunto (todos los no-cancelados en el período)
             cursor.execute('''
-                SELECT
-                    sd.cups                                                        AS cups,
-                    MIN(LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups))))              AS nombre_servicio,
-                    COUNT(DISTINCT sm.autoid)                                      AS cantidad,
-                    COALESCE(SUM(spp.Precio), 0)                                  AS valor_referencia
-                FROM sis_maes sm
-                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
-                LEFT JOIN (
-                    SELECT cups, MIN(nombreve) AS nombreve FROM sis_proc GROUP BY cups
-                ) sp ON sp.cups = sd.cups
-                LEFT JOIN contratos ct ON ct.codigo = sm.contrato
-                LEFT JOIN sis_proc_precios spp
-                    ON spp.Cod_manual   = ct.manual
-                   AND spp.Codigo_proc  = sd.cups
-                   AND spp.Tipo_proc    = \'256\'
-                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
-                  AND sm.contrato IN (5, 6)
-                  AND ISNULL(sm.Prefijo, \'\') NOT IN (\'FES\', \'MGL\')
-                GROUP BY sd.cups
+                SELECT c.asunto, COUNT(*) AS cantidad
+                FROM citas c
+                WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
+                  AND c.contrato IN (5, 6)
+                  AND ISNULL(c.estado, \'P\') NOT IN (\'C\', \'X\')
+                GROUP BY c.asunto
             ''', [fecha_inicio, fecha_fin])
-            rows_deta = cursor.fetchall()
+            asunto_counts = {}
+            for asunto, cnt in cursor.fetchall():
+                if asunto is not None:
+                    asunto_counts[int(asunto)] = int(cnt or 0)
 
-            # Fuente 2: citas con procedimientos agendados (respaldo para lo no registrado en sis_deta)
+            # Q2: cups de citas_procedimientos para procedimientos (asunto 15 y 16)
+            # Permite distinguir BLOQUEOS de TOXINA y detallar OTROS PROCEDIMIENTOS.
+            # Para EEG (14) y POLISOMNO (13) ya tenemos la cuenta exacta por asunto.
+            # citas_procedimientos.id_cita = citas.autoid en producción.
             cursor.execute('''
                 SELECT
                     cp.id_procedimiento                                           AS cups,
-                    MIN(LTRIM(RTRIM(COALESCE(sp.nombreve, cp.id_procedimiento)))) AS nombre_servicio,
-                    COUNT(*)                                                       AS cantidad,
-                    COALESCE(SUM(spp.Precio), 0)                                  AS valor_referencia
+                    MIN(LTRIM(RTRIM(COALESCE(sp.nombreve, cp.id_procedimiento)))) AS nombre,
+                    COUNT(DISTINCT c.autoid)                                       AS cantidad,
+                    COALESCE(SUM(spp.Precio), 0)                                  AS valor
                 FROM citas c
                 JOIN citas_procedimientos cp ON cp.id_cita = c.autoid
                 LEFT JOIN (
@@ -1666,71 +1661,91 @@ class DashboardFacturacionNuevoView(APIView):
                 ) sp ON sp.cups = cp.id_procedimiento
                 LEFT JOIN contratos ct ON ct.codigo = c.contrato
                 LEFT JOIN sis_proc_precios spp
-                    ON spp.Cod_manual   = ct.manual
-                   AND spp.Codigo_proc  = cp.id_procedimiento
-                   AND spp.Tipo_proc    = \'256\'
+                    ON spp.Cod_manual  = ct.manual
+                   AND spp.Codigo_proc = cp.id_procedimiento
+                   AND spp.Tipo_proc   = \'256\'
                 WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                   AND c.contrato IN (5, 6)
-                  AND c.estado = \'A\'
+                  AND ISNULL(c.estado, \'P\') NOT IN (\'C\', \'X\')
+                  AND c.asunto IN (15, 16)
                 GROUP BY cp.id_procedimiento
             ''', [fecha_inicio, fecha_fin])
-            rows_citas_proc = cursor.fetchall()
+            rows_cp = cursor.fetchall()
 
-            # Fuente 3: consultas médicas agendadas
+            # Q3: valor de referencia de consultas (citas_procedimientos_asuntos guarda el precio)
             cursor.execute('''
-                SELECT
-                    cpa.CodProcedimiento                        AS cups,
-                    MIN(LTRIM(RTRIM(cpa.NomProcedimiento)))     AS nombre_servicio,
-                    COUNT(*)                                    AS cantidad,
-                    SUM(cpa.Valor)                              AS valor_referencia
+                SELECT COALESCE(SUM(cpa.Valor), 0)
                 FROM citas c
                 JOIN citas_procedimientos_asuntos cpa ON cpa.IdCita = c.autoid
                 WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                   AND c.contrato IN (5, 6)
-                  AND c.estado = \'A\'
-                GROUP BY cpa.CodProcedimiento
+                  AND ISNULL(c.estado, \'P\') NOT IN (\'C\', \'X\')
+                  AND c.asunto IN (8, 9, 10, 11)
             ''', [fecha_inicio, fecha_fin])
-            rows_citas_asuntos = cursor.fetchall()
+            consulta_valor_ref = float(cursor.fetchone()[0] or 0)
 
-        # Construir cups_data priorizando sis_deta (más confiable cuando existe),
-        # usando citas como respaldo para cups sin registro en sis_deta.
-        cups_deta = {}
-        for cups, nombre, cantidad, valor in rows_deta:
-            k = str(cups or '').strip()
-            if k:
-                cups_deta[k] = {'cups': k, 'nombre': nombre,
+        # ── Construir cups_data ───────────────────────────────────────────────
+        # Grupos con asunto dedicado: consulta, EEG, polisomno.
+        # Estos usan el conteo por asunto como fuente canónica (evita duplicados).
+        # Grupos sin asunto propio: bloqueos, toxina, otros → cups de citas_procedimientos.
+        consulta_total  = sum(asunto_counts.get(a, 0) for a in [8, 9, 10, 11])
+        eeg_total       = asunto_counts.get(14, 0)
+        polisomno_total = asunto_counts.get(13, 0)
+        fisiatria_total = asunto_counts.get(15, 0)   # bloqueos + toxina
+        neuroproc_total = asunto_counts.get(16, 0)   # otros procedimientos neurología
+
+        cups_data = {}
+        if consulta_total > 0:
+            cups_data['890274'] = {'cups': '890274', 'nombre': 'CONSULTA NEUROLOGÍA',
+                                   'cantidad': float(consulta_total), 'valor': consulta_valor_ref}
+        if eeg_total > 0:
+            cups_data['891402'] = {'cups': '891402', 'nombre': 'ELECTROENCEFALOGRAMA',
+                                   'cantidad': float(eeg_total), 'valor': 0.0}
+        if polisomno_total > 0:
+            cups_data['891704'] = {'cups': '891704', 'nombre': 'POLISOMNOGRAFÍA',
+                                   'cantidad': float(polisomno_total), 'valor': 0.0}
+
+        # Cups de procedimientos asunto 15/16: sólo para BLOQUEOS, TOXINA y OTROS
+        # (EEG y POLISOMNO ya están contados; descartamos sus cups para no duplicar)
+        _grupos_asunto = {
+            'CONSULTA DE NEUROLOGÍA': True,
+            'ELECTROENCEFALOGRAMAS': True,
+            'POLISOMNOGRAFÍAS': True,
+        }
+        for cups_code, nombre, cantidad, valor in rows_cp:
+            k = str(cups_code or '').strip()
+            if not k or k in cups_data:
+                continue
+            base = k.rsplit('-', 1)[0] if '-' in k and k.rsplit('-', 1)[1].isdigit() else k
+            # Verificar que este cup no pertenece a un grupo ya contado por asunto
+            pertenece_asunto = False
+            for gname, config in GRUPOS_MRC.items():
+                if _grupos_asunto.get(gname):
+                    if k in config['cups'] or base in config['cups']:
+                        pertenece_asunto = True
+                        break
+            if not pertenece_asunto:
+                cups_data[k] = {'cups': k, 'nombre': nombre,
                                  'cantidad': float(cantidad or 0), 'valor': float(valor or 0)}
 
-        cups_citas = {}
-        for cups, nombre, cantidad, valor in rows_citas_proc:
-            k = str(cups or '').strip()
-            if k and k not in cups_citas:
-                cups_citas[k] = {'cups': k, 'nombre': nombre,
-                                  'cantidad': 0.0, 'valor': 0.0}
-            if k:
-                cups_citas[k]['cantidad'] += float(cantidad or 0)
-                cups_citas[k]['valor']    += float(valor or 0)
+        # Fallback para fisiatría (asunto 15): si ningún cup de BLOQUEOS/TOXINA apareció
+        # en citas_procedimientos, usar el total del asunto bajo el cup primario de BLOQUEOS
+        _bloqueo_cups = GRUPOS_MRC.get('BLOQUEOS', {}).get('cups', set())
+        _toxina_cups  = GRUPOS_MRC.get('APLICACIÓN DE TOXINA \\ SUSTANCIAS', {}).get('cups', set())
+        _fisiatria_via_cp = any(
+            k in cups_data
+            for k in list(_bloqueo_cups) + list(_toxina_cups)
+        )
+        if not _fisiatria_via_cp and fisiatria_total > 0:
+            cups_data['053105'] = {'cups': '053105', 'nombre': 'BLOQUEOS (FISIATRÍA)',
+                                   'cantidad': float(fisiatria_total), 'valor': 0.0}
 
-        cups_asuntos = {}
-        for cups, nombre, cantidad, valor in rows_citas_asuntos:
-            k = str(cups or '').strip()
-            if k and k not in cups_asuntos:
-                cups_asuntos[k] = {'cups': k, 'nombre': nombre,
-                                    'cantidad': 0.0, 'valor': 0.0}
-            if k:
-                cups_asuntos[k]['cantidad'] += float(cantidad or 0)
-                cups_asuntos[k]['valor']    += float(valor or 0)
-
-        # Merge: sis_deta preferido, citas como respaldo para lo no admisionado aún
-        cups_data = {}
-        for k, d in cups_deta.items():
-            cups_data[k] = d.copy()
-        for k, d in cups_citas.items():
-            if k not in cups_data or cups_data[k]['cantidad'] == 0:
-                cups_data[k] = d.copy()
-        for k, d in cups_asuntos.items():
-            if k not in cups_data or cups_data[k]['cantidad'] == 0:
-                cups_data[k] = d.copy()
+        # Fallback para procedimientos neurología (asunto 16): si ningún cup de OTROS apareció
+        _otros_cups = GRUPOS_MRC.get('OTROS PROCEDIMIENTOS', {}).get('cups', set())
+        _neuroproc_via_cp = any(k in cups_data for k in _otros_cups)
+        if not _neuroproc_via_cp and neuroproc_total > 0:
+            cups_data['891515'] = {'cups': '891515', 'nombre': 'OTROS PROCEDIMIENTOS',
+                                   'cantidad': float(neuroproc_total), 'valor': 0.0}
 
         cups_en_grupo = set()
         grupos_resultado = []
@@ -1924,30 +1939,23 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             ''', [fecha_inicio, fecha_fin])
             rows_servicio = cursor.fetchall()
 
-            # Query 3: productividad cuentas médicas
-            # Solo incluye usuarios que históricamente han creado < 100 estudios (non-FES).
-            # Los de admisiones crean cientos de estudios; los de cuentas médicas crean casi ninguno.
+            # Query 3: FES emitidas por usuario (todas, sin filtro de exclusión).
+            # Agrupa NULL/vacío como 'Sin identificar' para mostrar cuántas FES
+            # no tienen usuario registrado (problema de calidad de datos en Zeus).
             cursor.execute('''
                 SELECT
-                    CONVERT(date, sm.fecha_usuario)            AS fecha_factura,
-                    LTRIM(RTRIM(sm.nom_usuario))               AS usuario,
-                    COUNT(sm.autoid)                           AS facturas,
-                    SUM(COALESCE(sm.vlr_factura, 0))           AS valor
+                    CONVERT(date, sm.fecha_usuario)                          AS fecha_factura,
+                    COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_usuario)), \'\'),
+                             \'Sin identificar\')                              AS usuario,
+                    COUNT(sm.autoid)                                          AS facturas,
+                    SUM(COALESCE(sm.vlr_factura, 0))                         AS valor
                 FROM sis_maes sm
                 WHERE CONVERT(date, sm.fecha_usuario) BETWEEN %s AND %s
                   AND sm.Prefijo = \'FES\'
                   AND sm.contrato NOT IN (5, 6)
-                  AND sm.nom_usuario IS NOT NULL
-                  AND LTRIM(RTRIM(sm.nom_usuario)) != \'\'
-                  AND sm.cod_usuario IN (
-                      SELECT sm2.cod_usuario
-                      FROM sis_maes sm2
-                      WHERE sm2.contrato NOT IN (5, 6)
-                        AND sm2.cod_usuario IS NOT NULL
-                      GROUP BY sm2.cod_usuario
-                      HAVING SUM(CASE WHEN ISNULL(sm2.Prefijo, \'\') NOT IN (\'FES\', \'MGL\') THEN 1 ELSE 0 END) < 100
-                  )
-                GROUP BY CONVERT(date, sm.fecha_usuario), LTRIM(RTRIM(sm.nom_usuario))
+                GROUP BY
+                    CONVERT(date, sm.fecha_usuario),
+                    COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_usuario)), \'\'), \'Sin identificar\')
                 ORDER BY fecha_factura, facturas DESC
             ''', [fecha_inicio, fecha_fin])
             rows_usuarios = cursor.fetchall()
