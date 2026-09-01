@@ -1865,23 +1865,27 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             ''', [fecha_inicio, fecha_fin])
             rows_servicio = cursor.fetchall()
 
-            # Query 3: FES emitidas por usuario (todas, sin filtro de exclusión).
-            # Agrupa NULL/vacío como 'Sin identificar' para mostrar cuántas FES
-            # no tienen usuario registrado (problema de calidad de datos en Zeus).
+            # Query 3: FES emitidas por usuario — solo usuarios registrados en el
+            # sistema gedocumental (JOIN INNER a AspNetUsers por cédula).
+            # Excluye usuarios que solo existen en Zeus (admisionistas sin cuenta
+            # en el sistema) y deja solo el personal de cuentas médicas.
             cursor.execute('''
                 SELECT
-                    CONVERT(date, sm.fecha_usuario)                          AS fecha_factura,
-                    COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_usuario)), \'\'),
-                             \'Sin identificar\')                              AS usuario,
-                    COUNT(sm.autoid)                                          AS facturas,
-                    SUM(COALESCE(sm.vlr_factura, 0))                         AS valor
+                    CONVERT(date, sm.fecha_usuario)      AS fecha_factura,
+                    LTRIM(RTRIM(sm.nom_usuario))          AS usuario,
+                    COUNT(sm.autoid)                      AS facturas,
+                    SUM(COALESCE(sm.vlr_factura, 0))     AS valor
                 FROM sis_maes sm
+                JOIN AspNetUsers u
+                    ON u.Cedula = LTRIM(RTRIM(sm.cod_usuario))
                 WHERE CONVERT(date, sm.fecha_usuario) BETWEEN %s AND %s
                   AND sm.Prefijo = \'FES\'
                   AND sm.contrato NOT IN (5, 6)
+                  AND LTRIM(RTRIM(sm.nom_usuario)) <> \'\'
+                  AND sm.nom_usuario IS NOT NULL
                 GROUP BY
                     CONVERT(date, sm.fecha_usuario),
-                    COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_usuario)), \'\'), \'Sin identificar\')
+                    LTRIM(RTRIM(sm.nom_usuario))
                 ORDER BY fecha_factura, facturas DESC
             ''', [fecha_inicio, fecha_fin])
             rows_usuarios = cursor.fetchall()
