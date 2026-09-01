@@ -1620,45 +1620,58 @@ class DashboardFacturacionNuevoView(APIView):
         total_admisiones_regular = sum(e['admisiones'] for e in entidades_list)
 
         # ── MRC (contratos 5 y 6) ─────────────────────────────────────────────
-        # Fuente: sis_maes (admisiones MRC) + sis_deta (detalle de procedimientos).
-        # Zeus convierte el código agendado (ej: '053105-10') al código base en sis_deta
-        # (cups='053105') con sd.cantidad=10. Por eso se usa SUM(sd.cantidad): cuenta
-        # el número real de procedimientos realizados, no solo el número de admisiones.
-        # Los cups en sis_deta ya son el código base — el loop GRUPOS_MRC los matchea
-        # exactamente contra la parametrización sin necesitar quitar sufijos.
+        # Fuente: citas (no sis_deta, que es incompleto para MRC capitation).
+        # - citas_procedimientos: procedimientos/imágenes — cantidad en el sufijo del cup
+        #   (ej: '053105-10' → cup base '053105', cantidad 10)
+        # - citas_procedimientos_asuntos: consultas médicas — cada fila = 1 procedimiento
+        # Se excluyen canceladas (estado C/X). Solo citas no canceladas en el rango.
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute('''
-                SELECT
-                    sd.cups                                                        AS cups,
-                    MIN(LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups))))              AS nombre,
-                    SUM(sd.cantidad)                                               AS total_cantidad,
-                    COALESCE(SUM(spp.Precio * sd.cantidad), 0)                    AS valor
-                FROM sis_maes sm
-                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
-                LEFT JOIN (
-                    SELECT cups, MIN(nombreve) AS nombreve FROM sis_proc GROUP BY cups
-                ) sp ON sp.cups = sd.cups
-                LEFT JOIN contratos ct ON ct.codigo = sm.contrato
-                LEFT JOIN sis_proc_precios spp
-                    ON spp.Cod_manual  = ct.manual
-                   AND spp.Codigo_proc = sd.cups
-                   AND spp.Tipo_proc   = \'256\'
-                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
-                  AND sm.contrato IN (5, 6)
-                  AND ISNULL(sm.Prefijo, \'\') NOT IN (\'FES\', \'MGL\')
-                GROUP BY sd.cups
-            ''', [fecha_inicio, fecha_fin])
-            rows_deta = cursor.fetchall()
+                SELECT cup, SUM(cantidad) AS total
+                FROM (
+                    SELECT
+                        LTRIM(RTRIM(cp.id_procedimiento)) AS cup,
+                        CASE
+                            WHEN CHARINDEX(\'-\', cp.id_procedimiento) > 0
+                                 AND TRY_CONVERT(INT,
+                                     SUBSTRING(cp.id_procedimiento,
+                                               CHARINDEX(\'-\', cp.id_procedimiento) + 1,
+                                               10)) IS NOT NULL
+                            THEN TRY_CONVERT(INT,
+                                     SUBSTRING(cp.id_procedimiento,
+                                               CHARINDEX(\'-\', cp.id_procedimiento) + 1,
+                                               10))
+                            ELSE ISNULL(cp.Cantidad, 1)
+                        END AS cantidad
+                    FROM citas c
+                    JOIN citas_procedimientos cp ON cp.id_cita = c.id
+                    WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
+                      AND c.contrato IN (\'5\', \'6\')
+                      AND ISNULL(c.estado, \'P\') NOT IN (\'C\', \'X\')
+
+                    UNION ALL
+
+                    SELECT
+                        LTRIM(RTRIM(cpa.CodProcedimiento)) AS cup,
+                        1 AS cantidad
+                    FROM citas c
+                    JOIN citas_procedimientos_asuntos cpa ON cpa.IdCita = c.id
+                    WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
+                      AND c.contrato IN (\'5\', \'6\')
+                      AND ISNULL(c.estado, \'P\') NOT IN (\'C\', \'X\')
+                ) combined
+                GROUP BY cup
+            ''', [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin])
+            rows_citas = cursor.fetchall()
 
         cups_data = {}
-        for cups, nombre, cantidad, valor in rows_deta:
-            k = str(cups or '').strip()
+        for cup, cantidad in rows_citas:
+            k = str(cup or '').strip()
             if not k:
                 continue
             if k not in cups_data:
-                cups_data[k] = {'cups': k, 'nombre': nombre, 'cantidad': 0.0, 'valor': 0.0}
+                cups_data[k] = {'cups': k, 'nombre': k, 'cantidad': 0.0, 'valor': 0.0}
             cups_data[k]['cantidad'] += float(cantidad or 0)
-            cups_data[k]['valor']    += float(valor or 0)
 
         cups_en_grupo = set()
         grupos_resultado = []
@@ -1720,7 +1733,7 @@ class DashboardFacturacionNuevoView(APIView):
             })
 
 
-        total_mrc = sum((d.get('valor') or 0) for d in grupos_resultado)
+        total_mrc = sum((d.get('valor_calculado') or 0) for d in grupos_resultado)
 
         return Response({
             'fecha_inicio': str(fecha_inicio),
