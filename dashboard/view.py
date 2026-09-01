@@ -1521,7 +1521,7 @@ class DashboardRiesgoCompartidoView(APIView):
 # ── Grupos MRC para contratos 5 y 6 (SANITAS MRC SUBSIDIADO / CONTRIBUTIVO) ──────────────
 GRUPOS_MRC = {
     "CONSULTA DE NEUROLOGÍA": {
-        "cups": {"890274", "890374"},
+        "cups": {"890274", "890374", "890275", "890375"},
         "tarifa": 53560,
         "min": 325, "ref": 361, "max": 397,
         "valor_mes": 19335160,
@@ -1625,6 +1625,8 @@ class DashboardFacturacionNuevoView(APIView):
         # NO sm.fecha_ing (cuando se creó la admisión, que puede ser semanas antes).
         # Prefijo puede ser NULL para MRC → usar ISNULL para no excluirlos.
         with connections['zeussalud'].cursor() as cursor:
+            # sis_proc puede tener varias filas por cups (nombres duplicados).
+            # Se usa MIN() en subquery para evitar multiplicar cantidades con el JOIN.
             cursor.execute('''
                 SELECT
                     sd.cups,
@@ -1633,7 +1635,11 @@ class DashboardFacturacionNuevoView(APIView):
                     SUM(sd.cantidad * sd.vlr_servicio)           AS valor_referencia
                 FROM sis_maes sm
                 JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
-                LEFT JOIN sis_proc sp ON sp.cups = sd.cups
+                LEFT JOIN (
+                    SELECT cups, MIN(nombreve) AS nombreve
+                    FROM sis_proc
+                    GROUP BY cups
+                ) sp ON sp.cups = sd.cups
                 WHERE CONVERT(date, sd.fecha_servicio) BETWEEN %s AND %s
                   AND sm.contrato IN (5, 6)
                 GROUP BY sd.cups, LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups)))
@@ -1641,8 +1647,33 @@ class DashboardFacturacionNuevoView(APIView):
             ''', [fecha_inicio, fecha_fin])
             rows_mrc = cursor.fetchall()
 
+            # Las consultas médicas NO van a sis_deta sino a citas_procedimientos_asuntos.
+            # Se obtienen por separado filtrando por c.fecha (fecha de la cita = fecha del servicio).
+            cursor.execute('''
+                SELECT
+                    cpa.CodProcedimiento                        AS cups,
+                    MIN(LTRIM(RTRIM(cpa.NomProcedimiento)))     AS nombre_servicio,
+                    COUNT(*)                                    AS cantidad,
+                    SUM(cpa.Valor)                              AS valor_referencia
+                FROM citas_procedimientos_asuntos cpa
+                JOIN citas c ON c.autoid = cpa.IdCita
+                WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
+                  AND c.contrato IN (5, 6)
+                GROUP BY cpa.CodProcedimiento
+                ORDER BY cantidad DESC
+            ''', [fecha_inicio, fecha_fin])
+            rows_mrc_citas = cursor.fetchall()
+
         cups_data = {}
         for cups, nombre, cantidad, valor in rows_mrc:
+            c = str(cups or '').strip()
+            if c not in cups_data:
+                cups_data[c] = {'cups': c, 'nombre': nombre, 'cantidad': 0.0, 'valor': 0.0}
+            cups_data[c]['cantidad'] += float(cantidad or 0)
+            cups_data[c]['valor'] += float(valor or 0)
+
+        # Merge consultas desde citas_procedimientos_asuntos
+        for cups, nombre, cantidad, valor in rows_mrc_citas:
             c = str(cups or '').strip()
             if c not in cups_data:
                 cups_data[c] = {'cups': c, 'nombre': nombre, 'cantidad': 0.0, 'valor': 0.0}
@@ -1771,22 +1802,23 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             ''', [fecha_inicio, fecha_fin])
             rows = cursor.fetchall()
 
-            # Query 1b: facturas FES emitidas en el período
-            # fecha_usuario = cuando cuentas médicas creó la factura en Zeus
-            # nom_usuario   = nombre ya almacenado en el registro (sin JOIN)
+            # Query 1b: facturas FES del período
+            # Filtramos por fecha_ing (fecha del estudio en el registro FES) para que
+            # sea comparable con admisiones (también por fecha_ing). Así ambos representan
+            # el mismo universo de pacientes del período y admisiones >= facturadas siempre.
             cursor.execute('''
                 SELECT
-                    CONVERT(date, sm.fecha_usuario)                                      AS fecha_factura,
+                    CONVERT(date, sm.fecha_ing)                                          AS fecha_factura,
                     LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, \'Sin entidad\'))) AS entidad,
                     COUNT(sm.autoid)                                                     AS facturas,
                     SUM(COALESCE(sm.vlr_factura, 0))                                    AS valor
                 FROM sis_maes sm
                 LEFT JOIN sis_empre se ON se.codigo = sm.EPSPaciente
-                WHERE CONVERT(date, sm.fecha_usuario) BETWEEN %s AND %s
+                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
                   AND sm.Prefijo = \'FES\'
                   AND sm.contrato NOT IN (5, 6)
                 GROUP BY
-                    CONVERT(date, sm.fecha_usuario),
+                    CONVERT(date, sm.fecha_ing),
                     LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, \'Sin entidad\')))
                 ORDER BY fecha_factura, facturas DESC
             ''', [fecha_inicio, fecha_fin])
