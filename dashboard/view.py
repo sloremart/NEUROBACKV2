@@ -1620,49 +1620,45 @@ class DashboardFacturacionNuevoView(APIView):
         total_admisiones_regular = sum(e['admisiones'] for e in entidades_list)
 
         # ── MRC (contratos 5 y 6) ─────────────────────────────────────────────
-        # El MRC NO filtra por contabilizado: la factura se crea UNA VEZ al final del mes.
-        # La fecha relevante es sd.fecha_servicio (cuando se realizó el procedimiento),
-        # NO sm.fecha_ing (cuando se creó la admisión, que puede ser semanas antes).
-        # Prefijo puede ser NULL para MRC → usar ISNULL para no excluirlos.
+        # Usa la misma fuente que el dashboard de agendamiento (citas):
+        # - citas_procedimientos   → procedimientos e imágenes (EEG, polisomno, bloqueos, etc.)
+        # - citas_procedimientos_asuntos → consultas médicas (890274, 890374, etc.)
+        # Filtro: c.estado = 'A' (atendidas) y c.fecha en el rango.
         with connections['zeussalud'].cursor() as cursor:
-            # sis_proc puede tener varias filas por cups (nombres duplicados).
-            # Se usa MIN() en subquery para evitar multiplicar cantidades con el JOIN.
             cursor.execute('''
                 SELECT
-                    sd.cups,
-                    LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups))) AS nombre_servicio,
-                    SUM(sd.cantidad)                             AS cantidad,
-                    SUM(sd.cantidad * sd.vlr_servicio)           AS valor_referencia
-                FROM sis_maes sm
-                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                    cp.id_procedimiento                                          AS cups,
+                    MIN(LTRIM(RTRIM(COALESCE(sp.nombreve, cp.id_procedimiento)))) AS nombre_servicio,
+                    COUNT(*)                                                      AS cantidad,
+                    COALESCE(SUM(spp.Precio), 0)                                 AS valor_referencia
+                FROM citas c
+                JOIN citas_procedimientos cp ON cp.id_cita = c.autoid
                 LEFT JOIN (
-                    SELECT cups, MIN(nombreve) AS nombreve
-                    FROM sis_proc
-                    GROUP BY cups
-                ) sp ON sp.cups = sd.cups
-                WHERE CONVERT(date, sd.fecha_servicio) BETWEEN %s AND %s
-                  AND sm.contrato IN (5, 6)
-                GROUP BY sd.cups, LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups)))
-                ORDER BY cantidad DESC
-            ''', [fecha_inicio, fecha_fin])
-            rows_mrc = cursor.fetchall()
-
-            # Las consultas médicas NO van a sis_deta sino a citas_procedimientos_asuntos.
-            # Se obtienen por separado filtrando por c.fecha (fecha de la cita = fecha del servicio).
-            cursor.execute('''
+                    SELECT cups, MIN(nombreve) AS nombreve FROM sis_proc GROUP BY cups
+                ) sp ON sp.cups = cp.id_procedimiento
+                LEFT JOIN contratos ct ON ct.codigo = c.contrato
+                LEFT JOIN sis_proc_precios spp
+                    ON spp.Cod_manual   = ct.manual
+                   AND spp.Codigo_proc  = cp.id_procedimiento
+                   AND spp.Tipo_proc    = \'256\'
+                WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
+                  AND c.contrato IN (5, 6)
+                  AND c.estado = \'A\'
+                GROUP BY cp.id_procedimiento
+                UNION ALL
                 SELECT
                     cpa.CodProcedimiento                        AS cups,
                     MIN(LTRIM(RTRIM(cpa.NomProcedimiento)))     AS nombre_servicio,
                     COUNT(*)                                    AS cantidad,
                     SUM(cpa.Valor)                              AS valor_referencia
-                FROM citas_procedimientos_asuntos cpa
-                JOIN citas c ON c.autoid = cpa.IdCita
+                FROM citas c
+                JOIN citas_procedimientos_asuntos cpa ON cpa.IdCita = c.autoid
                 WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                   AND c.contrato IN (5, 6)
+                  AND c.estado = \'A\'
                 GROUP BY cpa.CodProcedimiento
-                ORDER BY cantidad DESC
-            ''', [fecha_inicio, fecha_fin])
-            rows_mrc_citas = cursor.fetchall()
+            ''', [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin])
+            rows_mrc = cursor.fetchall()
 
         cups_data = {}
         for cups, nombre, cantidad, valor in rows_mrc:
@@ -1670,15 +1666,7 @@ class DashboardFacturacionNuevoView(APIView):
             if c not in cups_data:
                 cups_data[c] = {'cups': c, 'nombre': nombre, 'cantidad': 0.0, 'valor': 0.0}
             cups_data[c]['cantidad'] += float(cantidad or 0)
-            cups_data[c]['valor'] += float(valor or 0)
-
-        # Merge consultas desde citas_procedimientos_asuntos
-        for cups, nombre, cantidad, valor in rows_mrc_citas:
-            c = str(cups or '').strip()
-            if c not in cups_data:
-                cups_data[c] = {'cups': c, 'nombre': nombre, 'cantidad': 0.0, 'valor': 0.0}
-            cups_data[c]['cantidad'] += float(cantidad or 0)
-            cups_data[c]['valor'] += float(valor or 0)
+            cups_data[c]['valor']    += float(valor or 0)
 
         cups_en_grupo = set()
         grupos_resultado = []
@@ -1688,13 +1676,19 @@ class DashboardFacturacionNuevoView(APIView):
             val_ref = 0.0
             cups_grupo = []
 
-            for cups in config['cups']:
-                if cups in cups_data:
-                    d = cups_data[cups]
-                    qty += d['cantidad']
-                    val_ref += d['valor']
-                    cups_grupo.append(d)
-                    cups_en_grupo.add(cups)
+            for target in config['cups']:
+                # Busca coincidencia exacta primero, luego variantes con sufijo numérico.
+                # Ej: '891509' también captura '891509-8', '891509-4' del agendamiento.
+                for c_key in list(cups_data.keys()):
+                    if c_key in cups_en_grupo:
+                        continue
+                    base = c_key.rsplit('-', 1)[0] if '-' in c_key and c_key.rsplit('-', 1)[1].isdigit() else c_key
+                    if c_key == target or base == target:
+                        d = cups_data[c_key]
+                        qty     += d['cantidad']
+                        val_ref += d['valor']
+                        cups_grupo.append(d)
+                        cups_en_grupo.add(c_key)
 
             # Semáforo y valor estimado MRC
             if qty == 0:
