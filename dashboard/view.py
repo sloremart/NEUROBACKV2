@@ -1620,29 +1620,30 @@ class DashboardFacturacionNuevoView(APIView):
         total_admisiones_regular = sum(e['admisiones'] for e in entidades_list)
 
         # ── MRC (contratos 5 y 6) ─────────────────────────────────────────────
-        # Procedimientos: sis_maes + sis_deta — cuando existe una admisión el paciente asistió.
-        # Consultas (890274 etc.): solo existen en citas_procedimientos_asuntos, se leen de citas.
+        # Fuente: citas atendidas (estado='A') para contratos MRC.
+        # IMPORTANTE: citas_procedimientos.id_cita = citas.id (NO citas.autoid).
+        # citas.autoid es el ID del paciente; citas.id es el PK de la cita.
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute('''
                 SELECT
-                    sd.cups                                                        AS cups,
-                    MIN(LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups))))              AS nombre_servicio,
-                    COUNT(*)                                                        AS cantidad,
-                    COALESCE(SUM(spp.Precio), 0)                                   AS valor_referencia
-                FROM sis_maes sm
-                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                    cp.id_procedimiento                                           AS cups,
+                    MIN(LTRIM(RTRIM(COALESCE(sp.nombreve, cp.id_procedimiento)))) AS nombre_servicio,
+                    COUNT(*)                                                       AS cantidad,
+                    COALESCE(SUM(spp.Precio), 0)                                  AS valor_referencia
+                FROM citas c
+                JOIN citas_procedimientos cp ON cp.id_cita = c.id
                 LEFT JOIN (
                     SELECT cups, MIN(nombreve) AS nombreve FROM sis_proc GROUP BY cups
-                ) sp ON sp.cups = sd.cups
-                LEFT JOIN contratos ct ON ct.codigo = sm.contrato
+                ) sp ON sp.cups = cp.id_procedimiento
+                LEFT JOIN contratos ct ON ct.codigo = c.contrato
                 LEFT JOIN sis_proc_precios spp
                     ON spp.Cod_manual   = ct.manual
-                   AND spp.Codigo_proc  = sd.cups
+                   AND spp.Codigo_proc  = cp.id_procedimiento
                    AND spp.Tipo_proc    = \'256\'
-                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
-                  AND sm.contrato IN (5, 6)
-                  AND ISNULL(sm.Prefijo, \'\') NOT IN (\'FES\', \'MGL\')
-                GROUP BY sd.cups
+                WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
+                  AND c.contrato IN (5, 6)
+                  AND c.estado = \'A\'
+                GROUP BY cp.id_procedimiento
                 UNION ALL
                 SELECT
                     cpa.CodProcedimiento                        AS cups,
@@ -1650,7 +1651,7 @@ class DashboardFacturacionNuevoView(APIView):
                     COUNT(*)                                    AS cantidad,
                     SUM(cpa.Valor)                              AS valor_referencia
                 FROM citas c
-                JOIN citas_procedimientos_asuntos cpa ON cpa.IdCita = c.autoid
+                JOIN citas_procedimientos_asuntos cpa ON cpa.IdCita = c.id
                 WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                   AND c.contrato IN (5, 6)
                   AND c.estado = \'A\'
@@ -1842,16 +1843,18 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             ''', [fecha_inicio, fecha_fin])
             rows_mes_fes = cursor.fetchall()
 
-            # Query 2: estudios por servicio (ufuncional) — excluye registros FES
+            # Query 2: estudios por servicio — usa descripcion de Ufuncionales en lugar de mapeo
+            # hardcodeado, para que sea correcto sin importar la configuración del servidor.
             cursor.execute('''
                 SELECT
-                    sm.ufuncional,
+                    LTRIM(RTRIM(COALESCE(uf.descripcion, CAST(sm.ufuncional AS VARCHAR(10)), \'Sin servicio\'))) AS servicio,
                     COUNT(sm.autoid) AS admisiones
                 FROM sis_maes sm
+                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
                 WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
                   AND ISNULL(sm.Prefijo, \'\') NOT IN (\'FES\', \'MGL\')
                   AND sm.contrato NOT IN (5, 6)
-                GROUP BY sm.ufuncional
+                GROUP BY LTRIM(RTRIM(COALESCE(uf.descripcion, CAST(sm.ufuncional AS VARCHAR(10)), \'Sin servicio\')))
                 ORDER BY admisiones DESC
             ''', [fecha_inicio, fecha_fin])
             rows_servicio = cursor.fetchall()
@@ -1904,11 +1907,8 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             fes_entidades[entidad]['facturas']  += facturas
             fes_entidades[entidad]['valor']     += v
 
-        # Por servicio
-        servicios = []
-        for uf, adm in rows_servicio:
-            nombre_uf = _UFUNCIONAL_NOMBRES.get(uf, f'Servicio {uf}') if uf else 'Sin servicio'
-            servicios.append({'servicio': nombre_uf, 'admisiones': adm})
+        # Por servicio — ya viene con el nombre real de Ufuncionales desde la query
+        servicios = [{'servicio': nombre, 'admisiones': adm} for nombre, adm in rows_servicio]
 
         # Productividad: facturas FES por usuario
         prod_usuarios = defaultdict(lambda: {'facturas': 0, 'valor': 0.0, 'dias': set()})
