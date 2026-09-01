@@ -1620,10 +1620,39 @@ class DashboardFacturacionNuevoView(APIView):
         total_admisiones_regular = sum(e['admisiones'] for e in entidades_list)
 
         # ── MRC (contratos 5 y 6) ─────────────────────────────────────────────
-        # Fuente: citas atendidas (estado='A') para contratos MRC.
-        # IMPORTANTE: citas_procedimientos.id_cita = citas.id (NO citas.autoid).
-        # citas.autoid es el ID del paciente; citas.id es el PK de la cita.
+        # Fuentes combinadas para máxima cobertura:
+        #   1) sis_maes + sis_deta (COUNT DISTINCT sm.autoid) — evita multiplicación
+        #   2) citas + citas_procedimientos (c.autoid) — captura lo no registrado en sis_deta
+        #   3) citas + citas_procedimientos_asuntos (c.autoid) — consultas médicas
+        # Para cada CUPS, se prefiere sis_deta cuando tiene conteo > 0; en caso contrario
+        # se usa el conteo de citas como respaldo.
+        # NOTA: en producción citas_procedimientos.id_cita = citas.autoid (NO citas.id).
         with connections['zeussalud'].cursor() as cursor:
+            # Fuente 1: admisiones liquidadas (sis_deta), COUNT DISTINCT evita multiplicación
+            cursor.execute('''
+                SELECT
+                    sd.cups                                                        AS cups,
+                    MIN(LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups))))              AS nombre_servicio,
+                    COUNT(DISTINCT sm.autoid)                                      AS cantidad,
+                    COALESCE(SUM(spp.Precio), 0)                                  AS valor_referencia
+                FROM sis_maes sm
+                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                LEFT JOIN (
+                    SELECT cups, MIN(nombreve) AS nombreve FROM sis_proc GROUP BY cups
+                ) sp ON sp.cups = sd.cups
+                LEFT JOIN contratos ct ON ct.codigo = sm.contrato
+                LEFT JOIN sis_proc_precios spp
+                    ON spp.Cod_manual   = ct.manual
+                   AND spp.Codigo_proc  = sd.cups
+                   AND spp.Tipo_proc    = \'256\'
+                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
+                  AND sm.contrato IN (5, 6)
+                  AND ISNULL(sm.Prefijo, \'\') NOT IN (\'FES\', \'MGL\')
+                GROUP BY sd.cups
+            ''', [fecha_inicio, fecha_fin])
+            rows_deta = cursor.fetchall()
+
+            # Fuente 2: citas con procedimientos agendados (respaldo para lo no registrado en sis_deta)
             cursor.execute('''
                 SELECT
                     cp.id_procedimiento                                           AS cups,
@@ -1631,7 +1660,7 @@ class DashboardFacturacionNuevoView(APIView):
                     COUNT(*)                                                       AS cantidad,
                     COALESCE(SUM(spp.Precio), 0)                                  AS valor_referencia
                 FROM citas c
-                JOIN citas_procedimientos cp ON cp.id_cita = c.id
+                JOIN citas_procedimientos cp ON cp.id_cita = c.autoid
                 LEFT JOIN (
                     SELECT cups, MIN(nombreve) AS nombreve FROM sis_proc GROUP BY cups
                 ) sp ON sp.cups = cp.id_procedimiento
@@ -1644,28 +1673,64 @@ class DashboardFacturacionNuevoView(APIView):
                   AND c.contrato IN (5, 6)
                   AND c.estado = \'A\'
                 GROUP BY cp.id_procedimiento
-                UNION ALL
+            ''', [fecha_inicio, fecha_fin])
+            rows_citas_proc = cursor.fetchall()
+
+            # Fuente 3: consultas médicas agendadas
+            cursor.execute('''
                 SELECT
                     cpa.CodProcedimiento                        AS cups,
                     MIN(LTRIM(RTRIM(cpa.NomProcedimiento)))     AS nombre_servicio,
                     COUNT(*)                                    AS cantidad,
                     SUM(cpa.Valor)                              AS valor_referencia
                 FROM citas c
-                JOIN citas_procedimientos_asuntos cpa ON cpa.IdCita = c.id
+                JOIN citas_procedimientos_asuntos cpa ON cpa.IdCita = c.autoid
                 WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                   AND c.contrato IN (5, 6)
                   AND c.estado = \'A\'
                 GROUP BY cpa.CodProcedimiento
-            ''', [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin])
-            rows_mrc = cursor.fetchall()
+            ''', [fecha_inicio, fecha_fin])
+            rows_citas_asuntos = cursor.fetchall()
 
+        # Construir cups_data priorizando sis_deta (más confiable cuando existe),
+        # usando citas como respaldo para cups sin registro en sis_deta.
+        cups_deta = {}
+        for cups, nombre, cantidad, valor in rows_deta:
+            k = str(cups or '').strip()
+            if k:
+                cups_deta[k] = {'cups': k, 'nombre': nombre,
+                                 'cantidad': float(cantidad or 0), 'valor': float(valor or 0)}
+
+        cups_citas = {}
+        for cups, nombre, cantidad, valor in rows_citas_proc:
+            k = str(cups or '').strip()
+            if k and k not in cups_citas:
+                cups_citas[k] = {'cups': k, 'nombre': nombre,
+                                  'cantidad': 0.0, 'valor': 0.0}
+            if k:
+                cups_citas[k]['cantidad'] += float(cantidad or 0)
+                cups_citas[k]['valor']    += float(valor or 0)
+
+        cups_asuntos = {}
+        for cups, nombre, cantidad, valor in rows_citas_asuntos:
+            k = str(cups or '').strip()
+            if k and k not in cups_asuntos:
+                cups_asuntos[k] = {'cups': k, 'nombre': nombre,
+                                    'cantidad': 0.0, 'valor': 0.0}
+            if k:
+                cups_asuntos[k]['cantidad'] += float(cantidad or 0)
+                cups_asuntos[k]['valor']    += float(valor or 0)
+
+        # Merge: sis_deta preferido, citas como respaldo para lo no admisionado aún
         cups_data = {}
-        for cups, nombre, cantidad, valor in rows_mrc:
-            c = str(cups or '').strip()
-            if c not in cups_data:
-                cups_data[c] = {'cups': c, 'nombre': nombre, 'cantidad': 0.0, 'valor': 0.0}
-            cups_data[c]['cantidad'] += float(cantidad or 0)
-            cups_data[c]['valor']    += float(valor or 0)
+        for k, d in cups_deta.items():
+            cups_data[k] = d.copy()
+        for k, d in cups_citas.items():
+            if k not in cups_data or cups_data[k]['cantidad'] == 0:
+                cups_data[k] = d.copy()
+        for k, d in cups_asuntos.items():
+            if k not in cups_data or cups_data[k]['cantidad'] == 0:
+                cups_data[k] = d.copy()
 
         cups_en_grupo = set()
         grupos_resultado = []
