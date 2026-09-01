@@ -1552,7 +1552,7 @@ GRUPOS_MRC = {
         "min": 42, "ref": 47, "max": 52,
         "valor_mes": 35070488,
     },
-    "OTROS PROCEDIMIENTOS NEUROLOGÍA": {
+    "OTROS PROCEDIMIENTOS": {
         "cups": {"891515", "891514", "930820", "891511", "891509",
                  "930860", "891530", "952303", "954626", "952302",
                  "930103", "930821", "954624", "954625"},
@@ -1620,31 +1620,29 @@ class DashboardFacturacionNuevoView(APIView):
         total_admisiones_regular = sum(e['admisiones'] for e in entidades_list)
 
         # ── MRC (contratos 5 y 6) ─────────────────────────────────────────────
-        # Usa la misma fuente que el dashboard de agendamiento (citas):
-        # - citas_procedimientos   → procedimientos e imágenes (EEG, polisomno, bloqueos, etc.)
-        # - citas_procedimientos_asuntos → consultas médicas (890274, 890374, etc.)
-        # Filtro: c.estado = 'A' (atendidas) y c.fecha en el rango.
+        # Procedimientos: sis_maes + sis_deta — cuando existe una admisión el paciente asistió.
+        # Consultas (890274 etc.): solo existen en citas_procedimientos_asuntos, se leen de citas.
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute('''
                 SELECT
-                    cp.id_procedimiento                                          AS cups,
-                    MIN(LTRIM(RTRIM(COALESCE(sp.nombreve, cp.id_procedimiento)))) AS nombre_servicio,
-                    COUNT(*)                                                      AS cantidad,
-                    COALESCE(SUM(spp.Precio), 0)                                 AS valor_referencia
-                FROM citas c
-                JOIN citas_procedimientos cp ON cp.id_cita = c.autoid
+                    sd.cups                                                        AS cups,
+                    MIN(LTRIM(RTRIM(COALESCE(sp.nombreve, sd.cups))))              AS nombre_servicio,
+                    COUNT(*)                                                        AS cantidad,
+                    COALESCE(SUM(spp.Precio), 0)                                   AS valor_referencia
+                FROM sis_maes sm
+                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
                 LEFT JOIN (
                     SELECT cups, MIN(nombreve) AS nombreve FROM sis_proc GROUP BY cups
-                ) sp ON sp.cups = cp.id_procedimiento
-                LEFT JOIN contratos ct ON ct.codigo = c.contrato
+                ) sp ON sp.cups = sd.cups
+                LEFT JOIN contratos ct ON ct.codigo = sm.contrato
                 LEFT JOIN sis_proc_precios spp
                     ON spp.Cod_manual   = ct.manual
-                   AND spp.Codigo_proc  = cp.id_procedimiento
+                   AND spp.Codigo_proc  = sd.cups
                    AND spp.Tipo_proc    = \'256\'
-                WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
-                  AND c.contrato IN (5, 6)
-                  AND c.estado = \'A\'
-                GROUP BY cp.id_procedimiento
+                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
+                  AND sm.contrato IN (5, 6)
+                  AND ISNULL(sm.Prefijo, \'\') NOT IN (\'FES\', \'MGL\')
+                GROUP BY sd.cups
                 UNION ALL
                 SELECT
                     cpa.CodProcedimiento                        AS cups,
