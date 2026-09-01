@@ -1620,34 +1620,12 @@ class DashboardFacturacionNuevoView(APIView):
         total_admisiones_regular = sum(e['admisiones'] for e in entidades_list)
 
         # ── MRC (contratos 5 y 6) ─────────────────────────────────────────────
-        # Fuente principal: citas.asunto — no depende de estado (que en Zeus frecuentemente
-        # permanece 'P' incluso después de que el paciente fue atendido).
-        # Excluye sólo canceladas (C) y anuladas (X).
-        # Asuntos relevantes según CLAUDE.md:
-        #   8,9,10,11 → consultas neurología/neuropediatría → CONSULTA DE NEUROLOGÍA
-        #   13        → polisomnografías                   → POLISOMNOGRAFÍAS
-        #   14        → EEG / videotelemetría              → ELECTROENCEFALOGRAMAS
-        #   15        → procedimientos fisiatría           → BLOQUEOS / TOXINA
-        #   16        → procedimientos neurología          → OTROS PROCEDIMIENTOS
+        # Fuente estricta: solo cups definidos en GRUPOS_MRC.
+        # Se obtienen de citas_procedimientos (procedimientos/imágenes) y
+        # citas_procedimientos_asuntos (consultas médicas), ambas con c.autoid.
+        # Estado: excluye solo canceladas (C) y anuladas (X) — en Zeus los turnos
+        # frecuentemente permanecen en 'P' aunque ya fueron atendidos.
         with connections['zeussalud'].cursor() as cursor:
-            # Q1: conteo MRC por asunto (todos los no-cancelados en el período)
-            cursor.execute('''
-                SELECT c.asunto, COUNT(*) AS cantidad
-                FROM citas c
-                WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
-                  AND c.contrato IN (5, 6)
-                  AND ISNULL(c.estado, \'P\') NOT IN (\'C\', \'X\')
-                GROUP BY c.asunto
-            ''', [fecha_inicio, fecha_fin])
-            asunto_counts = {}
-            for asunto, cnt in cursor.fetchall():
-                if asunto is not None:
-                    asunto_counts[int(asunto)] = int(cnt or 0)
-
-            # Q2: cups de citas_procedimientos para procedimientos (asunto 15 y 16)
-            # Permite distinguir BLOQUEOS de TOXINA y detallar OTROS PROCEDIMIENTOS.
-            # Para EEG (14) y POLISOMNO (13) ya tenemos la cuenta exacta por asunto.
-            # citas_procedimientos.id_cita = citas.autoid en producción.
             cursor.execute('''
                 SELECT
                     cp.id_procedimiento                                           AS cups,
@@ -1667,85 +1645,31 @@ class DashboardFacturacionNuevoView(APIView):
                 WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                   AND c.contrato IN (5, 6)
                   AND ISNULL(c.estado, \'P\') NOT IN (\'C\', \'X\')
-                  AND c.asunto IN (15, 16)
                 GROUP BY cp.id_procedimiento
-            ''', [fecha_inicio, fecha_fin])
-            rows_cp = cursor.fetchall()
-
-            # Q3: valor de referencia de consultas (citas_procedimientos_asuntos guarda el precio)
-            cursor.execute('''
-                SELECT COALESCE(SUM(cpa.Valor), 0)
+                UNION ALL
+                SELECT
+                    cpa.CodProcedimiento                        AS cups,
+                    MIN(LTRIM(RTRIM(cpa.NomProcedimiento)))     AS nombre,
+                    COUNT(DISTINCT c.autoid)                    AS cantidad,
+                    SUM(cpa.Valor)                              AS valor
                 FROM citas c
                 JOIN citas_procedimientos_asuntos cpa ON cpa.IdCita = c.autoid
                 WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                   AND c.contrato IN (5, 6)
                   AND ISNULL(c.estado, \'P\') NOT IN (\'C\', \'X\')
-                  AND c.asunto IN (8, 9, 10, 11)
-            ''', [fecha_inicio, fecha_fin])
-            consulta_valor_ref = float(cursor.fetchone()[0] or 0)
-
-        # ── Construir cups_data ───────────────────────────────────────────────
-        # Grupos con asunto dedicado: consulta, EEG, polisomno.
-        # Estos usan el conteo por asunto como fuente canónica (evita duplicados).
-        # Grupos sin asunto propio: bloqueos, toxina, otros → cups de citas_procedimientos.
-        consulta_total  = sum(asunto_counts.get(a, 0) for a in [8, 9, 10, 11])
-        eeg_total       = asunto_counts.get(14, 0)
-        polisomno_total = asunto_counts.get(13, 0)
-        fisiatria_total = asunto_counts.get(15, 0)   # bloqueos + toxina
-        neuroproc_total = asunto_counts.get(16, 0)   # otros procedimientos neurología
+                GROUP BY cpa.CodProcedimiento
+            ''', [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin])
+            rows_mrc = cursor.fetchall()
 
         cups_data = {}
-        if consulta_total > 0:
-            cups_data['890274'] = {'cups': '890274', 'nombre': 'CONSULTA NEUROLOGÍA',
-                                   'cantidad': float(consulta_total), 'valor': consulta_valor_ref}
-        if eeg_total > 0:
-            cups_data['891402'] = {'cups': '891402', 'nombre': 'ELECTROENCEFALOGRAMA',
-                                   'cantidad': float(eeg_total), 'valor': 0.0}
-        if polisomno_total > 0:
-            cups_data['891704'] = {'cups': '891704', 'nombre': 'POLISOMNOGRAFÍA',
-                                   'cantidad': float(polisomno_total), 'valor': 0.0}
-
-        # Cups de procedimientos asunto 15/16: sólo para BLOQUEOS, TOXINA y OTROS
-        # (EEG y POLISOMNO ya están contados; descartamos sus cups para no duplicar)
-        _grupos_asunto = {
-            'CONSULTA DE NEUROLOGÍA': True,
-            'ELECTROENCEFALOGRAMAS': True,
-            'POLISOMNOGRAFÍAS': True,
-        }
-        for cups_code, nombre, cantidad, valor in rows_cp:
-            k = str(cups_code or '').strip()
-            if not k or k in cups_data:
+        for cups, nombre, cantidad, valor in rows_mrc:
+            k = str(cups or '').strip()
+            if not k:
                 continue
-            base = k.rsplit('-', 1)[0] if '-' in k and k.rsplit('-', 1)[1].isdigit() else k
-            # Verificar que este cup no pertenece a un grupo ya contado por asunto
-            pertenece_asunto = False
-            for gname, config in GRUPOS_MRC.items():
-                if _grupos_asunto.get(gname):
-                    if k in config['cups'] or base in config['cups']:
-                        pertenece_asunto = True
-                        break
-            if not pertenece_asunto:
-                cups_data[k] = {'cups': k, 'nombre': nombre,
-                                 'cantidad': float(cantidad or 0), 'valor': float(valor or 0)}
-
-        # Fallback para fisiatría (asunto 15): si ningún cup de BLOQUEOS/TOXINA apareció
-        # en citas_procedimientos, usar el total del asunto bajo el cup primario de BLOQUEOS
-        _bloqueo_cups = GRUPOS_MRC.get('BLOQUEOS', {}).get('cups', set())
-        _toxina_cups  = GRUPOS_MRC.get('APLICACIÓN DE TOXINA \\ SUSTANCIAS', {}).get('cups', set())
-        _fisiatria_via_cp = any(
-            k in cups_data
-            for k in list(_bloqueo_cups) + list(_toxina_cups)
-        )
-        if not _fisiatria_via_cp and fisiatria_total > 0:
-            cups_data['053105'] = {'cups': '053105', 'nombre': 'BLOQUEOS (FISIATRÍA)',
-                                   'cantidad': float(fisiatria_total), 'valor': 0.0}
-
-        # Fallback para procedimientos neurología (asunto 16): si ningún cup de OTROS apareció
-        _otros_cups = GRUPOS_MRC.get('OTROS PROCEDIMIENTOS', {}).get('cups', set())
-        _neuroproc_via_cp = any(k in cups_data for k in _otros_cups)
-        if not _neuroproc_via_cp and neuroproc_total > 0:
-            cups_data['891515'] = {'cups': '891515', 'nombre': 'OTROS PROCEDIMIENTOS',
-                                   'cantidad': float(neuroproc_total), 'valor': 0.0}
+            if k not in cups_data:
+                cups_data[k] = {'cups': k, 'nombre': nombre, 'cantidad': 0.0, 'valor': 0.0}
+            cups_data[k]['cantidad'] += float(cantidad or 0)
+            cups_data[k]['valor']    += float(valor or 0)
 
         cups_en_grupo = set()
         grupos_resultado = []
