@@ -4,11 +4,13 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from collections import defaultdict
 import time
-from datetime import date, datetime,  timedelta
+from datetime import date, datetime, timedelta
 import calendar
 from rest_framework import status
 from collections import defaultdict
 from django.http import JsonResponse
+import openpyxl
+from io import BytesIO
 
 
 class DashboardFacturacionEntidadView(APIView):
@@ -2459,5 +2461,132 @@ class ResultadosEstudiosView(APIView):
                 "pendientes_30d_total":   len(pendientes),
             })
 
-        except Exception as e:
-            return Response({"success": False, "error": str(e)}, status=500)
+        except Exception as exc:
+            return Response({"success": False, "error": str(exc)}, status=500)
+
+
+class CargaAutorizacionesView(APIView):
+    """
+    Carga masiva de números de autorización desde un Excel de EPS.
+    El Excel (Detallado de Autorizaciones) tiene:
+      - Col 20 (U): Documento Identidad
+      - Col 22 (W): Nombre paciente
+      - Col 25 (Z): No Autorizacion
+      - Col 35 (35): CUPS CUM
+      - Col 47 (47): Fecha Orden Medica
+    Busca en Zeus: paciente_maes.num_id → sis_maes → sis_deta.cod_servicio
+    Actualiza: sis_maes.nro_autoriza
+    """
+
+    # Índices de columna (base-0) en el Excel
+    COL_DOC_ID    = 20
+    COL_NOMBRE    = 22
+    COL_NRO_AUT   = 25
+    COL_CUPS      = 35
+    COL_FECHA_ORD = 47
+
+    def post(self, request):
+        archivo = request.FILES.get('archivo')
+        if not archivo:
+            return Response({'error': 'No se proporcionó archivo.'}, status=400)
+
+        try:
+            wb = openpyxl.load_workbook(BytesIO(archivo.read()), data_only=True)
+        except Exception as exc:
+            return Response({'error': f'Error leyendo Excel: {exc}'}, status=400)
+
+        ws = wb.active
+
+        resultados = []
+        stats = {'actualizados': 0, 'no_encontrados': 0, 'sin_cambio': 0, 'errores': 0}
+
+        for fila in ws.iter_rows(min_row=11, values_only=True):
+            doc_id  = str(fila[self.COL_DOC_ID]).strip()  if fila[self.COL_DOC_ID]  else ''
+            nombre  = str(fila[self.COL_NOMBRE]).strip()   if fila[self.COL_NOMBRE]   else ''
+            nro_aut = str(fila[self.COL_NRO_AUT]).strip()  if fila[self.COL_NRO_AUT]  else ''
+            cups    = str(fila[self.COL_CUPS]).strip()      if fila[self.COL_CUPS]      else ''
+
+            raw_fecha = fila[self.COL_FECHA_ORD]
+            if isinstance(raw_fecha, datetime):
+                fecha_orden = raw_fecha.date()
+            elif isinstance(raw_fecha, date):
+                fecha_orden = raw_fecha
+            else:
+                fecha_orden = None
+
+            if not doc_id or not nro_aut or not cups:
+                continue
+
+            try:
+                with connections['zeussalud'].cursor() as cur:
+                    cur.execute('''
+                        SELECT TOP 1
+                            sm.autoid,
+                            ISNULL(sm.nro_autoriza, '') AS nro_actual,
+                            CONVERT(varchar(10), sm.fecha_usuario, 120) AS fecha_admision
+                        FROM sis_maes sm
+                        JOIN paciente_maes pm ON pm.con_estudio = sm.con_estudio
+                        JOIN sis_deta sd      ON sd.estudio     = sm.con_estudio
+                        WHERE pm.num_id = %s
+                          AND LTRIM(RTRIM(sd.cod_servicio)) = %s
+                          AND (%s IS NULL OR CONVERT(date, sm.fecha_usuario) >= %s)
+                        ORDER BY sm.fecha_usuario ASC
+                    ''', [doc_id, cups, fecha_orden, fecha_orden])
+                    row = cur.fetchone()
+
+                if not row:
+                    resultados.append({
+                        'estado': 'no_encontrado', 'doc_id': doc_id, 'nombre': nombre,
+                        'cups': cups, 'nro_autorizacion': nro_aut, 'mensaje': 'Sin admisión coincidente',
+                    })
+                    stats['no_encontrados'] += 1
+                    continue
+
+                autoid, nro_actual, fecha_adm = row
+                nro_actual = (nro_actual or '').strip()
+
+                # Zeus guarda varias autorizaciones por admisión separadas con ";"
+                # (una por cada CUPS autorizado dentro del mismo estudio).
+                # Si el número del Excel ya está → sin cambio.
+                # Si no está → agregar al final sin borrar los existentes.
+                numeros_actuales = [n.strip() for n in nro_actual.split(';') if n.strip()]
+
+                if nro_aut in numeros_actuales:
+                    # Ya está (solo o entre otros)
+                    resultados.append({
+                        'estado': 'sin_cambio', 'doc_id': doc_id, 'nombre': nombre,
+                        'cups': cups, 'nro_autorizacion': nro_aut,
+                        'fecha_admision': fecha_adm, 'mensaje': 'Ya tenía este número',
+                    })
+                    stats['sin_cambio'] += 1
+                else:
+                    # Agregar el nuevo número (puede ser campo vacío o con otros números)
+                    nuevo_valor = ';'.join(numeros_actuales + [nro_aut])
+                    with connections['zeussalud'].cursor() as cur:
+                        cur.execute(
+                            'UPDATE sis_maes SET nro_autoriza = %s WHERE autoid = %s',
+                            [nuevo_valor, autoid]
+                        )
+                    if nro_actual:
+                        mensaje = f'Agregado a: "{nro_actual}"'
+                    else:
+                        mensaje = 'OK'
+                    resultados.append({
+                        'estado': 'actualizado', 'doc_id': doc_id, 'nombre': nombre,
+                        'cups': cups, 'nro_autorizacion': nro_aut,
+                        'fecha_admision': fecha_adm, 'mensaje': mensaje,
+                    })
+                    stats['actualizados'] += 1
+
+            except Exception as exc:
+                resultados.append({
+                    'estado': 'error', 'doc_id': doc_id, 'nombre': nombre,
+                    'cups': cups, 'nro_autorizacion': nro_aut, 'mensaje': str(exc),
+                })
+                stats['errores'] += 1
+
+        return Response({
+            'total_procesadas': len(resultados),
+            **stats,
+            'resultados': resultados,
+        })

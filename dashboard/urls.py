@@ -1,20 +1,20 @@
 from django.urls import path
 
 from dashboard.view import (
-    CarteraConsolidadaPorEntidadAPIView, DashboardAgendadasView,
+    DashboardAgendadasView,
     DashboardFacturacionEntidadView, DashboardRiesgoCompartidoView,
     EstadoCarteraTodasEntidades, EstadoCarteraPorNit, RecaudoPeriodoView,
     MedicosView, CitasMedicoView,
     ProduccionMensualView, ResultadosEstudiosView,
     DashboardFacturacionNuevoView,
     DashboardAdmisionesVsFacturacionView,
+    CargaAutorizacionesView,
 )
 
 
 urlpatterns = [
     path('facturacion/',           DashboardFacturacionEntidadView.as_view(),  name='dashboard-facturacion'),
     path('agendadas/',             DashboardAgendadasView.as_view(),            name='dashboard-agendadas'),
-    path('consolidado_entidades/', CarteraConsolidadaPorEntidadAPIView.as_view(), name='facturacionradicada-noradicada'),
     path('consolidado_cartera/',   EstadoCarteraTodasEntidades.as_view(),       name='factura-revision-financiera'),
     path('cartera_por_nit/',       EstadoCarteraPorNit.as_view(),               name='cartera-por-nit'),
     path('recaudo/',               RecaudoPeriodoView.as_view(),                name='recaudo-entidades'),
@@ -25,4 +25,5 @@ urlpatterns = [
     path('resultados-estudios/',   ResultadosEstudiosView.as_view(),            name='resultados-estudios'),
     path('facturacion-nuevo/',      DashboardFacturacionNuevoView.as_view(),             name='facturacion-nuevo'),
     path('facturacion-admisiones/', DashboardAdmisionesVsFacturacionView.as_view(),     name='facturacion-admisiones'),
+    path('carga-autorizaciones/',   CargaAutorizacionesView.as_view(),                 name='carga-autorizaciones'),
 ]
