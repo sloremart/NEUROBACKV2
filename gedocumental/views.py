@@ -191,47 +191,43 @@ class ArchivoUploadView(APIView):
             if not admision:
                 return JsonResponse({"success": False, "detail": "Admisión no encontrada."}, status=status.HTTP_404_NOT_FOUND)
 
-            # Obtener archivos existentes en la admisión
-            archivos_existentes = ArchivoFacturacion.objects.filter(Admision_id=consecutivo)
+            # Hashes ya almacenados en DB — sin leer archivos del disco
+            hashes_existentes = set(
+                ArchivoFacturacion.objects
+                .filter(Admision_id=consecutivo, HashArchivo__isnull=False)
+                .values_list('HashArchivo', flat=True)
+            )
 
             archivos = request.FILES.getlist('files')
             archivos_guardados = []
+            folder_path = os.path.join(
+                settings.MEDIA_ROOT, 'gdocumental', 'archivosFacturacion', str(admision.Consecutivo)
+            )
+            os.makedirs(folder_path, exist_ok=True)
 
             for archivo in archivos:
-                archivo.seek(0)  # Reiniciar puntero de lectura
+                archivo.seek(0)
                 hash_archivo = calcular_hash_archivo(archivo)
 
-                # Comprobar si un archivo con el mismo hash ya existe
-                for existente in archivos_existentes:
-                    ruta_existente = os.path.join(settings.MEDIA_ROOT, existente.RutaArchivo.name)
-                    if os.path.exists(ruta_existente):
-                        with open(ruta_existente, 'rb') as existing_file:
-                            hash_existente = hashlib.sha256(existing_file.read()).hexdigest()
+                if hash_archivo in hashes_existentes:
+                    return JsonResponse({
+                        "success": False,
+                        "detail": f"El archivo {archivo.name} ya fue subido previamente.",
+                        "data": None
+                    }, status=status.HTTP_400_BAD_REQUEST)
 
-                        if hash_existente == hash_archivo:
-                            return JsonResponse({
-                                "success": False,
-                                "detail": f"El archivo {archivo.name} ya fue subido previamente.",
-                                "data": None
-                            }, status=status.HTTP_400_BAD_REQUEST)
-
-                # Manejo de nombre de archivo duplicado con sufijo aleatorio
                 base_name, ext = os.path.splitext(archivo.name)
                 unique_filename = f"{base_name}_{str(uuid.uuid4())[:8]}{ext}"
-
-                # Crear directorio si no existe
-                folder_path = os.path.join(settings.MEDIA_ROOT, 'gdocumental', 'archivosFacturacion', str(admision.Consecutivo))
-                os.makedirs(folder_path, exist_ok=True)
-
-                # Guardar el archivo con el nuevo nombre
                 archivo_path = os.path.join(folder_path, unique_filename)
-                with open(archivo_path, 'wb') as file:
+
+                archivo.seek(0)
+                with open(archivo_path, 'wb') as f:
                     for chunk in archivo.chunks():
-                        file.write(chunk)
+                        f.write(chunk)
 
-                # Construir ruta relativa del archivo
-                ruta_relativa = os.path.join('gdocumental', 'archivosFacturacion', str(admision.Consecutivo), unique_filename)
-
+                ruta_relativa = os.path.join(
+                    'gdocumental', 'archivosFacturacion', str(admision.Consecutivo), unique_filename
+                )
                 fecha_creacion_archivo = datetime.now().replace(second=0, microsecond=0)
                 archivo_obj = ArchivoFacturacion(
                     Admision_id=admision.Consecutivo,
@@ -242,11 +238,13 @@ class ArchivoUploadView(APIView):
                     FechaCreacionAntares=admision.FechaCreado.date() if admision.FechaCreado else None,
                     Usuario_id=user_id,
                     Regimen=regimen,
-                    TipoHallazgo=tipo_hallazgo
+                    TipoHallazgo=tipo_hallazgo,
+                    HashArchivo=hash_archivo,
                 )
                 archivo_obj.NumeroAdmision = admision.Consecutivo
                 archivo_obj.save()
 
+                hashes_existentes.add(hash_archivo)
                 archivos_guardados.append({
                     "id": archivo_obj.IdArchivo,
                     "ruta": archivo_obj.RutaArchivo.url,
@@ -455,54 +453,78 @@ def downloadFile(request, id_archivo):
          
 class AdmisionCuentaMedicaView(APIView):
     def post(self, request, *args, **kwargs):
-       
         data = request.data
-        archivos = data.get('archivos', [])
-        consecutivo_consulta = data.get('consecutivoConsulta')
-        usuario_cuentas_medicas_id = request.data.get('UsuarioCuentasMedicas')
+        archivos_data = data.get('archivos', [])
+        usuario_cuentas_medicas_id = data.get('UsuarioCuentasMedicas')
+
+        if not archivos_data:
+            return Response({"success": True, "message": "Sin archivos para guardar"}, status=status.HTTP_200_OK)
+
+        archivo_ids = [a.get('IdArchivo') for a in archivos_data]
 
         try:
+            # 1 sola query para todos los archivos
+            archivos_map = {
+                obj.IdArchivo: obj
+                for obj in ArchivoFacturacion.objects.filter(IdArchivo__in=archivo_ids)
+            }
+
+            ids_faltantes = [i for i in archivo_ids if i not in archivos_map]
+            if ids_faltantes:
+                return Response(
+                    {"success": False, "message": f"Archivos no encontrados: {ids_faltantes}"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            hoy = date.today()
+            archivos_a_actualizar = []
+            observaciones_a_crear = []
+
+            for archivo_data in archivos_data:
+                obj = archivos_map[archivo_data.get('IdArchivo')]
+                observacion = archivo_data.get('Observacion')
+                revision_primera = bool(archivo_data.get('RevisionPrimera', False))
+
+                # Aplicar cambios directamente en memoria — sin serializer, sin save() individual
+                obj.RevisionPrimera = revision_primera
+                if revision_primera or observacion:
+                    obj.UsuarioCuentasMedicas_id = usuario_cuentas_medicas_id
+                    obj.FechaRevisionPrimera = hoy
+
+                archivos_a_actualizar.append(obj)
+
+                if observacion:
+                    observaciones_a_crear.append(ObservacionesArchivos(
+                        IdArchivo=obj,
+                        Descripcion=observacion,
+                        ObservacionCuentasMedicas=True,
+                    ))
+
             with transaction.atomic():
-                for archivo_data in archivos:
-                    archivo_id = archivo_data.get('IdArchivo')
-                    try:
-                        archivo_existente = ArchivoFacturacion.objects.get(IdArchivo=archivo_id)
-                        archivo_serializer = RevisionCuentaMedicaSerializer(archivo_existente, data=archivo_data, partial=True)
+                # 1 UPDATE para todos los archivos
+                ArchivoFacturacion.objects.bulk_update(
+                    archivos_a_actualizar,
+                    ['RevisionPrimera', 'UsuarioCuentasMedicas_id', 'FechaRevisionPrimera'],
+                )
 
-                        if archivo_serializer.is_valid():
-                            archivo_obj = archivo_serializer.save()
-                            # Si hay observación o RevisionPrimera es True, guarda UsuarioCuentasMedicas y FechaRevisionPrimera
-                            observacion = archivo_data.get('Observacion')
-                            if observacion or archivo_data.get('RevisionPrimera', False):
-                                archivo_obj.UsuarioCuentasMedicas_id = usuario_cuentas_medicas_id
-                                archivo_obj.FechaRevisionPrimera = date.today()  # Establecer la fecha de revisión
-                                archivo_obj.save()
-                              
+                # 1 INSERT para todas las observaciones
+                if observaciones_a_crear:
+                    ObservacionesArchivos.objects.bulk_create(observaciones_a_crear)
 
-                            if observacion:
-                                observacion_obj = ObservacionesArchivos.objects.create(
-                                    IdArchivo=archivo_existente,
-                                    Descripcion=observacion,
-                                    ObservacionCuentasMedicas=True  
-                                )
-                              
-                        else:
-                            errors = archivo_serializer.errors
-                            return Response({"success": False, "message": "Error de validación en los datos del archivo", "error_details": errors}, status=status.HTTP_400_BAD_REQUEST)
+                todos_aprobados = all(a.get('RevisionPrimera', False) for a in archivos_data)
+                admision_ids = list({a.get('Admision_id') for a in archivos_data if a.get('Admision_id')})
+                if admision_ids:
+                    AuditoriaCuentasMedicas.objects.filter(AdmisionId__in=admision_ids).update(
+                        RevisionCuentasMedicas=todos_aprobados
+                    )
 
-                    except ArchivoFacturacion.DoesNotExist:
-                        return Response({"success": False, "message": f"Archivo con ID {archivo_id} no encontrado"}, status=status.HTTP_404_NOT_FOUND)
-
-                admision_ids = [archivo_data.get('Admision_id') for archivo_data in archivos]
-                
-                auditoria_cuentas_medicas = AuditoriaCuentasMedicas.objects.filter(AdmisionId__in=admision_ids)
-                todos_revision_primera_true = all(archivo_data.get('RevisionPrimera', False) for archivo_data in archivos)
-                auditoria_cuentas_medicas.update(RevisionCuentasMedicas=todos_revision_primera_true)
-
-                return Response({"success": True, "message": "Datos guardados correctamente"}, status=status.HTTP_201_CREATED)
+            return Response({"success": True, "message": "Datos guardados correctamente"}, status=status.HTTP_201_CREATED)
 
         except Exception as e:
-            return Response({"success": False, "message": "Error interno del servidor", "error_details": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"success": False, "message": "Error interno del servidor", "error_details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 ######TESORERIA 
 class AdmisionTesoreriaView(APIView):
     def post(self, request, *args, **kwargs):
@@ -2359,12 +2381,10 @@ def radicar_capitalsalud_view(request, numero_admision, idusuario):
                 for archivo in archivos_data:
                     if archivo.get("Tipo") == "HCNEURO":
                         archivo["Tipo"] = "RESULTADO"
-                        print("Sustituyendo HCNEURO por RESULTADO")
             elif "HCLINICA" in tipos_presentes:
                 for archivo in archivos_data:
                     if archivo.get("Tipo") == "HCLINICA":
                         archivo["Tipo"] = "RESULTADO"
-                        print("Sustituyendo HCLINICA por RESULTADO")
 
         RENOMBRAR_TIPOS = {
             "FACTURA": lambda p, n: f"FEV_901119103_{p}{n}.pdf",
@@ -2380,11 +2400,8 @@ def radicar_capitalsalud_view(request, numero_admision, idusuario):
             ruta_origen_relative = unquote(archivo.get("RutaArchivo")).replace(settings.MEDIA_URL, "").lstrip("/")
             ruta_origen = os.path.normpath(os.path.join(settings.MEDIA_ROOT, ruta_origen_relative))
             if not os.path.exists(ruta_origen):
-                print(f"Archivo omitido: {tipo} no encontrado en {ruta_origen}")
                 continue
-
             if tipo not in RENOMBRAR_TIPOS:
-                print(f"Tipo de archivo omitido: {tipo}")
                 continue
 
             nuevo_nombre = RENOMBRAR_TIPOS.get(tipo)(prefijo, factura_numero)
@@ -2415,8 +2432,7 @@ def radicar_capitalsalud_view(request, numero_admision, idusuario):
                     destino = os.path.join(carpeta_nombre_archivo, os.path.basename(ruta_archivo_origen))
                     shutil.copy(ruta_archivo_origen, destino)
                     archivos_para_zip.append(destino)
-        else:
-            print(f"No se encontró la carpeta de origen {carpeta_json_txt} para los archivos .json, .txt y .xml")
+        # carpeta de factura electrónica opcional — si no existe se omite sin interrumpir el proceso
 
         zip_name = f"901119103_{prefijo}{factura_numero}.zip"
         zip_path = os.path.join(carpeta_nombre_archivo, zip_name)
@@ -3211,35 +3227,24 @@ class AgregarObservacionSinArchivoView(APIView):
 #### ADMISION SIN ARCHIVO#####
 class ObservacionesPorUsuario(APIView):
     def get(self, request, user_id):
+        from django.db.models import Exists, OuterRef
         try:
-            # Filtrar las observaciones por usuario
-            observaciones = ObservacionSinArchivo.objects.filter(Usuario_id=user_id)
-            print(f"Usuario_id: {user_id}, Observaciones count: {observaciones.count()}")  # Debugging line
-            
-            # Filtrar las observaciones que están asociadas a una admisión donde no todos los archivos tienen RevisionPrimera en True
-            observaciones_filtradas = []
-            for observacion in observaciones:
-                admision_id = observacion.AdmisionId
-                archivos = ArchivoFacturacion.objects.filter(Admision_id=admision_id)
-                
-                # Agrega la observación a la lista si no todos los archivos tienen RevisionPrimera en True
-                if archivos.exists() and not archivos.filter(RevisionPrimera=True).count() == archivos.count():
-                    observaciones_filtradas.append(observacion)
-            
-            if not observaciones_filtradas:
-                return Response([], status=200)
-
-            # Serializar las observaciones filtradas
-            serializer = ObservacionSinArchivoSerializer(observaciones_filtradas, many=True)
+            # Subquery: existe al menos un archivo de la admisión con RevisionPrimera=False
+            # (equivale a: hay archivos Y no todos están aprobados)
+            archivos_pendientes = ArchivoFacturacion.objects.filter(
+                Admision_id=OuterRef('AdmisionId'),
+                RevisionPrimera=False,
+            )
+            observaciones = (
+                ObservacionSinArchivo.objects
+                .filter(Usuario_id=user_id)
+                .filter(Exists(archivos_pendientes))
+            )
+            serializer = ObservacionSinArchivoSerializer(observaciones, many=True)
             return Response(serializer.data, status=200)
 
         except Exception as e:
-            response_data = {
-                "success": False,
-                "detail": "Error interno del servidor",
-                "error_details": str(e)
-            }
-            return JsonResponse(response_data, status=500)
+            return JsonResponse({"success": False, "detail": "Error interno del servidor", "error_details": str(e)}, status=500)
 
 
         

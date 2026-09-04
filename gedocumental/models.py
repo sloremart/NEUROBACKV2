@@ -48,6 +48,7 @@ class ArchivoFacturacion(models.Model):
     FechaRechazo = models.DateTimeField(null=True, blank=True)
     UsuarioRechazo = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='archivos_rechazados')
     TipoHallazgo = models.CharField(max_length=255, null=True, blank=True, verbose_name="Tipo de Hallazgo")
+    HashArchivo = models.CharField(max_length=64, null=True, blank=True, db_index=True)
 
     def save(self, *args, **kwargs):
         if self.RutaArchivo:
