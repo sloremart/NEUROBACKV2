@@ -511,11 +511,15 @@ class AdmisionCuentaMedicaView(APIView):
                 if observaciones_a_crear:
                     ObservacionesArchivos.objects.bulk_create(observaciones_a_crear)
 
-                todos_aprobados = all(a.get('RevisionPrimera', False) for a in archivos_data)
-                admision_ids = list({a.get('Admision_id') for a in archivos_data if a.get('Admision_id')})
-                if admision_ids:
-                    AuditoriaCuentasMedicas.objects.filter(AdmisionId__in=admision_ids).update(
-                        RevisionCuentasMedicas=todos_aprobados
+                # Actualizar AdmisionAuditoria basándose en TODOS los archivos de cada admisión
+                admision_ids_set = {obj.Admision_id for obj in archivos_a_actualizar}
+                for adm_id in admision_ids_set:
+                    todos_aprobados = not ArchivoFacturacion.objects.filter(
+                        Admision_id=adm_id, RevisionPrimera=False
+                    ).exists()
+                    AuditoriaCuentasMedicas.objects.update_or_create(
+                        AdmisionId=adm_id,
+                        defaults={'RevisionCuentasMedicas': todos_aprobados},
                     )
 
             return Response({"success": True, "message": "Datos guardados correctamente"}, status=status.HTTP_201_CREATED)
