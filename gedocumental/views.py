@@ -485,7 +485,10 @@ class AdmisionCuentaMedicaView(APIView):
                 observacion = archivo_data.get('Observacion')
                 revision_primera = bool(archivo_data.get('RevisionPrimera', False))
 
-                # Aplicar cambios directamente en memoria — sin serializer, sin save() individual
+                # Si hay observación de error, el archivo no puede estar aprobado
+                if observacion:
+                    revision_primera = False
+
                 obj.RevisionPrimera = revision_primera
                 if revision_primera or observacion:
                     obj.UsuarioCuentasMedicas_id = usuario_cuentas_medicas_id
@@ -3421,31 +3424,54 @@ def admisiones_con_id_revisor(request, id_revisor):
 @api_view(['GET'])
 def archivos_por_usuario_observacion(request, user_id):
     try:
-        # Admisiones con archivos subidos por este usuario que tienen observaciones y no han sido aprobados
+        # Admisiones con archivos del usuario que tienen observaciones de CM y no han sido aprobados
         admision_ids = (
             ArchivoFacturacion.objects
-            .filter(Usuario_id=user_id, RevisionPrimera=False)
-            .filter(Observaciones__isnull=False)
+            .filter(
+                Usuario_id=user_id,
+                RevisionPrimera=False,
+                Observaciones__ObservacionCuentasMedicas=True,
+            )
             .values_list('Admision_id', flat=True)
             .distinct()
         )
 
+        admision_ids_list = list(admision_ids)
+
         admisiones_data = []
         with connections['zeussalud'].cursor() as cursor:
-            admisiones_map = get_admisiones_zeus_bulk(cursor, list(admision_ids))
+            admisiones_map = get_admisiones_zeus_bulk(cursor, admision_ids_list)
 
-        for admision_id in admision_ids:
+        for admision_id in admision_ids_list:
             row = admisiones_map.get(admision_id)
             if not row:
                 continue
+
+            # Archivo más reciente del usuario para esta admisión (no aprobado, con obs. de CM)
             archivo = (
                 ArchivoFacturacion.objects
-                .filter(Admision_id=admision_id, Usuario_id=user_id, RevisionPrimera=False)
-                .filter(Observaciones__isnull=False)
+                .filter(
+                    Admision_id=admision_id,
+                    Usuario_id=user_id,
+                    RevisionPrimera=False,
+                    Observaciones__ObservacionCuentasMedicas=True,
+                )
                 .order_by('-FechaCreacionArchivo')
                 .first()
             )
-            obs_reciente = archivo.Observaciones.order_by('-FechaObservacion').first() if archivo else None
+
+            # Observación de Cuentas Médicas más reciente en cualquier archivo de esta admisión
+            obs_reciente = (
+                ObservacionesArchivos.objects
+                .filter(
+                    IdArchivo__Admision_id=admision_id,
+                    IdArchivo__Usuario_id=user_id,
+                    ObservacionCuentasMedicas=True,
+                )
+                .order_by('-FechaObservacion')
+                .first()
+            )
+
             admisiones_data.append({
                 'Consecutivo': row[0],
                 'IdPaciente': row[1],
