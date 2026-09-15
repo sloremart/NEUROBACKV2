@@ -13,6 +13,7 @@ Uso:
 
 import os
 import re
+import shutil
 import time
 from django.core.management.base import BaseCommand
 from gedocumental.models import ArchivoFacturacion
@@ -106,7 +107,10 @@ class Command(BaseCommand):
                 omitidos += 1
                 continue
 
-            ruta_relativa = f'examenes/{nombre_archivo}'
+            # Ruta destino igual que los demás archivos de GE Documental
+            carpeta_destino = f'/neuro/gdocumental/archivosFacturacion/{admision_id}'
+            ruta_destino = os.path.join(carpeta_destino, nombre_archivo)
+            ruta_relativa = f'gdocumental/archivosFacturacion/{admision_id}/{nombre_archivo}'
 
             if dry_run:
                 self.stdout.write(
@@ -115,7 +119,11 @@ class Command(BaseCommand):
                 importados += 1
                 continue
 
-            # Crear registro en ArchivoFacturacion
+            # Copiar archivo a la carpeta estándar de GE Documental
+            os.makedirs(carpeta_destino, exist_ok=True)
+            shutil.copy2(ruta_completa, ruta_destino)
+
+            # Crear registro en ArchivoFacturacion igual que los demás archivos
             archivo_obj = ArchivoFacturacion(
                 Admision_id=admision_id,
                 NumeroAdmision=admision_id,
