@@ -670,8 +670,9 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
         if not form_fields:
             raise Exception("No se obtuvieron campos del formulario FastReport")
 
-        # El nombre del PDF es determinista: HCE{UsuarioSession}.pdf
-        nombre_pdf = form_fields.get("nombreArchivoPdf", f"HCE{usuario_session}.pdf")
+        nombre_pdf = form_fields.get("nombreArchivoPdf")
+        if not nombre_pdf:
+            raise Exception("SIESA no devolvió el nombre del archivo PDF — el estudio puede no tener nota de enfermería")
 
         # Paso 2: POST a c_informe_view.aspx — genera y escribe el PDF en disco
         r2 = s.post(SIESA_REPORT_VIEW_URL, data=form_fields, timeout=60)
