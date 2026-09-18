@@ -1867,12 +1867,11 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             ''', [fecha_inicio, fecha_fin])
             rows_servicio = cursor.fetchall()
 
-            # Query 3: FES emitidas por usuario — todos los que crean FES en Zeus,
-            # sin filtro por cuenta en el sistema. Agrupa NULL/vacío como 'Sin identificar'.
+            # Query 3: FES emitidas por usuario — usa nom_egreso (quien crea la factura).
             cursor.execute('''
                 SELECT
                     CONVERT(date, sm.fecha_usuario)                          AS fecha_factura,
-                    COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_usuario)), \'\'),
+                    COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_egreso)), \'\'),
                              \'Sin identificar\')                              AS usuario,
                     COUNT(sm.autoid)                                          AS facturas,
                     SUM(COALESCE(sm.vlr_factura, 0))                         AS valor
@@ -1882,7 +1881,7 @@ class DashboardAdmisionesVsFacturacionView(APIView):
                   AND sm.contrato NOT IN (5, 6)
                 GROUP BY
                     CONVERT(date, sm.fecha_usuario),
-                    COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_usuario)), \'\'), \'Sin identificar\')
+                    COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_egreso)), \'\'), \'Sin identificar\')
                 ORDER BY fecha_factura, facturas DESC
             ''', [fecha_inicio, fecha_fin])
             rows_usuarios = cursor.fetchall()
