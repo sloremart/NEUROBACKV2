@@ -3718,6 +3718,19 @@ def idrevisor_tesoreria(request):
         
         return JsonResponse({"success": False, "detail": str(e)}, status=500)
 
+@api_view(['POST'])
+def revertir_radicado(request):
+    """Pone Radicado=False en todos los archivos de una admisión."""
+    admision_id = request.data.get('admision_id')
+    if not admision_id:
+        return JsonResponse({"success": False, "detail": "Se requiere admision_id"}, status=400)
+    try:
+        actualizados = ArchivoFacturacion.objects.filter(Admision_id=admision_id).update(Radicado=False)
+        return JsonResponse({"success": True, "detail": f"Renombre revertido en {actualizados} archivo(s)"})
+    except Exception as e:
+        return JsonResponse({"success": False, "detail": str(e)}, status=500)
+
+
 ##### TRAE LAS ADMISIONES QUE HAN SIDO REVISDAS POR CM Y SON ENVIADAS A TESORERIA
 @api_view(['GET'])
 @permission_classes([AllowAny])

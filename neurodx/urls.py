@@ -30,6 +30,7 @@ from gedocumental.views import (
     FiltroTesoreria,
     actualizar_modificado_revisor,
     actualizar_correciones_cm,
+    revertir_radicado,
     AdmisionesRadicarView,
     radicar_capitalsalud_view,
     radicar_colsanitas_view,
@@ -106,7 +107,7 @@ urlpatterns = [
     path('api/v2/gedocumental/',        include(gedocumental_urls)),
     path('api/v2/programacionpagos/',   include('programacionpagos.urls')),
     path('api/v2/dashboard/',           include('dashboard.urls')),
-    path('api/v2/',                     include('resultadosgedocumental.urls')),
+    path('api/v2/estudios-sueno/',      include('estudiossueno.urls')),
     # ── Endpoints legacy (sin prefijo gedocumental/) ─────────────────────────
     path('api/v2/descargar/<int:id_archivo>/',        downloadFile,                            name='v2-descargar-legacy'),
     path('api/v2/agregar_observacion_sin_archivo/',   AgregarObservacionSinArchivoView.as_view(), name='v2-obs-sin-archivo'),
@@ -115,6 +116,7 @@ urlpatterns = [
     path('api/v2/filtro_tesoreria/',                  FiltroTesoreria.as_view(),               name='v2-filtro-tesoreria'),
     path('api/v2/actualizar_modificado_revisor/',     actualizar_modificado_revisor,            name='v2-actualizar-modificado'),
     path('api/v2/actualizar_correciones_cm/',         actualizar_correciones_cm,               name='v2-actualizar-correcciones-cm'),
+    path('api/v2/revertir_radicado/',                 revertir_radicado,                        name='v2-revertir-radicado'),
     path('api/v2/actualizar_regimen/<int:consecutivo>/', ActualizarRegimenArchivosView.as_view(), name='v2-actualizar-regimen-legacy'),
     path('api/v2/eliminar_archivo_facturacion/',      ArchivoFacturacionDeleteView.as_view(),  name='v2-eliminar-archivo-legacy'),
     # path('api/v2/citas/',        include(citas_urls)),       # próximo módulo

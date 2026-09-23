@@ -1,0 +1,54 @@
+from django.db import models
+
+ESTUDIOS_CHOICES = [
+    ("EEG ADULTO",                    "EEG ADULTO"),
+    ("EEG PEDIATRICO",                "EEG PEDIATRICO"),
+    ("PSG ADULTO",                    "PSG ADULTO"),
+    ("PSG BPAP",                      "PSG BPAP"),
+    ("PSG CPAP",                      "PSG CPAP"),
+    ("PSG OXIMETRÍA",                 "PSG OXIMETRÍA"),
+    ("PSG OXIMETRÍA PEDIATRICA",      "PSG OXIMETRÍA PEDIATRICA"),
+    ("PSG PEDIATRICA CPAP",           "PSG PEDIATRICA CPAP"),
+    ("PSG PEDIATRICA OXIMETRÍA",      "PSG PEDIATRICA OXIMETRÍA"),
+    ("VTLM 2 HORAS PEDIATRICA",       "VTLM 2 HORAS PEDIATRICA"),
+    ("VTLM 3 HORAS ADULTO",           "VTLM 3 HORAS ADULTO"),
+    ("VTLM 3 HORAS PEDIATRICA",       "VTLM 3 HORAS PEDIATRICA"),
+    ("VTLM 4 HORAS ADULTO",           "VTLM 4 HORAS ADULTO"),
+    ("VTLM 4 HORAS PEDIATRICA",       "VTLM 4 HORAS PEDIATRICA"),
+    ("VTLM 5 HORAS ADULTO",           "VTLM 5 HORAS ADULTO"),
+    ("VTLM 6 HORAS ADULTO",           "VTLM 6 HORAS ADULTO"),
+    ("VTLM 6 HORAS PEDIATRICA",       "VTLM 6 HORAS PEDIATRICA"),
+    ("VTLM 8 HORAS ADULTO",           "VTLM 8 HORAS ADULTO"),
+    ("VTLM 8 HORAS PEDIATRICA",       "VTLM 8 HORAS PEDIATRICA"),
+    ("VTLM 12 HORAS ADULTO",          "VTLM 12 HORAS ADULTO"),
+    ("VTLM 12 HORAS PEDIATRICA",      "VTLM 12 HORAS PEDIATRICA"),
+    ("VTLM 24 HORAS ADULTO",          "VTLM 24 HORAS ADULTO"),
+    ("VTLM 24 HORAS PEDIATRICA",      "VTLM 24 HORAS PEDIATRICA"),
+    ("VTLM 48 HORAS ADULTO",          "VTLM 48 HORAS ADULTO"),
+    ("VTLM 48 HORAS PEDIATRICA",      "VTLM 48 HORAS PEDIATRICA"),
+    ("VTLM 72 HORAS",                 "VTLM 72 HORAS"),
+]
+
+EQUIPOS_CHOICES = [(f"ESTUDIOS {i}", f"ESTUDIOS {i}") for i in range(1, 10)]
+
+
+class RegistroEstudioSueno(models.Model):
+    fecha_registro    = models.DateTimeField(auto_now_add=True)
+    fecha_realizacion = models.DateField(verbose_name="Fecha de realización")
+    equipo            = models.CharField(max_length=20, choices=EQUIPOS_CHOICES, verbose_name="Equipo")
+    nombres_completos = models.CharField(max_length=255, verbose_name="Nombre del paciente")
+    fecha_nacimiento  = models.DateField(null=True, blank=True, verbose_name="Fecha de nacimiento")
+    numero_documento  = models.CharField(max_length=30, verbose_name="Número de documento")
+    estudio_realizado = models.CharField(max_length=60, choices=ESTUDIOS_CHOICES, verbose_name="Estudio realizado")
+    especialista      = models.CharField(max_length=255, verbose_name="Especialista")
+    entidad           = models.CharField(max_length=255, blank=True, verbose_name="Entidad")
+    tecnico           = models.CharField(max_length=255, verbose_name="Técnico")
+    lectura_examen    = models.BooleanField(default=False, verbose_name="Lectura examen")
+    observaciones     = models.TextField(blank=True, default="")
+
+    class Meta:
+        db_table  = "registro_estudio_sueno"
+        ordering  = ["-fecha_realizacion"]
+
+    def __str__(self):
+        return f"{self.fecha_realizacion} — {self.nombres_completos} — {self.estudio_realizado}"

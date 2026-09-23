@@ -47,7 +47,7 @@ INSTALLED_APPS = [
     'dashboard',
    'evaluaciondesempeno',
   'debug_toolbar',
-   
+  'estudiossueno',
 
 
 ]
