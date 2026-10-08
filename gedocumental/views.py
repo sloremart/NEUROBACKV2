@@ -33,6 +33,7 @@ from rest_framework.permissions import AllowAny
 from datetime import date
 from rest_framework.decorators import api_view, permission_classes
 import zipfile
+from gedocumental.services.ai_revision import revisar_archivo
 
 
 # ── Helper ZeusSalud ─────────────────────────────────────────────────────────
@@ -244,11 +245,22 @@ class ArchivoUploadView(APIView):
                 archivo_obj.NumeroAdmision = admision.Consecutivo
                 archivo_obj.save()
 
+                # Revisión automática con IA (si OPENAI_API_KEY está configurada)
+                datos_admision = {
+                    "consecutivo": admision.Consecutivo,
+                    "paciente": "",
+                    "entidad": admision.CodigoEntidad or admision.IDPaciente or "",
+                    "procedimiento": tipo_documento,
+                    "fecha": str(admision.FechaCreado.date()) if admision.FechaCreado else "",
+                }
+                ai_revision = revisar_archivo(archivo_obj, datos_admision)
+
                 hashes_existentes.add(hash_archivo)
                 archivos_guardados.append({
                     "id": archivo_obj.IdArchivo,
                     "ruta": archivo_obj.RutaArchivo.url,
-                    "nombre": archivo_obj.NombreArchivo
+                    "nombre": archivo_obj.NombreArchivo,
+                    "ai_revision": ai_revision,
                 })
 
             return JsonResponse({

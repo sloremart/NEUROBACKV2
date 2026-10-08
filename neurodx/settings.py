@@ -224,6 +224,17 @@ CORS_ALLOW_METHODS = [
     "OPTIONS"
 ]
 
+# ── Revisión automática de documentos con IA ─────────────────────────────────
+# Para DESACTIVAR completamente la revisión IA (emergencia / mantenimiento):
+#   1. Cambiar REVISAR_CON_IA = False
+#   2. Reiniciar Django
+# El sistema vuelve a funcionar exactamente como antes, sin ningún otro cambio.
+REVISAR_CON_IA = True
+
+# API key de OpenAI — reemplaza el valor vacío con tu key real
+# O pon la variable de entorno OPENAI_API_KEY en el servidor
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+
 AUTH_USER_MODEL = 'login.CustomUser'
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3001",  

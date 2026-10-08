@@ -21,8 +21,8 @@ from gedocumental.models import ArchivoFacturacion
 CARPETA_EXAMENES_DEFAULT = '/neuro/examenes'
 PATRON_ARCHIVO = re.compile(r'^(\d+)[Rr]', re.IGNORECASE)
 TIPO = 'RESULTADO'
-# Admisiones válidas: entre 1 y 99999 (ajustar si el rango es mayor)
-ADMISION_MAX = 99999
+# Admisiones válidas: cualquier número positivo (sin límite superior)
+ADMISION_MAX = 9_999_999
 
 
 class Command(BaseCommand):
