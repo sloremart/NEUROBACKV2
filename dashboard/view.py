@@ -1886,6 +1886,25 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             ''', [fecha_inicio, fecha_fin])
             rows_usuarios = cursor.fetchall()
 
+            # Query 4: servicios (ufuncional) por usuario — para desglose en tarjetas
+            cursor.execute('''
+                SELECT
+                    COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_egreso)), \'\'), \'Sin identificar\') AS usuario,
+                    LTRIM(RTRIM(COALESCE(uf.descripcion, CAST(sm.ufuncional AS VARCHAR(10)), \'Sin servicio\'))) AS servicio,
+                    COUNT(sm.autoid) AS facturas,
+                    SUM(COALESCE(sm.vlr_factura, 0)) AS valor
+                FROM sis_maes sm
+                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                WHERE CONVERT(date, sm.fecha_usuario) BETWEEN %s AND %s
+                  AND sm.Prefijo = \'FES\'
+                  AND sm.contrato NOT IN (5, 6)
+                GROUP BY
+                    COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_egreso)), \'\'), \'Sin identificar\'),
+                    LTRIM(RTRIM(COALESCE(uf.descripcion, CAST(sm.ufuncional AS VARCHAR(10)), \'Sin servicio\')))
+                ORDER BY usuario, facturas DESC
+            ''', [fecha_inicio, fecha_fin])
+            rows_servicios_usuario = cursor.fetchall()
+
         timeline  = defaultdict(lambda: {'admisiones': 0, 'facturadas': 0, 'pendientes': 0, 'valor': 0.0})
         entidades = defaultdict(lambda: {'admisiones': 0, 'facturadas': 0, 'pendientes': 0, 'valor': 0.0})
 
@@ -1909,6 +1928,15 @@ class DashboardAdmisionesVsFacturacionView(APIView):
         # Por servicio — ya viene con el nombre real de Ufuncionales desde la query
         servicios = [{'servicio': nombre, 'admisiones': adm} for nombre, adm in rows_servicio]
 
+        # Servicios por usuario
+        servicios_por_usuario = defaultdict(list)
+        for usuario, servicio, facturas, valor in rows_servicios_usuario:
+            servicios_por_usuario[usuario].append({
+                'servicio': servicio,
+                'facturas': int(facturas),
+                'valor': round(float(valor or 0)),
+            })
+
         # Productividad: facturas FES por usuario
         prod_usuarios = defaultdict(lambda: {'facturas': 0, 'valor': 0.0, 'dias': set()})
         prod_timeline_usuario = []
@@ -1930,6 +1958,7 @@ class DashboardAdmisionesVsFacturacionView(APIView):
                     'total_valor':    round(v['valor']),
                     'dias_activos':   len(v['dias']),
                     'promedio_dia':   round(v['facturas'] / max(len(v['dias']), 1), 1),
+                    'servicios':      servicios_por_usuario.get(u, []),
                 }
                 for u, v in prod_usuarios.items()
             ],
