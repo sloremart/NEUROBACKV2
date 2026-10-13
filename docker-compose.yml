@@ -6,6 +6,10 @@ services:
     restart: unless-stopped
     ports:
       - "8009:8000"
+    env_file:
+      - .env
+    environment:
+      - REVISAR_CON_IA=False
 
     volumes:
       - /media/disco1/examenes:/media/disco1/examenes
