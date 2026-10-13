@@ -2282,31 +2282,43 @@ def radicar_mes01_view(request, numero_admision, idusuario):
             else:
                 raise FileNotFoundError(f"La ruta de origen '{ruta_origen}' no es válida")
 
-        # === PROCESAR ARCHIVO .TXT ADICIONAL ===
+        # === PROCESAR ARCHIVOS CUV (.txt) Y XML ===
         carpeta_txt = os.path.join('/mnt/prueba/DocsFESIESA', f'Factura-FES{factura_numero}')
         if os.path.exists(carpeta_txt):
             for archivo_nombre in os.listdir(carpeta_txt):
-                if archivo_nombre.lower().endswith('.txt'):
-                    ruta_txt_origen = os.path.join(carpeta_txt, archivo_nombre)
+                extension = os.path.splitext(archivo_nombre)[1].lower()
+                ruta_origen = os.path.join(carpeta_txt, archivo_nombre)
+
+                if extension == '.txt':
                     try:
-                        with open(ruta_txt_origen, 'r', encoding='utf-8') as f:
+                        with open(ruta_origen, 'r', encoding='utf-8') as f:
                             contenido = f.read()
 
-                        match = re.search(r'"ProcesoId"\s*:\s*"?(?P<id>\w+)"?', contenido)
-                        if not match:
-                            print("⚠️ Campo 'ProcesoId' no encontrado en el archivo .txt")
-                            continue
+                        # Intentar extraer ProcesoId del contenido
+                        match = re.search(r'"ProcesoId"\s*:\s*"?(?P<id>\w+)"?', contenido, re.IGNORECASE)
+                        if match:
+                            proceso_id = match.group('id')
+                        else:
+                            # Fallback: extraer ID del nombre del archivo (ej: ResultadosMSPS_FES18686_ID314127284_CUV.txt)
+                            match_fn = re.search(r'_ID(\d+)_', archivo_nombre)
+                            proceso_id = match_fn.group(1) if match_fn else 'XXXX'
 
-                        proceso_id = match.group('id')
                         nombre_txt = f"ResultadosMSPS_{prefijo}{factura_numero}_ID{proceso_id}_A_{cuv}.txt"
-                        ruta_txt_destino = os.path.join(carpeta_path, nombre_txt)
-                        shutil.copy(ruta_txt_origen, ruta_txt_destino)
-                        print(f"Archivo .txt copiado como: {nombre_txt}")
+                        shutil.copy(ruta_origen, os.path.join(carpeta_path, nombre_txt))
+                        print(f"CUV copiado como: {nombre_txt}")
                         break
                     except Exception as e:
                         print(f"Error procesando archivo .txt: {e}")
+
+                elif extension == '.xml':
+                    try:
+                        nuevo_nombre_xml = f"FEV_{prefijo}{factura_numero}.xml"
+                        shutil.copy(ruta_origen, os.path.join(carpeta_path, nuevo_nombre_xml))
+                        print(f"XML copiado como: {nuevo_nombre_xml}")
+                    except Exception as e:
+                        print(f"Error procesando archivo .xml: {e}")
         else:
-            print(f"No se encontró la carpeta TXT: {carpeta_txt}")
+            print(f"No se encontró la carpeta: {carpeta_txt}")
 
         # Marcar como radicado
         archivos_a_verificar.update(Radicado=True)
