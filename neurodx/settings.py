@@ -20,6 +20,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = 'django-insecure-+749%6yh6m6u-h!ft8j&1*exs16d3$vz=i^69hjv@!%exade*!'
 
+REVISAR_CON_IA = os.environ.get('REVISAR_CON_IA', 'False').lower() not in ('false', '0', 'no', '')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+
 
 DEBUG = True
 ALLOWED_HOSTS = ['192.168.1.211', '192.168.1.213', '192.168.1.212', '127.0.0.1', 'localhost']  
