@@ -3236,6 +3236,7 @@ class AgregarObservacionSinArchivoView(APIView):
                 Usuario_id=usuario_id,
                 Descripcion=descripcion,
                 TipoArchivo=tipo_archivo,
+                IdRevisor=request.user.id,
             )
             return Response({
                 "success": True,
@@ -3288,24 +3289,7 @@ class RevisarObservacion(APIView):
         if not observaciones.exists():
             return Response({'error': 'Observación no encontrada'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Buscar un archivo con un UsuarioCuentasMedicas_id asociado
-        try:
-            archivo = ArchivoFacturacion.objects.filter(
-                Admision_id=admision_id,
-                UsuarioCuentasMedicas__isnull=False
-            ).order_by('-FechaCreacionArchivo').first()
-
-            if archivo is None:
-                return Response({'error': 'No se encontró archivo con UsuarioCuentasMedicas asociado con la admisión'}, status=status.HTTP_404_NOT_FOUND)
-            
-            id_revisor = archivo.UsuarioCuentasMedicas_id  # Tomar el Id del UsuarioCuentasMedicas
-
-            print(f"Archivo encontrado: {archivo}")
-            print(f"UsuarioCuentasMedicas asociado: {archivo.UsuarioCuentasMedicas}")
-            print(f"IdRevisor (UsuarioCuentasMedicas_id) obtenido: {id_revisor}")
-
-        except ArchivoFacturacion.DoesNotExist:
-            return Response({'error': 'Revisor no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+        id_revisor = request.user.id
 
         # Iterar sobre todas las observaciones encontradas y actualizarlas
         for observacion in observaciones:

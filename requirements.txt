@@ -17,3 +17,5 @@ mssql-django
 pyodbc
 requests
 xhtml2pdf
+openai
+pdfplumber
