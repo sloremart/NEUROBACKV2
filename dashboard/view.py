@@ -1867,40 +1867,52 @@ class DashboardAdmisionesVsFacturacionView(APIView):
             ''', [fecha_inicio, fecha_fin])
             rows_servicio = cursor.fetchall()
 
-            # Query 3: FES emitidas por usuario — usa nom_egreso (quien crea la factura).
+            # Query 3: productividad por usuario — fecha_radicado es cuando Felipe/Heylenth radican.
+            # Las FES se crean en meses anteriores; la radicación ocurre después.
             cursor.execute('''
                 SELECT
-                    CONVERT(date, sm.fecha_usuario)                          AS fecha_factura,
+                    CONVERT(date, sm.fecha_radicado)                         AS fecha_radicado,
                     COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_egreso)), \'\'),
                              \'Sin identificar\')                              AS usuario,
                     COUNT(sm.autoid)                                          AS facturas,
                     SUM(COALESCE(sm.vlr_factura, 0))                         AS valor
                 FROM sis_maes sm
-                WHERE CONVERT(date, sm.fecha_usuario) BETWEEN %s AND %s
+                WHERE CONVERT(date, sm.fecha_radicado) BETWEEN %s AND %s
                   AND sm.Prefijo = \'FES\'
+                  AND sm.radicado = 1
                   AND sm.contrato NOT IN (5, 6)
                 GROUP BY
-                    CONVERT(date, sm.fecha_usuario),
+                    CONVERT(date, sm.fecha_radicado),
                     COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_egreso)), \'\'), \'Sin identificar\')
-                ORDER BY fecha_factura, facturas DESC
+                ORDER BY fecha_radicado, facturas DESC
             ''', [fecha_inicio, fecha_fin])
             rows_usuarios = cursor.fetchall()
 
-            # Query 4: servicios (ufuncional) por usuario — para desglose en tarjetas
+            # Query 4: servicios por usuario — por fecha_radicado, consultas externas por especialidad
             cursor.execute('''
                 SELECT
                     COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_egreso)), \'\'), \'Sin identificar\') AS usuario,
-                    LTRIM(RTRIM(COALESCE(uf.descripcion, CAST(sm.ufuncional AS VARCHAR(10)), \'Sin servicio\'))) AS servicio,
+                    CASE
+                        WHEN sm.ufuncional = 1
+                        THEN LTRIM(RTRIM(COALESCE(NULLIF(m.especialidad, \'\'), \'CONSULTA EXTERNA\')))
+                        ELSE LTRIM(RTRIM(COALESCE(uf.descripcion, CAST(sm.ufuncional AS VARCHAR(10)), \'Sin servicio\')))
+                    END AS servicio,
                     COUNT(sm.autoid) AS facturas,
                     SUM(COALESCE(sm.vlr_factura, 0)) AS valor
                 FROM sis_maes sm
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
-                WHERE CONVERT(date, sm.fecha_usuario) BETWEEN %s AND %s
+                LEFT JOIN Medicos m ON m.codigo = sm.cod_medico
+                WHERE CONVERT(date, sm.fecha_radicado) BETWEEN %s AND %s
                   AND sm.Prefijo = \'FES\'
+                  AND sm.radicado = 1
                   AND sm.contrato NOT IN (5, 6)
                 GROUP BY
                     COALESCE(NULLIF(LTRIM(RTRIM(sm.nom_egreso)), \'\'), \'Sin identificar\'),
-                    LTRIM(RTRIM(COALESCE(uf.descripcion, CAST(sm.ufuncional AS VARCHAR(10)), \'Sin servicio\')))
+                    CASE
+                        WHEN sm.ufuncional = 1
+                        THEN LTRIM(RTRIM(COALESCE(NULLIF(m.especialidad, \'\'), \'CONSULTA EXTERNA\')))
+                        ELSE LTRIM(RTRIM(COALESCE(uf.descripcion, CAST(sm.ufuncional AS VARCHAR(10)), \'Sin servicio\')))
+                    END
                 ORDER BY usuario, facturas DESC
             ''', [fecha_inicio, fecha_fin])
             rows_servicios_usuario = cursor.fetchall()
