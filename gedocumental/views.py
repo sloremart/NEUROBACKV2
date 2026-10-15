@@ -33,7 +33,7 @@ from rest_framework.permissions import AllowAny
 from datetime import date
 from rest_framework.decorators import api_view, permission_classes
 import zipfile
-from gedocumental.services.ai_revision import revisar_archivo
+from gedocumental.services.ai_revision import revisar_archivo, obtener_contexto_admision
 
 
 # ── Helper ZeusSalud ─────────────────────────────────────────────────────────
@@ -205,6 +205,7 @@ class ArchivoUploadView(APIView):
                 settings.MEDIA_ROOT, 'gdocumental', 'archivosFacturacion', str(admision.Consecutivo)
             )
             os.makedirs(folder_path, exist_ok=True)
+            datos_admision = None  # contexto Zeus para la IA, se consulta una sola vez
 
             for archivo in archivos:
                 archivo.seek(0)
@@ -246,13 +247,8 @@ class ArchivoUploadView(APIView):
                 archivo_obj.save()
 
                 # Revisión automática con IA (si OPENAI_API_KEY está configurada)
-                datos_admision = {
-                    "consecutivo": admision.Consecutivo,
-                    "paciente": "",
-                    "entidad": admision.CodigoEntidad or admision.IDPaciente or "",
-                    "procedimiento": tipo_documento,
-                    "fecha": str(admision.FechaCreado.date()) if admision.FechaCreado else "",
-                }
+                if datos_admision is None and getattr(settings, 'REVISAR_CON_IA', False):
+                    datos_admision = obtener_contexto_admision(admision.Consecutivo)
                 ai_revision = revisar_archivo(archivo_obj, datos_admision)
 
                 hashes_existentes.add(hash_archivo)
@@ -314,10 +310,15 @@ class ArchivoEditView(APIView):
                 auditoria.FechaCargueArchivo = datetime.now()  # Aquí se cambia a datetime.now()
                 auditoria.save(update_fields=['FechaCargueArchivo'])
 
+            # La IA revisa de nuevo el archivo reemplazado; si sale OK, el hallazgo anterior queda resuelto
+            ai_revision = None
+            if 'archivo' in request.FILES and getattr(settings, 'REVISAR_CON_IA', False):
+                ai_revision = revisar_archivo(archivo, obtener_contexto_admision(admision.Consecutivo))
+
             response_data = {
                 "success": True,
                 "detail": f"Archivo {archivo_id} editado exitosamente para la admisión con consecutivo {consecutivo}",
-                "data": None
+                "data": {"ai_revision": ai_revision} if ai_revision else None
             }
 
             return JsonResponse(response_data, status=status.HTTP_200_OK)
@@ -1888,8 +1889,141 @@ def radicar_ejercito_view(request, numero_admision, idusuario):
         return JsonResponse({"success": False, "detail": f"No se encontraron archivos para la admisión con número {numero_admision}"}, status=404)
     except Exception as e:
         return JsonResponse({"success": False, "detail": str(e)}, status=500)
-      
-      
+
+
+# === RADICACION COLMEDICA ===
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def radicar_colmedica_view(request, numero_admision, idusuario):
+    try:
+        try:
+            user = CustomUser.objects.get(id=idusuario)
+            nombre_usuario = "".join(c for c in user.username if c.isalnum() or c in (' ', '.', '_')).rstrip()
+        except CustomUser.DoesNotExist:
+            return JsonResponse({"success": False, "detail": "Usuario no encontrado."}, status=404)
+
+        archivos_a_verificar = ArchivoFacturacion.objects.filter(Admision_id=numero_admision)
+        if archivos_a_verificar.exists() and archivos_a_verificar.filter(Radicado=True).exists():
+            return JsonResponse({"success": False, "detail": f"La admisión con número {numero_admision} ya está radicada."}, status=400)
+
+        admision_response = GeDocumentalView().get(request._request, consecutivo=numero_admision)
+        if admision_response.status_code != 200:
+            return admision_response
+
+        admision_data = admision_response.data.get('data')
+        factura_numero = admision_data.get('FacturaNo')
+        prefijo = admision_data.get('Prefijo') or ''
+        if factura_numero is None:
+            raise ValueError("La admisión no tiene el número de factura")
+
+        archivos_response = archivos_por_admision_radicacion(request._request, numero_admision)
+        if archivos_response.status_code != 200:
+            return archivos_response
+
+        archivos_data = archivos_response.data.get('data', [])
+        archivos_requeridos = ['FACTURA', 'COMPROBANTE', 'ORDEN', 'RESULTADO', 'AUTORIZACION', 'HCNEURO', 'HCLINICA']
+        archivos_faltantes = []
+
+        for archivo in archivos_data:
+            tipo_archivo = archivo.get('Tipo')
+            if tipo_archivo in archivos_requeridos:
+                ruta_origen_relative = unquote(archivo.get('RutaArchivo')).replace(settings.MEDIA_URL, "").lstrip('/')
+                ruta_origen = os.path.normpath(os.path.join(settings.MEDIA_ROOT, ruta_origen_relative))
+                if not os.path.exists(ruta_origen):
+                    archivos_faltantes.append(tipo_archivo)
+
+        if archivos_faltantes:
+            return JsonResponse({"success": False, "detail": f"Faltan los siguientes archivos requeridos: {', '.join(archivos_faltantes)}"}, status=400)
+
+        archivo_facturacion = archivos_a_verificar.first()
+        if not archivo_facturacion:
+            raise FileNotFoundError(f"No se encontró el archivo de facturación para la admisión {numero_admision}")
+
+        regimen = archivo_facturacion.Regimen
+        carpeta_tipo_archivo = 'CONTRIBUTIVO' if regimen == 'C' else 'SUBSIDIADO' if regimen == 'S' else None
+        if carpeta_tipo_archivo is None:
+            raise ValueError(f"Regimen desconocido: {regimen}")
+
+        fecha_hoy = datetime.now().strftime('%Y-%m-%d')
+        carpeta_prefijo_numero_factura = f"{prefijo}{factura_numero}"
+        carpeta_nombre_archivo = os.path.join(settings.MEDIA_ROOT, 'gdocumental', 'Radicacion', 'COLMEDICA', carpeta_tipo_archivo, fecha_hoy, nombre_usuario, carpeta_prefijo_numero_factura)
+        os.makedirs(carpeta_nombre_archivo, exist_ok=True)
+
+        tipos_presentes = {archivo.get("Tipo") for archivo in archivos_data}
+        if "RESULTADO" not in tipos_presentes:
+            if "HCNEURO" in tipos_presentes:
+                for archivo in archivos_data:
+                    if archivo.get("Tipo") == "HCNEURO":
+                        archivo["Tipo"] = "RESULTADO"
+            elif "HCLINICA" in tipos_presentes:
+                for archivo in archivos_data:
+                    if archivo.get("Tipo") == "HCLINICA":
+                        archivo["Tipo"] = "RESULTADO"
+
+        RENOMBRAR_TIPOS = {
+            "FACTURA":      lambda p, n: f"FEV_901119103_{p}{n}.pdf",
+            "COMPROBANTE":  lambda p, n: f"CRC_901119103_{p}{n}.pdf",
+            "RESULTADO":    lambda p, n: f"HEV_901119103_{p}{n}.pdf",
+            "ORDEN":        lambda p, n: f"OPF_901119103_{p}{n}.pdf",
+            "AUTORIZACION": lambda p, n: f"PDE_901119103_{p}{n}.pdf",
+        }
+
+        for archivo in archivos_data:
+            tipo = archivo.get("Tipo")
+            ruta_origen_relative = unquote(archivo.get("RutaArchivo")).replace(settings.MEDIA_URL, "").lstrip("/")
+            ruta_origen = os.path.normpath(os.path.join(settings.MEDIA_ROOT, ruta_origen_relative))
+            if not os.path.exists(ruta_origen) or tipo not in RENOMBRAR_TIPOS:
+                continue
+            nuevo_nombre = RENOMBRAR_TIPOS[tipo](prefijo, factura_numero)
+            ruta_destino_archivo = os.path.join(carpeta_nombre_archivo, nuevo_nombre)
+            shutil.copy(ruta_origen, ruta_destino_archivo)
+
+        carpeta_json_txt = os.path.join('/mnt/prueba/DocsFESIESA', f'Factura-FES{factura_numero}')
+
+        if os.path.exists(carpeta_json_txt):
+            for archivo_nombre in os.listdir(carpeta_json_txt):
+                extension = os.path.splitext(archivo_nombre)[1].lower()
+                ruta_archivo_origen = os.path.join(carpeta_json_txt, archivo_nombre)
+
+                if extension == '.xml':
+                    nuevo_nombre = f"XML_901119103_{prefijo}{factura_numero}.xml"
+                    ruta_archivo_destino = os.path.join(carpeta_nombre_archivo, nuevo_nombre)
+
+                elif extension == '.json':
+                    with open(ruta_archivo_origen, 'r', encoding='utf-8') as f:
+                        contenido_json = f.read()
+                    contenido_stripped = contenido_json.lstrip()
+                    if not (contenido_stripped.startswith('{"numDocumentoIdObligado') or
+                            os.path.splitext(archivo_nombre)[0].upper() == f'FES{factura_numero}'.upper()):
+                        continue
+                    nuevo_nombre = f"RIPS_901119103_FES{factura_numero}.json"
+                    ruta_archivo_destino = os.path.join(carpeta_nombre_archivo, nuevo_nombre)
+
+                elif extension == '.txt':
+                    nuevo_nombre = f"CUV_901119103_FES{factura_numero}.json"
+                    ruta_archivo_destino = os.path.join(carpeta_nombre_archivo, nuevo_nombre)
+
+                else:
+                    continue
+
+                if os.path.exists(ruta_archivo_origen):
+                    shutil.copy(ruta_archivo_origen, ruta_archivo_destino)
+                else:
+                    print(f"Archivo no encontrado: {ruta_archivo_origen}")
+        else:
+            print(f"No se encontró la carpeta {carpeta_json_txt}")
+
+        archivos_a_verificar.update(Radicado=True)
+
+        return JsonResponse({
+            "success": True,
+            "detail": f"Archivos copiados y renombrados correctamente en {carpeta_nombre_archivo}"
+        }, status=200)
+
+    except ArchivoFacturacion.DoesNotExist:
+        return JsonResponse({"success": False, "detail": f"No se encontraron archivos para la admisión con número {numero_admision}"}, status=404)
+    except Exception as e:
+        return JsonResponse({"success": False, "detail": str(e)}, status=500)
 
 
 # === RADICACION FOMAG ===

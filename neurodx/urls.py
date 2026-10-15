@@ -40,11 +40,13 @@ from gedocumental.views import (
     radicar_fomag_view,
     radicar_policia_view,
     radicar_ejercito_view,
+    radicar_colmedica_view,
     radicar_mes01_view,
     radicar_san02_view,
     radicar_other_view,
 )
 from gedocumental.utils.codigoentidad import obtener_hallazgos
+from gedocumental.views_ia import hallazgos_ia
 from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote, debug_siesa_login, generar_pdf_enfermeria, generar_pdfs_enfermeria_lote
 
 # =============================================================================
@@ -70,6 +72,7 @@ gedocumental_urls = [
     path('archivos/<str:consecutivo>/editar/<int:archivo_id>/',  ArchivoEditView.as_view(),              name='v2-archivo-edit'),
     path('eliminar-archivo/',                                    ArchivoFacturacionDeleteView.as_view(), name='v2-archivo-delete'),
     path('hallazgos/',                                           obtener_hallazgos,                      name='v2-hallazgos'),
+    path('hallazgos-ia/',                                        hallazgos_ia,                           name='v2-hallazgos-ia'),
     path('lista-codigo-entidad/',                                CodigoListView.as_view(),               name='v2-codigo-entidad'),
     path('actualizar-regimen/<int:consecutivo>/',                ActualizarRegimenArchivosView.as_view(),name='v2-actualizar-regimen'),
     path('admision-revision/<int:consecutivo>/',                 AdmisionCuentaMedicaView.as_view(),     name='v2-admision-revision'),
@@ -87,6 +90,7 @@ gedocumental_urls = [
     path('radicar-fomag/<int:numero_admision>/<str:idusuario>/',           radicar_fomag_view,           name='v2-radicar-fomag'),
     path('radicar-policia/<int:numero_admision>/<str:idusuario>/',         radicar_policia_view,         name='v2-radicar-policia'),
     path('radicar-ejercito/<int:numero_admision>/<str:idusuario>/',        radicar_ejercito_view,        name='v2-radicar-ejercito'),
+    path('radicar-colmedica/<int:numero_admision>/<str:idusuario>/',       radicar_colmedica_view,       name='v2-radicar-colmedica'),
     path('radicar-medisanitas/<int:numero_admision>/<str:idusuario>/',     radicar_mes01_view,           name='v2-radicar-medisanitas'),
     path('radicar-san02/<int:numero_admision>/<str:idusuario>/',           radicar_san02_view,           name='v2-radicar-san02'),
     path('radicar-otros/<int:numero_admision>/<str:idusuario>/',           radicar_other_view,           name='v2-radicar-otros'),
