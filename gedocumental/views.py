@@ -33,7 +33,8 @@ from rest_framework.permissions import AllowAny
 from datetime import date
 from rest_framework.decorators import api_view, permission_classes
 import zipfile
-from gedocumental.services.ai_revision import revisar_archivo, obtener_contexto_admision
+from gedocumental.services.ai_revision import revisar_archivo
+from gedocumental.services.validacion_paciente import validar_datos_paciente
 
 
 # ── Helper ZeusSalud ─────────────────────────────────────────────────────────
@@ -153,6 +154,7 @@ class GeDocumentalView(APIView):
                     'ContratoAlias':     admision_data[18],
                     'ContratoRegimen':   admision_data[19],
                     'FechaIngreso':      admision_data[20].isoformat() if admision_data[20] else None,
+                    'ValidacionPaciente': validar_datos_paciente(consecutivo),
                 }
 
                 return Response({
@@ -205,8 +207,6 @@ class ArchivoUploadView(APIView):
                 settings.MEDIA_ROOT, 'gdocumental', 'archivosFacturacion', str(admision.Consecutivo)
             )
             os.makedirs(folder_path, exist_ok=True)
-            datos_admision = None  # contexto Zeus para la IA, se consulta una sola vez
-
             for archivo in archivos:
                 archivo.seek(0)
                 hash_archivo = calcular_hash_archivo(archivo)
@@ -247,8 +247,13 @@ class ArchivoUploadView(APIView):
                 archivo_obj.save()
 
                 # Revisión automática con IA (si OPENAI_API_KEY está configurada)
-                if datos_admision is None and getattr(settings, 'REVISAR_CON_IA', False):
-                    datos_admision = obtener_contexto_admision(admision.Consecutivo)
+                datos_admision = {
+                    "consecutivo": admision.Consecutivo,
+                    "paciente": "",
+                    "entidad": admision.CodigoEntidad or admision.IDPaciente or "",
+                    "procedimiento": tipo_documento,
+                    "fecha": str(admision.FechaCreado.date()) if admision.FechaCreado else "",
+                }
                 ai_revision = revisar_archivo(archivo_obj, datos_admision)
 
                 hashes_existentes.add(hash_archivo)
