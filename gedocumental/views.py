@@ -34,7 +34,6 @@ from datetime import date
 from rest_framework.decorators import api_view, permission_classes
 import zipfile
 from gedocumental.services.ai_revision import revisar_archivo
-from gedocumental.services.validacion_paciente import validar_datos_paciente
 
 
 # ── Helper ZeusSalud ─────────────────────────────────────────────────────────
@@ -154,7 +153,7 @@ class GeDocumentalView(APIView):
                     'ContratoAlias':     admision_data[18],
                     'ContratoRegimen':   admision_data[19],
                     'FechaIngreso':      admision_data[20].isoformat() if admision_data[20] else None,
-                    'ValidacionPaciente': validar_datos_paciente(consecutivo),
+                    'ValidacionPaciente': None,
                 }
 
                 return Response({
