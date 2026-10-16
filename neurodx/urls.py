@@ -46,7 +46,6 @@ from gedocumental.views import (
     radicar_other_view,
 )
 from gedocumental.utils.codigoentidad import obtener_hallazgos
-from gedocumental.views_ia import hallazgos_ia
 from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote, debug_siesa_login, generar_pdf_enfermeria, generar_pdfs_enfermeria_lote
 
 # =============================================================================
@@ -72,7 +71,6 @@ gedocumental_urls = [
     path('archivos/<str:consecutivo>/editar/<int:archivo_id>/',  ArchivoEditView.as_view(),              name='v2-archivo-edit'),
     path('eliminar-archivo/',                                    ArchivoFacturacionDeleteView.as_view(), name='v2-archivo-delete'),
     path('hallazgos/',                                           obtener_hallazgos,                      name='v2-hallazgos'),
-    path('hallazgos-ia/',                                        hallazgos_ia,                           name='v2-hallazgos-ia'),
     path('lista-codigo-entidad/',                                CodigoListView.as_view(),               name='v2-codigo-entidad'),
     path('actualizar-regimen/<int:consecutivo>/',                ActualizarRegimenArchivosView.as_view(),name='v2-actualizar-regimen'),
     path('admision-revision/<int:consecutivo>/',                 AdmisionCuentaMedicaView.as_view(),     name='v2-admision-revision'),
