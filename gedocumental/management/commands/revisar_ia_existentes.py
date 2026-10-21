@@ -6,6 +6,7 @@ Uso:
   python manage.py revisar_ia_existentes --admision 17206
   python manage.py revisar_ia_existentes --desde 2026-10-01 --hasta 2026-10-15 --limite 50
   python manage.py revisar_ia_existentes --admision 17206 --forzar   # revisa aunque ya tenga revisión
+  python manage.py revisar_ia_existentes --desde 2026-10-20 --solo-hallazgos  # solo los que tienen hallazgo pendiente
 
 Por defecto omite los archivos que ya tienen alguna revisión IA.
 Cada archivo es una llamada a OpenAI: use --limite para controlar el costo.
@@ -13,7 +14,7 @@ Cada archivo es una llamada a OpenAI: use --limite para controlar el costo.
 
 from django.core.management.base import BaseCommand, CommandError
 
-from gedocumental.models import ArchivoFacturacion
+from gedocumental.models import ArchivoFacturacion, RevisionIA
 from gedocumental.services.ai_revision import TIPOS_SIN_REVISION_IA, obtener_contexto_admision, revisar_archivo
 
 
@@ -26,6 +27,8 @@ class Command(BaseCommand):
         parser.add_argument('--hasta', help="Fecha de cargue hasta (YYYY-MM-DD)")
         parser.add_argument('--limite', type=int, default=20)
         parser.add_argument('--forzar', action='store_true', help="Revisar aunque ya tenga revisión IA")
+        parser.add_argument('--solo-hallazgos', action='store_true',
+                            help="Revisar de nuevo solo los archivos con un hallazgo IA pendiente (no los que están OK)")
 
     def handle(self, *args, **o):
         if not (o['admision'] or o['desde']):
@@ -38,7 +41,11 @@ class Command(BaseCommand):
             archivos = archivos.filter(FechaCreacionArchivo__date__gte=o['desde'])
         if o['hasta']:
             archivos = archivos.filter(FechaCreacionArchivo__date__lte=o['hasta'])
-        if not o['forzar']:
+        if o['solo_hallazgos']:
+            con_hallazgo = (RevisionIA.objects.filter(Resuelta=False, IdArchivo__isnull=False)
+                            .exclude(TipoHallazgo='OK').values('IdArchivo'))
+            archivos = archivos.filter(IdArchivo__in=con_hallazgo)
+        elif not o['forzar']:
             archivos = archivos.filter(RevisionesIA__isnull=True)
         archivos = list(archivos.order_by('Admision_id', 'IdArchivo')[:o['limite']])
 
