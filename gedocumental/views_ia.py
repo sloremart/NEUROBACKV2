@@ -9,6 +9,7 @@ GET api/v2/gedocumental/hallazgos-ia/
   &admision=17206
 """
 
+import re
 from collections import Counter
 from datetime import datetime
 
@@ -19,8 +20,32 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from gedocumental.models import RevisionIA
-from gedocumental.services.ai_revision import TIPOS_SIN_REVISION_IA
+from gedocumental.services.ai_revision import TIPOS_SIN_REVISION_IA, _reparar_texto
 from gedocumental.views import get_admisiones_zeus_bulk
+
+
+def procedimientos_por_admision(admision_ids) -> dict:
+    """{admisión: '891704 - ESTUDIO FISIOLÓGICO COMPLETO DEL SUEÑO; ...'} desde sis_deta (ZeusSalud)."""
+    resultado = {}
+    ids = [int(i) for i in admision_ids if i]
+    with connections['zeussalud'].cursor() as cursor:
+        for i in range(0, len(ids), 500):
+            bloque = ids[i:i + 500]
+            marcadores = ', '.join(['%s'] * len(bloque))
+            cursor.execute(
+                f"""SELECT sd.estudio, LTRIM(RTRIM(sd.cups)), LTRIM(RTRIM(sd.descripcion))
+                    FROM sis_deta sd WHERE sd.estudio IN ({marcadores})""",
+                bloque,
+            )
+            for estudio, cups, desc in cursor.fetchall():
+                # Solo procedimientos con código CUPS (sis_deta también trae insumos y medicamentos)
+                if not re.fullmatch(r'\d{5}[0-9A-Z]', (cups or '').strip().upper()):
+                    continue
+                texto = f"{cups} - {_reparar_texto(desc or '')}" if cups else _reparar_texto(desc or '')
+                actual = resultado.setdefault(int(estudio), [])
+                if texto not in actual:
+                    actual.append(texto)
+    return {k: '; '.join(v) for k, v in resultado.items()}
 from login.models import CustomUser
 
 
@@ -60,6 +85,7 @@ def hallazgos_ia(request):
         admision_ids = list({h.AdmisionId for h in hallazgos})
         with connections['zeussalud'].cursor() as cursor:
             admisiones = get_admisiones_zeus_bulk(cursor, admision_ids)
+        procedimientos = procedimientos_por_admision(admision_ids)
         usuarios = dict(
             CustomUser.objects.filter(id__in={h.UsuarioId for h in hallazgos if h.UsuarioId})
             .values_list('id', 'nombre')
@@ -76,7 +102,8 @@ def hallazgos_ia(request):
                 'IdRevision':      h.IdRevision,
                 'IdArchivo':       h.IdArchivo_id,
                 'Admision':        h.AdmisionId,
-                'Paciente':        ' '.join((adm[3] or '').split()) if adm else '',
+                'Paciente':        _reparar_texto(' '.join((adm[3] or '').split())) if adm else '',
+                'Procedimiento':   procedimientos.get(h.AdmisionId, ''),
                 'Identificacion':  adm[1] if adm else '',
                 'Entidad':         (adm[2] or '').strip() if adm else '',
                 'TipoDocumento':   h.TipoDocumento,
@@ -251,7 +278,7 @@ def bandeja_cuentas_medicas(request):
 
             data.append({
                 'Admision':         adm_id,
-                'Paciente':         ' '.join((adm[3] or '').split()) if adm else '',
+                'Paciente':         _reparar_texto(' '.join((adm[3] or '').split())) if adm else '',
                 'Identificacion':   adm[1] if adm else '',
                 'Entidad':          entidad,
                 'Contrato':         contratos.get(adm_id) or entidad,
