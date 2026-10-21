@@ -712,6 +712,10 @@ def _diferencia_clara(doc, adm) -> bool:
     def val(d, k):
         return str(d.get(k) or '').upper().strip()
 
+    # Lateralidad opuesta (derecha vs izquierda) es diferencia clara en cualquier estudio o procedimiento
+    if {val(doc, 'lateralidad'), val(adm, 'lateralidad')} == {'DERECHA', 'IZQUIERDA'}:
+        return True
+
     desconocidos = {'', 'OTRO', 'NO_APLICA', 'NO_ESPECIFICA', 'OTRA', 'PROCEDIMIENTO'}
     mod_d, mod_a = val(doc, 'modalidad'), val(adm, 'modalidad')
     if mod_d in desconocidos or mod_a in desconocidos:
