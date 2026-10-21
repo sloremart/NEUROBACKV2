@@ -646,7 +646,7 @@ def _parse_hidden_inputs(html: str) -> dict:
     return fields
 
 
-def _fetch_pdf_enfermeria(estudio: int) -> bytes:
+def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True) -> bytes:
     """
     Descarga el PDF de nota de enfermería de SIESA para un estudio
     de administración de medicamentos (ufuncional = 12).
@@ -705,6 +705,8 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
                 ultimo_error = (f"El archivo descargado no es un PDF. URL: {pdf_url}. "
                                 f"Content-Type: {r3.headers.get('Content-Type', '?')}. Inicio: {r3.content[:200]}")
                 continue
+            if not verificar:
+                return r3.content
             corresponde = _pdf_corresponde_al_estudio(r3.content, estudio)
             if corresponde is not False:      # True, o None si no se puede verificar (sin texto)
                 return r3.content
