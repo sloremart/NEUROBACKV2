@@ -165,6 +165,12 @@ def bandeja_cuentas_medicas(request):
             RevisionIA.objects.filter(AdmisionId__in=ids, IdArchivo__in=evaluados.values('IdArchivo'))
             .values('AdmisionId').annotate(n=Count('IdArchivo', distinct=True)).values_list('AdmisionId', 'n')
         )
+        # Tipos de documento que la IA revisó y aprobó (OK) en un archivo que sigue existiendo
+        tipos_ok_ia = {}
+        for adm_id, tipo in RevisionIA.objects.filter(
+                AdmisionId__in=ids, IdArchivo__isnull=False, TipoHallazgo='OK',
+        ).values_list('AdmisionId', 'IdArchivo__Tipo'):
+            tipos_ok_ia.setdefault(adm_id, set()).add(tipo)
         tipos_cargados = {}
         for adm_id, tipo in ArchivoFacturacion.objects.filter(
                 Admision_id__in=ids, Tipo__in=list(DOCUMENTOS_REQUERIDOS) + ['FACTURA']
@@ -225,7 +231,9 @@ def bandeja_cuentas_medicas(request):
                 estado_ia = 'documentos_incompletos'
             elif not tiene_resultado:
                 estado_ia = 'esperando_resultado'
-            elif revisados >= docs:
+            elif revisados >= docs and set(DOCUMENTOS_REQUERIDOS) <= tipos_ok_ia.get(adm_id, set()):
+                # Pre-auditada solo si la IA revisó y aprobó los 4 documentos requeridos
+                # (evita que entren admisiones antiguas con 0/0 documentos por revisar)
                 estado_ia = 'listas'
             else:
                 estado_ia = 'sin_revision_ia'
