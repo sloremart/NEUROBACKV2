@@ -354,7 +354,33 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(ajustes)
         resultado["ajuste_sistema"] = list(ajustes)
 
+    _coherencia_tipo_descripcion(resultado)
+
     return resultado
+
+
+def _coherencia_tipo_descripcion(resultado: dict) -> None:
+    """
+    La IA a veces devuelve un tipo de hallazgo con la descripción "Documento correcto"
+    (sobre todo tras la re-consulta). Si la descripción dice que está correcto y no hay
+    problema de paciente, procedimiento ni firma, el resultado es OK.
+    """
+    import unicodedata
+
+    def norm(t):
+        return unicodedata.normalize('NFKD', str(t or '')).encode('ascii', 'ignore').decode().lower().strip(' .')
+
+    desc = norm(resultado.get("descripcion"))
+    sin_problemas = (
+        resultado.get("paciente_coincide") != "NO"
+        and resultado.get("procedimientos_coinciden") != "NO"
+        and not str(resultado.get("firma_paciente", "")).upper() == "NO"
+    )
+    if resultado.get("tipo") != "OK" and desc in ("documento correcto", "ok", "correcto", "sin hallazgos") and sin_problemas:
+        resultado["tipo"] = "OK"
+        resultado["descripcion"] = "Documento correcto"
+    elif resultado.get("tipo") == "OK":
+        resultado["descripcion"] = "Documento correcto"
 
 
 def _sin_dato(valor) -> bool:
