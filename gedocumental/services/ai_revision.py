@@ -436,6 +436,14 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
 
     # Paciente: el sistema decide entre "otra persona", "misma persona con el nombre mal escrito"
     # y "no se leyó el nombre" (la IA a veces toma "RESULTADO" o "PACIENTE" como si fuera el nombre).
+    # Si la IA aceptó el paciente pero el nombre del PDF digital tiene letras distintas a las de la
+    # admisión, es "nombre mal escrito" (solo con texto real del PDF: en imágenes la IA puede leer mal letras).
+    if (resultado.get("paciente_coincide") == "SI" and texto
+            and _nombre_en_texto(resultado.get("nombre_documento"), texto)
+            and not _mismo_paciente(resultado, datos_admision)
+            and _clasificar_paciente(resultado, texto, datos_admision) == "nombre_mal_escrito"):
+        resultado["paciente_coincide"] = "NO"
+
     if resultado.get("paciente_coincide") == "NO":
         clase = _clasificar_paciente(resultado, texto, datos_admision)
         if clase == "misma_persona":
@@ -606,6 +614,12 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
     if parecido or mismo_id:
         return "nombre_mal_escrito"
     return "otra_persona"
+
+
+def _nombre_en_texto(nombre, texto) -> bool:
+    """True si todas las palabras del nombre (≥ 2) aparecen tal cual en el texto del PDF."""
+    palabras = [t for t in _tokens_nombre(nombre) if t not in _NO_SON_NOMBRE]
+    return len(palabras) >= 2 and set(palabras) <= set(_tokens_nombre(texto))
 
 
 def _solo_motivo_paciente(descripcion) -> bool:
