@@ -383,10 +383,11 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         ajustes["procedimientos_coinciden"] = "SI"
     if ((resultado.get("procedimientos_coinciden") == "NO" or resultado["tipo"] in ("REPORTE", "SOPORTES"))
             and "procedimientos_coinciden" not in ajustes
-            and _consulta_documentada(texto, datos_admision)):
-        notas.append("el documento es la HISTORIA CLÍNICA de una consulta de la MISMA especialidad que el CUPS de la "
-                     "admisión (primera vez, control o seguimiento da igual); los procedimientos que menciona como "
-                     "antecedentes u ordenados para después NO son lo realizado: procedimientos_coinciden = SI")
+            and (_consulta_documentada(texto, datos_admision) or _procedimiento_documentado(texto, datos_admision))):
+        notas.append("el documento SÍ documenta lo realizado según el CUPS de la admisión (historia clínica de la "
+                     "MISMA especialidad de la consulta, o descripción del MISMO procedimiento aunque se escriba "
+                     "distinto); lo que menciona como antecedentes u ordenado para después NO es lo realizado: "
+                     "procedimientos_coinciden = SI")
         ajustes["procedimientos_coinciden"] = "SI"
     if (_es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
             and resultado.get("paciente_coincide") != "NO"
@@ -619,6 +620,53 @@ ESPECIALIDADES = (
     ('DOLOR',            (r'\bDOLOR\b.*\bPALIATIV', r'CLINICA\W+DEL\W+DOLOR')),
     ('MEDICINA_GENERAL', (r'MEDICINA\W+GENERAL',)),
 )
+
+
+# Procedimientos (no imágenes): palabras equivalentes con que se documentan
+_GRUPOS_PROCEDIMIENTO = (
+    ('INFILTRAC', 'INYECC', 'INFUSI', 'VISCOSUPLEMENT', 'APLICACION DE', 'BLOQUEO'),
+    ('ELECTROMIOGRAF', 'EMG', 'NEUROCONDUC', 'CONDUCCION NERVIOSA'),
+    ('ELECTROENCEFALOGRAF', 'EEG', 'VIDEOTELEMETR', 'VIDEO EEG'),
+    ('POLISOMNOGRAF', 'ESTUDIO DEL SUENO', 'TITULACION'),
+    ('POTENCIALES EVOCADOS', 'POTENCIAL EVOCADO', 'PEATC', 'BERA'),
+    ('TERAPIA FISICA', 'FISIOTERAPIA', 'TERAPIA OCUPACIONAL'),
+)
+_IMAGENES = r'TOMOGRAF|RESONANCIA|RADIOGRAF|ECOGRAF|ULTRASONID|MAMOGRAF|DENSITOMETR|DOPPLER|\bRX\b|\bTAC\b'
+_PALABRAS_VACIAS = {'CON', 'SIN', 'DE', 'DEL', 'LA', 'LAS', 'LOS', 'EL', 'EN', 'POR', 'PARA', 'CADA', 'UNO', 'MAS',
+                    'O', 'Y', 'A', 'HASTA', 'OTRA', 'OTRO', 'MEDICAMENTO', 'LESIONES', 'SUSTANCIA', 'CANT'}
+
+
+def _procedimiento_documentado(texto: str, datos_admision: dict) -> bool:
+    """
+    True si un CUPS de la admisión que NO es imagen ni consulta está documentado en el texto,
+    por su palabra principal o un equivalente (ej. CUPS "INFILTRACIÓN INTRALESIONAL" y documento
+    "VISCOSUPLEMENTACION (INFILTRACION INTRARTICULAR)"). Las imágenes no se validan así porque
+    en ellas importan la región y la lateralidad (eso lo compara _mismo_estudio).
+    """
+    import re
+    import unicodedata
+
+    def plano(t):
+        t = unicodedata.normalize('NFKD', t or '').encode('ascii', 'ignore').decode().upper()
+        return ' '.join(re.sub(r'[^A-Z]+', ' ', t).split())
+
+    doc = plano(texto)
+    if not doc:
+        return False
+    for cups in datos_admision.get('cups') or []:
+        c = plano(re.sub(r'^\s*\S+\s*-\s*', '', cups))  # quita el código
+        if not c or 'CONSULTA' in c or re.search(_IMAGENES, c):
+            continue
+        for grupo in _GRUPOS_PROCEDIMIENTO:
+            if any(r in c for r in grupo):
+                if any(r in doc for r in grupo):
+                    return True
+                break
+        else:
+            palabras = [w for w in c.split() if len(w) >= 5 and w not in _PALABRAS_VACIAS]
+            if palabras and palabras[0][:7] in doc:
+                return True
+    return False
 
 
 def _norm_especialidad(texto: str) -> str:
