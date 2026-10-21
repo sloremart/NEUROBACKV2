@@ -422,6 +422,16 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(ajustes)
         resultado["ajuste_sistema"] = list(ajustes)
 
+    # RESULTADOS: un hallazgo de procedimiento solo se mantiene si hay una DIFERENCIA CLARA
+    # (otro tipo de estudio, otra región/lateralidad/contraste en imágenes, otra especialidad).
+    # Falta del código CUPS, redacción distinta o detalle insuficiente NO son hallazgo.
+    if ((tipo_documento or '').upper() == 'RESULTADO' and resultado["tipo"] == "REPORTE"
+            and resultado.get("paciente_coincide") != "NO"
+            and not _diferencia_clara(resultado.get("estudio_documento"), resultado.get("estudio_admision"))):
+        logger.info("RESULTADO sin diferencia clara de estudio: se descarta '%s'", resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
+                         ajuste_resultado=True)
+
     _coherencia_tipo_descripcion(resultado)
 
     return resultado
@@ -687,6 +697,43 @@ def _norm_especialidad(texto: str) -> str:
 
 def _es_comprobante(tipo_documento) -> bool:
     return (tipo_documento or '').upper() in TIPOS_CON_FIRMA
+
+
+def _diferencia_clara(doc, adm) -> bool:
+    """
+    True solo si el estudio del documento es CLARAMENTE otro que el de la admisión:
+    otra modalidad (resonancia vs tomografía, EMG vs EEG...), y en imágenes otra región,
+    lateralidad opuesta o contraste opuesto; en consultas, otra especialidad.
+    Si falta información (NO_APLICA, OTRO, vacío), no hay diferencia clara.
+    """
+    if not isinstance(doc, dict) or not isinstance(adm, dict):
+        return False
+
+    def val(d, k):
+        return str(d.get(k) or '').upper().strip()
+
+    desconocidos = {'', 'OTRO', 'NO_APLICA', 'NO_ESPECIFICA', 'OTRA', 'PROCEDIMIENTO'}
+    mod_d, mod_a = val(doc, 'modalidad'), val(adm, 'modalidad')
+    if mod_d in desconocidos or mod_a in desconocidos:
+        return False
+    combinado = {'EMG', 'NEUROCONDUCCION', 'EMG_NEUROCONDUCCION'}
+    if mod_d != mod_a and not (mod_d in combinado and mod_a in combinado):
+        return True
+
+    if mod_d == 'CONSULTA':
+        esp_d, esp_a = _norm_especialidad(val(doc, 'especialidad')), _norm_especialidad(val(adm, 'especialidad'))
+        return bool(esp_d and esp_a and esp_d != esp_a)
+
+    if mod_d in ('TAC', 'RM', 'RX', 'ECOGRAFIA'):
+        reg_d, reg_a = val(doc, 'region'), val(adm, 'region')
+        if reg_d not in desconocidos and reg_a not in desconocidos and reg_d != reg_a:
+            return True
+        lat = {val(doc, 'lateralidad'), val(adm, 'lateralidad')}
+        if lat == {'DERECHA', 'IZQUIERDA'}:
+            return True
+        if {val(doc, 'contraste'), val(adm, 'contraste')} == {'CON', 'SIN'}:
+            return True
+    return False
 
 
 def _mismo_estudio(doc, adm) -> bool:
