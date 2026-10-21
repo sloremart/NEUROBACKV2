@@ -434,6 +434,22 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_resultado=True)
 
+    # Paciente: el sistema decide entre "otra persona", "misma persona con el nombre mal escrito"
+    # y "no se leyó el nombre" (la IA a veces toma "RESULTADO" o "PACIENTE" como si fuera el nombre).
+    if resultado.get("paciente_coincide") == "NO":
+        clase = _clasificar_paciente(resultado, texto, datos_admision)
+        if clase == "misma_persona":
+            resultado["paciente_coincide"] = "SI"
+            if resultado["tipo"] == "INFORMACION" and _solo_motivo_paciente(resultado.get("descripcion")):
+                resultado.update(tipo="OK", descripcion="Documento correcto")
+        elif clase == "nombre_mal_escrito":
+            resultado.update(
+                tipo="INFORMACION",
+                descripcion=(f"Nombre del usuario incorrecto: documento '{resultado.get('nombre_documento')}', "
+                             f"admisión '{datos_admision.get('paciente')}'."),
+                paciente_coincide="NOMBRE_MAL_ESCRITO",
+            )
+
     # Mismo código CUPS en el documento y en la admisión: el procedimiento coincide, aunque la
     # descripción esté escrita distinto ("...TITULACION DE DISPOSITIVO MEDICO" vs "...DE CPAP NASAL").
     if (resultado["tipo"] != "OK" and resultado.get("paciente_coincide") != "NO"
@@ -540,6 +556,66 @@ def _tokens_nombre(texto) -> list[str]:
     t = unicodedata.normalize('NFKD', str(texto or '')).encode('ascii', 'ignore').decode().lower()
     t = re.sub(r'[^a-z\s]', ' ', t.replace('_', ' '))
     return [p for p in t.split() if len(p) >= 3 and p not in ('del', 'los', 'las', 'cc', 'ti', 'rc')]
+
+
+# Palabras que la IA a veces devuelve como "nombre" y no lo son
+_NO_SON_NOMBRE = {'resultado', 'documento', 'informe', 'reporte', 'paciente', 'nombre', 'aparece', 'examen',
+                  'estudio', 'historia', 'clinica', 'usuario', 'aplica', 'identificacion', 'datos'}
+
+
+def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> str:
+    """
+    Cuando la IA dice que el paciente NO coincide, decide con reglas fijas:
+      "misma_persona"      -> mismo nombre en otro formato, o el nombre no se leyó pero el número de
+                              documento / el nombre de la admisión aparecen en el texto
+      "nombre_mal_escrito" -> misma persona (mismo número de documento o nombre casi igual) pero con
+                              letras distintas en el nombre (PAULA vs PAOLA, RICON vs RINCON)
+      "otra_persona"       -> no hay evidencia de que sea el mismo paciente
+    """
+    import re
+    from difflib import SequenceMatcher
+
+    if _mismo_paciente(resultado, datos_admision):
+        return "misma_persona"
+
+    adm = _tokens_nombre(datos_admision.get('paciente'))
+    doc = [t for t in _tokens_nombre(resultado.get('nombre_documento') or resultado.get('paciente_documento'))
+           if t not in _NO_SON_NOMBRE]
+    id_adm = re.sub(r'\D', '', datos_admision.get('identificacion') or '')
+    id_doc = re.sub(r'\D', '', str(resultado.get('identificacion_documento') or ''))
+    numeros_texto = set(re.findall(r'\d{5,}', re.sub(r'[.,](?=\d{3})', '', texto or '')))
+    mismo_id = bool(id_adm) and (id_doc == id_adm or id_adm in numeros_texto)
+    if id_adm and id_doc and len(id_doc) >= 5 and id_doc != id_adm and id_adm not in numeros_texto:
+        return "otra_persona"
+
+    if len(doc) < 2:
+        # El nombre no se leyó bien: basta con que el documento o el nombre de la admisión estén en el texto
+        tokens_texto = set(_tokens_nombre(texto))
+        if mismo_id or (adm and all(t in tokens_texto for t in adm)):
+            return "misma_persona"
+        return "otra_persona"
+
+    # Nombre casi igual: cada palabra del documento se parece (≥ 0.8) a una distinta de la admisión
+    disponibles, parecido = list(adm), True
+    for palabra in doc:
+        mejor = max(disponibles, key=lambda a: SequenceMatcher(None, palabra, a).ratio(), default=None)
+        if mejor is None or SequenceMatcher(None, palabra, mejor).ratio() < 0.8:
+            parecido = False
+            break
+        disponibles.remove(mejor)
+    if parecido or mismo_id:
+        return "nombre_mal_escrito"
+    return "otra_persona"
+
+
+def _solo_motivo_paciente(descripcion) -> bool:
+    """True si el hallazgo solo habla del paciente (para poder anularlo cuando el sistema confirma que es el mismo)."""
+    import re
+    import unicodedata
+    d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    sobre_paciente = re.search(r'paciente|nombre|usuario|identificacion|documento de identidad', d)
+    otros = re.search(r'procedimiento|cups|estudio|firma|vencid|autorizacion|cantidad|legib|lateralidad', d)
+    return bool(sobre_paciente and not otros)
 
 
 def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
