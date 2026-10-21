@@ -456,6 +456,14 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             resultado["paciente_coincide"] = "SI"
             if resultado["tipo"] == "INFORMACION" and _solo_motivo_paciente(resultado.get("descripcion")):
                 resultado.update(tipo="OK", descripcion="Documento correcto")
+        elif clase == "documento_incorrecto":
+            resultado.update(
+                tipo="INFORMACION",
+                descripcion=(f"Número de documento incorrecto: documento '{resultado.get('identificacion_documento')}', "
+                             f"admisión '{datos_admision.get('identificacion')}' "
+                             f"(paciente {datos_admision.get('paciente')})."),
+                paciente_coincide="DOCUMENTO_INCORRECTO",
+            )
         elif clase == "nombre_mal_escrito":
             resultado.update(
                 tipo="INFORMACION",
@@ -582,6 +590,7 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
     Cuando la IA dice que el paciente NO coincide, decide con reglas fijas:
       "misma_persona"      -> mismo nombre en otro formato, o el nombre no se leyó pero el número de
                               documento / el nombre de la admisión aparecen en el texto
+      "documento_incorrecto" -> mismo nombre pero otro número de documento
       "nombre_mal_escrito" -> misma persona (mismo número de documento o nombre casi igual) pero con
                               letras distintas en el nombre (PAULA vs PAOLA, RICON vs RINCON)
       "otra_persona"       -> no hay evidencia de que sea el mismo paciente
@@ -600,6 +609,9 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
     numeros_texto = set(re.findall(r'\d{5,}', re.sub(r'[.,](?=\d{3})', '', texto or '')))
     mismo_id = bool(id_adm) and (id_doc == id_adm or id_adm in numeros_texto)
     if id_adm and id_doc and len(id_doc) >= 5 and id_doc != id_adm and id_adm not in numeros_texto:
+        # Mismo nombre con otro número: es el paciente, pero con el número de documento errado
+        if len(doc) >= 2 and all(t in adm for t in doc):
+            return "documento_incorrecto"
         return "otra_persona"
 
     if len(doc) < 2:
