@@ -14,7 +14,7 @@ Cada archivo es una llamada a OpenAI: use --limite para controlar el costo.
 from django.core.management.base import BaseCommand, CommandError
 
 from gedocumental.models import ArchivoFacturacion
-from gedocumental.services.ai_revision import obtener_contexto_admision, revisar_archivo
+from gedocumental.services.ai_revision import TIPOS_SIN_REVISION_IA, obtener_contexto_admision, revisar_archivo
 
 
 class Command(BaseCommand):
@@ -31,7 +31,7 @@ class Command(BaseCommand):
         if not (o['admision'] or o['desde']):
             raise CommandError("Indique --admision o --desde para no revisar todo el histórico")
 
-        archivos = ArchivoFacturacion.objects.all()
+        archivos = ArchivoFacturacion.objects.exclude(Tipo__in=TIPOS_SIN_REVISION_IA)
         if o['admision']:
             archivos = archivos.filter(Admision_id=o['admision'])
         if o['desde']:

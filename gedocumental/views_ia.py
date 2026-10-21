@@ -19,6 +19,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from gedocumental.models import RevisionIA
+from gedocumental.services.ai_revision import TIPOS_SIN_REVISION_IA
 from gedocumental.views import get_admisiones_zeus_bulk
 from login.models import CustomUser
 
@@ -27,7 +28,7 @@ from login.models import CustomUser
 def hallazgos_ia(request):
     try:
         p = request.query_params
-        revisiones = RevisionIA.objects.all()
+        revisiones = RevisionIA.objects.exclude(TipoDocumento__in=TIPOS_SIN_REVISION_IA)
 
         if p.get('fecha_inicio'):
             revisiones = revisiones.filter(Fecha__date__gte=p['fecha_inicio'])
@@ -135,7 +136,7 @@ def bandeja_cuentas_medicas(request):
 
     try:
         p = request.query_params
-        pendientes_cm = ArchivoFacturacion.objects.filter(RevisionPrimera=False)
+        pendientes_cm = ArchivoFacturacion.objects.filter(RevisionPrimera=False).exclude(Tipo__in=TIPOS_SIN_REVISION_IA)
         if p.get('fecha_inicio'):
             pendientes_cm = pendientes_cm.filter(FechaCreacionArchivo__date__gte=p['fecha_inicio'])
         if p.get('fecha_fin'):

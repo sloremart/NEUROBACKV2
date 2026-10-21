@@ -25,7 +25,7 @@ from django.db import connections
 from django.db.models import Max, Min
 
 from gedocumental.models import ArchivoFacturacion, RevisionIA
-from gedocumental.services.ai_revision import obtener_contexto_admision, revisar_archivo
+from gedocumental.services.ai_revision import TIPOS_SIN_REVISION_IA, obtener_contexto_admision, revisar_archivo
 
 TIPO = 'RESULTADO'
 
@@ -75,7 +75,7 @@ class Command(BaseCommand):
 
         # Admisiones que se están trabajando en GE Documental (con documentos distintos de FACTURA)
         admisiones = set(
-            ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO])
+            ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO, *TIPOS_SIN_REVISION_IA])
             .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'))
             .filter(primer__gte=ahora - timedelta(days=ventana))
             .values_list('Admision_id', flat=True)

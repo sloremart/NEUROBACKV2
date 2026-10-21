@@ -47,6 +47,8 @@ EXTENSIONES_REVISABLES = ('.pdf',) + EXTENSIONES_IMAGEN
 MAX_LADO_IMAGEN = 2000
 # Tipos de documento en los que hay que VER la página aunque tenga texto (firma manuscrita)
 TIPOS_CON_FIRMA = ('COMPROBANTE',)
+# Tipos de documento que NO se revisan con IA (Programación de Pagos: facturas de proveedor)
+TIPOS_SIN_REVISION_IA = ('FACTURAPROVEEDOR',)
 
 PROMPT_SISTEMA = """Eres un auditor experto en facturación de servicios de salud en Colombia.
 Revisas documentos de gestión documental (factura, comprobante, autorización, orden médica, resultado/informe, etc.)
@@ -860,6 +862,10 @@ def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
     No modifica EstadoRevision ni TipoHallazgo del archivo: la IA solo avisa,
     no bloquea el flujo de Cuentas Médicas.
     """
+
+    # Documentos de otros módulos (facturas de proveedor) no se revisan
+    if (archivo_obj.Tipo or '').upper() in TIPOS_SIN_REVISION_IA:
+        return None
 
     # Interruptor de emergencia — si REVISAR_CON_IA = False en settings, no hace nada
     if not getattr(settings, 'REVISAR_CON_IA', True):
