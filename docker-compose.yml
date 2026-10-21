@@ -27,7 +27,7 @@ services:
       - "5055:5055"
     env_file:
       - path: ../RPA_BOTS_HUB/.env
-        required: true
+        required: false
     environment:
       - TZ=America/Bogota
     volumes:
