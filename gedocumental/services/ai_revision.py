@@ -432,6 +432,16 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_resultado=True)
 
+    # Mismo código CUPS en el documento y en la admisión: el procedimiento coincide, aunque la
+    # descripción esté escrita distinto ("...TITULACION DE DISPOSITIVO MEDICO" vs "...DE CPAP NASAL").
+    if (resultado["tipo"] != "OK" and resultado.get("paciente_coincide") != "NO"
+            and _solo_motivo_procedimiento(resultado.get("descripcion"))
+            and _mismo_codigo_cups(texto, resultado.get("procedimientos_documento"), datos_admision)
+            and not _lateralidad_opuesta(resultado.get("estudio_documento"), resultado.get("estudio_admision"))):
+        logger.info("Mismo código CUPS en documento y admisión: se descarta '%s'", resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
+                         ajuste_codigo_cups=True)
+
     # ÓRDENES y AUTORIZACIONES: un hallazgo cuyo ÚNICO motivo es el procedimiento ("no se especifican
     # procedimientos", "no aparece el CUPS"...) se descarta si no hay diferencia clara de estudio.
     # Otros motivos (vencida, sin número, ilegible, cantidades, firma) se mantienen.
@@ -709,6 +719,27 @@ def _norm_especialidad(texto: str) -> str:
 
 def _es_comprobante(tipo_documento) -> bool:
     return (tipo_documento or '').upper() in TIPOS_CON_FIRMA
+
+
+def _codigos_cups(texto) -> set:
+    """Códigos CUPS (6 caracteres que empiezan por dígito, ej. 891703, 89070A) presentes en un texto."""
+    import re
+    return set(re.findall(r'(?<![0-9A-Z])(\d{5}[0-9A-Z])(?![0-9A-Z])', str(texto or '').upper()))
+
+
+def _mismo_codigo_cups(texto, procedimientos_documento, datos_admision) -> bool:
+    """True si el documento trae al menos un código CUPS que también está en la admisión."""
+    admision = set()
+    for cups in datos_admision.get('cups') or []:
+        admision |= _codigos_cups(str(cups).split(' - ')[0])
+    return bool(admision & (_codigos_cups(texto) | _codigos_cups(procedimientos_documento)))
+
+
+def _lateralidad_opuesta(doc, adm) -> bool:
+    if not isinstance(doc, dict) or not isinstance(adm, dict):
+        return False
+    lados = {str(doc.get('lateralidad') or '').upper(), str(adm.get('lateralidad') or '').upper()}
+    return lados == {'DERECHA', 'IZQUIERDA'}
 
 
 def _solo_motivo_procedimiento(descripcion) -> bool:
