@@ -626,6 +626,8 @@ def _tokens_nombre(texto) -> list[str]:
     import re
     import unicodedata
     t = _reparar_texto(str(texto or ''))
+    # Vocal tildada dañada por la codificación de Zeus ("HERNÃ?NDEZ" = HERNÁNDEZ): una sola letra ilegible
+    t = re.sub(r'Ã[\?�\u0081\u008d\u008f\u0090\u009d]', '#', t)
     # Letras ilegibles por la codificación ("CASTA?EDA", "CASTA\ufffdEDA") quedan como comodín '#'
     t = re.sub(r'(?<=[A-Za-z\u00C0-\u017F])[\?\ufffd](?=[A-Za-z\u00C0-\u017F])', '#', t)
     t = unicodedata.normalize('NFKD', t).encode('ascii', 'ignore').decode().lower()
@@ -688,8 +690,10 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
     numeros_texto = set(re.findall(r'\d{5,}', re.sub(r'[.,](?=\d{3})', '', texto or '')))
     mismo_id = bool(id_adm) and (id_doc == id_adm or id_adm in numeros_texto)
     if id_adm and id_doc and len(id_doc) >= 5 and id_doc != id_adm and id_adm not in numeros_texto:
-        # Mismo nombre con otro número: es el paciente, pero con el número de documento errado
-        if len(doc) >= 2 and all(_buscar_palabra(t, adm) for t in doc):
+        # Mismo nombre (o casi: una letra distinta) con otro número: es el paciente, pero con el
+        # número de documento errado
+        if len(doc) >= 2 and (_mismo_paciente(dict(resultado, identificacion_documento=''), datos_admision)
+                              or _nombre_casi_igual(doc, adm)):
             return "documento_incorrecto"
         return "otra_persona"
 
@@ -702,17 +706,23 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
             return "misma_persona"
         return "sin_datos_paciente"
 
-    # Nombre casi igual: cada palabra del documento se parece (≥ 0.8) a una distinta de la admisión
-    disponibles, parecido = list(adm), True
+    if _nombre_casi_igual(doc, adm) or mismo_id:
+        return "nombre_mal_escrito"
+    return "otra_persona"
+
+
+def _nombre_casi_igual(doc: list, adm: list) -> bool:
+    """Cada palabra del documento se parece (≥ 0.8) a una distinta de la admisión (URAN / HURAN)."""
+    from difflib import SequenceMatcher
+    disponibles = list(adm)
+    if len(doc) < 2:
+        return False
     for palabra in doc:
         mejor = max(disponibles, key=lambda a: SequenceMatcher(None, palabra, a).ratio(), default=None)
         if mejor is None or SequenceMatcher(None, palabra, mejor).ratio() < 0.8:
-            parecido = False
-            break
+            return False
         disponibles.remove(mejor)
-    if parecido or mismo_id:
-        return "nombre_mal_escrito"
-    return "otra_persona"
+    return True
 
 
 def _nombre_en_texto(nombre, texto) -> bool:
@@ -757,7 +767,7 @@ def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
     disponibles = list(adm)
     for i, palabra in enumerate(doc):
         igual = _buscar_palabra(palabra, disponibles)
-        if igual is None and i == len(doc) - 1 and len(palabra) >= 4:
+        if igual is None and i == len(doc) - 1 and len(palabra) >= 3:
             # Última palabra cortada por el ancho del campo del formulario ("MARTI" de MARTINEZ)
             igual = next((a for a in disponibles if a.startswith(palabra)), None)
         if igual is None:
