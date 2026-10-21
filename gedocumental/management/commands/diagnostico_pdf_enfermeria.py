@@ -19,7 +19,7 @@ from django.db import connections
 from gedocumental import views_siesa
 from gedocumental.views_siesa import (SIESA_FORMULARIO_URL, SIESA_REPORT_VIEW_URL, _get_siesa_session,
                                       _fetch_pdf_enfermeria, _parse_hidden_inputs, _pdf_corresponde_al_estudio,
-                                      _urls_exportacion_pdf)
+                                      _urls_exportacion_pdf, _campos_formulario_visor)
 
 URL_TEMP = "http://192.168.1.209:8091/ZeusSalud/Archivos/CLIENTE/Temp/"
 
@@ -122,6 +122,32 @@ class Command(BaseCommand):
                 self.stdout.write(f"  >> {frag}")
         formularios = _parse_hidden_inputs(r2.text)
         self.stdout.write(f"\nCampos ocultos del visor: { {k: v[:60] for k, v in formularios.items()} }")
+
+        self.stdout.write(f"Cookies tras el visor: {sorted(s.cookies.keys())}")
+        campos_v, select_export, boton = _campos_formulario_visor(r2.text)
+        self.stdout.write(f"\nPOSTBACK exportar: menú={select_export}, botón={boton}, "
+                          f"campos={sorted(campos_v.keys())}")
+        m_form = re.search(r"<form\b[^>]*>", r2.text, re.IGNORECASE)
+        self.stdout.write(f"  Formulario: {m_form.group(0) if m_form else '?'}")
+        m_boton = re.search(r"<select\b[^>]*title=.Export.[\s\S]{0,1500}", r2.text, re.IGNORECASE)
+        if m_boton:
+            self.stdout.write("  HTML tras el menú Export: " + re.sub(r"\s+", " ", m_boton.group(0))[:1500])
+        if select_export and boton:
+            datos = dict(campos_v, **{select_export: "pdf", f"{boton}.x": "8", f"{boton}.y": "8"})
+            rp = s.post(SIESA_REPORT_VIEW_URL, data=datos, timeout=90, headers={"Referer": SIESA_REPORT_VIEW_URL})
+            es_pdf = rp.content.startswith(b"%PDF")
+            self.stdout.write(f"  POST -> HTTP {rp.status_code}, {len(rp.content)} bytes, PDF: {es_pdf}, "
+                              f"Content-Type: {rp.headers.get('Content-Type')}, "
+                              f"Content-Disposition: {rp.headers.get('Content-Disposition')}, "
+                              f"historial: {[h.status_code for h in rp.history]} {rp.url}")
+            if es_pdf:
+                self.stdout.write("    Texto (inicio): " + re.sub(r"\s+", " ", _texto_pdf(rp.content)[:400]))
+                self.stdout.write(f"    ¿Es del estudio {estudio}? {_pdf_corresponde_al_estudio(rp.content, estudio)}")
+            else:
+                t = rp.text.replace("&amp;", "&")
+                for mm in re.finditer(r".{0,150}(?:frxexport|Export\.aspx|window\.open|location).{0,250}", t, re.I):
+                    self.stdout.write("    >> " + re.sub(r"\s+", " ", mm.group(0)))
+                self.stdout.write("    Texto: " + _texto_html(rp.text)[:300])
 
         self.stdout.write("\nPASO 3a exportación a PDF desde el visor")
         urls = _urls_exportacion_pdf(r2.text)

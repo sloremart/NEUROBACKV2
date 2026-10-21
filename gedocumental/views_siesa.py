@@ -694,6 +694,9 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True) -> bytes:
         # Paso 3a: exportar a PDF desde el visor (el informe recién generado de ESTE estudio).
         # SIESA ya no siempre escribe el PDF en Temp: ahí queda el último que se imprimió con
         # ese usuario (puede ser otro paciente).
+        pdf_visor = _exportar_pdf_visor(s, r2.text)
+        if pdf_visor and (not verificar or _pdf_corresponde_al_estudio(pdf_visor, estudio) is not False):
+            return pdf_visor
         for url in _urls_exportacion_pdf(r2.text):
             try:
                 r_exp = s.get(url, timeout=60)
@@ -734,6 +737,78 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True) -> bytes:
         _siesa_session_cache = None
         session = _get_siesa_session()
         return _do_fetch_enfermeria(session)
+
+
+def _campos_formulario_visor(html: str):
+    """
+    Campos del formulario del visor FastReport (WebForms) para hacer el postback de exportación
+    y el nombre del botón de exportar. Devuelve (campos, nombre_select_export, nombre_boton).
+    """
+    def attr(tag, nombre):
+        m = re.search(rf"""\b{nombre}\s*=\s*["']([^"']*)["']""", tag, re.IGNORECASE)
+        return m.group(1) if m else None
+
+    campos = {}
+    for m in re.finditer(r"<input\b[^>]*>", html, re.IGNORECASE):
+        tag = m.group(0)
+        tipo = (attr(tag, "type") or "text").lower()
+        nombre = attr(tag, "name")
+        if nombre and tipo in ("hidden", "text"):
+            campos[nombre] = (attr(tag, "value") or "").replace("&amp;", "&")
+
+    select_export, boton = None, None
+    for m in re.finditer(r"<select\b[^>]*>(.*?)</select>", html, re.IGNORECASE | re.DOTALL):
+        tag_select = m.group(0)[:m.group(0).find(">") + 1]
+        nombre = attr(tag_select, "name")
+        if not nombre:
+            continue
+        opciones = re.findall(r"""<option\b[^>]*value=["']([^"']*)["']""", m.group(1), re.IGNORECASE)
+        elegida = re.search(r"""<option\b[^>]*selected[^>]*value=["']([^"']*)["']""", m.group(1), re.IGNORECASE)
+        campos[nombre] = elegida.group(1) if elegida else (opciones[0] if opciones else "")
+        if select_export is None and "pdf" in [o.lower() for o in opciones]:
+            select_export = nombre
+            # El botón de exportar es el primer botón-imagen después del menú de formatos
+            despues = html[m.end():]
+            for mb in re.finditer(r"<input\b[^>]*>", despues, re.IGNORECASE):
+                if (attr(mb.group(0), "type") or "").lower() in ("image", "submit") and attr(mb.group(0), "name"):
+                    boton = attr(mb.group(0), "name")
+                    break
+    return campos, select_export, boton
+
+
+def _exportar_pdf_visor(s: requests.Session, html: str):
+    """
+    Exporta a PDF el informe que muestra el visor FastReport de SIESA haciendo el mismo postback
+    que el botón "Exportar" con "Adobe Acrobat" elegido. Devuelve los bytes del PDF o None.
+    """
+    from urllib.parse import urljoin
+    campos, select_export, boton = _campos_formulario_visor(html)
+    if not select_export or not boton:
+        return None
+    m = re.search(r"""<form\b[^>]*action=["']([^"']*)["']""", html, re.IGNORECASE)
+    accion = urljoin(SIESA_REPORT_VIEW_URL, m.group(1).replace("&amp;", "&")) if m else SIESA_REPORT_VIEW_URL
+    datos = dict(campos)
+    datos[select_export] = "pdf"
+    datos["__EVENTTARGET"] = ""
+    datos["__EVENTARGUMENT"] = ""
+    datos[f"{boton}.x"] = "8"
+    datos[f"{boton}.y"] = "8"
+    try:
+        r = s.post(accion, data=datos, timeout=90, headers={"Referer": accion})
+    except requests.RequestException:
+        return None
+    if r.content.startswith(b"%PDF"):
+        return r.content
+    # Algunas versiones responden con la página y un enlace/script hacia FastReport.Export.aspx
+    texto = r.text.replace("&amp;", "&")
+    for mu in re.finditer(r"""(FastReport\.Export\.aspx\?[^"'\s<>]*frxexport[^"'\s<>]*)""", texto, re.IGNORECASE):
+        try:
+            r_pdf = s.get(urljoin(accion, mu.group(1)), timeout=60)
+        except requests.RequestException:
+            continue
+        if r_pdf.content.startswith(b"%PDF"):
+            return r_pdf.content
+    return None
 
 
 def _urls_exportacion_pdf(html: str) -> list:
