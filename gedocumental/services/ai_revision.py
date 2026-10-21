@@ -422,10 +422,10 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(ajustes)
         resultado["ajuste_sistema"] = list(ajustes)
 
-    # RESULTADOS: un hallazgo de procedimiento solo se mantiene si hay una DIFERENCIA CLARA
+    # RESULTADOS: si el paciente coincide, un hallazgo solo se mantiene si hay una DIFERENCIA CLARA
     # (otro tipo de estudio, otra región/lateralidad/contraste en imágenes, otra especialidad).
     # Falta del código CUPS, redacción distinta o detalle insuficiente NO son hallazgo.
-    if ((tipo_documento or '').upper() == 'RESULTADO' and resultado["tipo"] == "REPORTE"
+    if ((tipo_documento or '').upper() == 'RESULTADO' and resultado["tipo"] != "OK"
             and resultado.get("paciente_coincide") != "NO"
             and not _diferencia_clara(resultado.get("estudio_documento"), resultado.get("estudio_admision"))):
         logger.info("RESULTADO sin diferencia clara de estudio: se descarta '%s'", resultado.get("descripcion"))
