@@ -595,9 +595,27 @@ def _tokens_nombre(texto) -> list[str]:
     """'MARQUEZ_ACERO,PEDRO_JULIO' -> ['marquez', 'acero', 'pedro', 'julio'] (sin tildes ni signos)."""
     import re
     import unicodedata
-    t = unicodedata.normalize('NFKD', str(texto or '')).encode('ascii', 'ignore').decode().lower()
-    t = re.sub(r'[^a-z\s]', ' ', t.replace('_', ' '))
+    t = _reparar_texto(str(texto or ''))
+    # Letras ilegibles por la codificación ("CASTA?EDA", "CASTA\ufffdEDA") quedan como comodín '#'
+    t = re.sub(r'(?<=[A-Za-z\u00C0-\u017F])[\?\ufffd](?=[A-Za-z\u00C0-\u017F])', '#', t)
+    t = unicodedata.normalize('NFKD', t).encode('ascii', 'ignore').decode().lower()
+    t = re.sub(r'[^a-z#\s]', ' ', t.replace('_', ' '))
     return [p for p in t.split() if len(p) >= 3 and p not in ('del', 'los', 'las', 'cc', 'ti', 'rc')]
+
+
+def _misma_palabra(a: str, b: str) -> bool:
+    """Igualdad de palabras de un nombre; '#' (letra ilegible) vale por cualquier letra."""
+    import re
+    if a == b:
+        return True
+    if '#' not in a and '#' not in b:
+        return False
+    patron, otra = (a, b) if '#' in a else (b, a)
+    return bool(re.fullmatch('.'.join(re.escape(parte) for parte in patron.split('#')), otra))
+
+
+def _buscar_palabra(palabra: str, lista: list) -> str | None:
+    return next((x for x in lista if _misma_palabra(palabra, x)), None)
 
 
 # Palabras que la IA a veces devuelve como "nombre" y no lo son
@@ -630,7 +648,7 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
     mismo_id = bool(id_adm) and (id_doc == id_adm or id_adm in numeros_texto)
     if id_adm and id_doc and len(id_doc) >= 5 and id_doc != id_adm and id_adm not in numeros_texto:
         # Mismo nombre con otro número: es el paciente, pero con el número de documento errado
-        if len(doc) >= 2 and all(t in adm for t in doc):
+        if len(doc) >= 2 and all(_buscar_palabra(t, adm) for t in doc):
             return "documento_incorrecto"
         return "otra_persona"
 
@@ -657,7 +675,8 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
 def _nombre_en_texto(nombre, texto) -> bool:
     """True si todas las palabras del nombre (≥ 2) aparecen tal cual en el texto del PDF."""
     palabras = [t for t in _tokens_nombre(nombre) if t not in _NO_SON_NOMBRE]
-    return len(palabras) >= 2 and set(palabras) <= set(_tokens_nombre(texto))
+    del_texto = _tokens_nombre(texto)
+    return len(palabras) >= 2 and all(_buscar_palabra(p, del_texto) for p in palabras)
 
 
 def _solo_motivo_paciente(descripcion) -> bool:
@@ -693,9 +712,10 @@ def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
         return False
     disponibles = list(adm)
     for palabra in doc:
-        if palabra not in disponibles:
+        igual = _buscar_palabra(palabra, disponibles)
+        if igual is None:
             return False  # palabra que no está en el nombre de la admisión (otra persona o mal escrita)
-        disponibles.remove(palabra)
+        disponibles.remove(igual)
     return True
 
 
