@@ -49,6 +49,8 @@ MAX_LADO_IMAGEN = 2000
 TIPOS_CON_FIRMA = ('COMPROBANTE',)
 # Tipos de documento que NO se revisan con IA (Programación de Pagos: facturas de proveedor)
 TIPOS_SIN_REVISION_IA = ('FACTURAPROVEEDOR',)
+# Soportes que trae el paciente (historias clínicas, adicionales): solo se valida que sean del paciente
+TIPOS_SOLO_PACIENTE = ('HCLINICA', 'HCNEURO', 'ADICIONALES')
 
 PROMPT_SISTEMA = """Eres un auditor experto en facturación de servicios de salud en Colombia.
 Revisas documentos de gestión documental (factura, comprobante, autorización, orden médica, resultado/informe, etc.)
@@ -463,6 +465,21 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             resultado["paciente_coincide"] = "SI"
             if resultado["tipo"] == "INFORMACION" and _solo_motivo_paciente(resultado.get("descripcion")):
                 resultado.update(tipo="OK", descripcion="Documento correcto")
+        elif clase == "otra_persona":
+            nombre_doc = resultado.get("nombre_documento") or ""
+            if len([t for t in _tokens_nombre(nombre_doc) if t not in _NO_SON_NOMBRE]) >= 2:
+                resultado.update(
+                    tipo="INFORMACION",
+                    descripcion=(f"Paciente no corresponde: documento '{nombre_doc}', "
+                                 f"admisión '{datos_admision.get('paciente')}'."),
+                )
+        elif clase == "sin_datos_paciente":
+            resultado.update(
+                tipo="INFORMACION",
+                descripcion=("Paciente no corresponde: el documento no contiene el nombre ni el documento de "
+                             f"identidad del paciente de la admisión ({datos_admision.get('paciente')}, "
+                             f"{datos_admision.get('identificacion')})."),
+            )
         elif clase == "documento_incorrecto":
             resultado.update(
                 tipo="INFORMACION",
@@ -500,6 +517,13 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                     tipo_documento, resultado.get("descripcion"))
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_procedimiento_orden=True)
+
+    # Soportes del paciente (HC, adicionales): si es del paciente correcto, cualquier otro motivo se descarta
+    if ((tipo_documento or '').upper() in TIPOS_SOLO_PACIENTE and resultado["tipo"] != "OK"
+            and resultado.get("paciente_coincide") not in ("NO", "NOMBRE_MAL_ESCRITO", "DOCUMENTO_INCORRECTO")
+            and _solo_motivo_paciente(resultado.get("descripcion")) is False):
+        logger.info("%s: soporte del paciente, se descarta '%s'", tipo_documento, resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_soporte=True)
 
     _coherencia_tipo_descripcion(resultado)
     return resultado
@@ -667,9 +691,13 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
         return "otra_persona"
 
     if len(doc) < 2:
-        # El nombre no se leyó (ej. la IA devolvió "RESULTADO"): sin evidencia de otra persona no es hallazgo.
-        # (Un número de documento distinto ya se resolvió arriba.)
-        return "misma_persona"
+        # El nombre no se leyó (ej. la IA devolvió "RESULTADO").
+        # - Escaneado/imagen (sin texto): no hay forma de verificar → no es hallazgo.
+        # - PDF digital: el nombre o el documento del paciente deben estar en el texto; si no están,
+        #   el documento es de otra persona (ej. PDF de enfermería generado con el paciente equivocado).
+        if len((texto or '').strip()) < 50 or mismo_id:
+            return "misma_persona"
+        return "sin_datos_paciente"
 
     # Nombre casi igual: cada palabra del documento se parece (≥ 0.8) a una distinta de la admisión
     disponibles, parecido = list(adm), True
