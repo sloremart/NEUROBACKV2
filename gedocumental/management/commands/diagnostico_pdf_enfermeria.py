@@ -111,18 +111,42 @@ class Command(BaseCommand):
                 vistos.add(frag)
                 self.stdout.write(f"  {frag}")
 
+        # Cómo arma el visor la exportación: menú de formatos, funciones JS y todo lo que diga "pdf"
+        self.stdout.write("\nFragmentos del visor con 'pdf' / 'select' / 'onchange' / 'function frx':")
+        vistos = set()
+        for m in re.finditer(r".{0,200}(?:pdf|<select|onchange|function\s+frx|__doPostBack|frxexport).{0,300}",
+                             html, re.IGNORECASE):
+            frag = re.sub(r"\s+", " ", m.group(0))
+            if frag not in vistos and len(vistos) < 30:
+                vistos.add(frag)
+                self.stdout.write(f"  >> {frag}")
+        formularios = _parse_hidden_inputs(r2.text)
+        self.stdout.write(f"\nCampos ocultos del visor: { {k: v[:60] for k, v in formularios.items()} }")
+
         self.stdout.write("\nPASO 3a exportación a PDF desde el visor")
         urls = _urls_exportacion_pdf(r2.text)
         if not urls:
             self.stdout.write("  No se encontraron URLs de exportación en el visor")
         for url in urls:
-            try:
-                r = s.get(url, timeout=60)
-            except Exception as exc:
-                self.stdout.write(f"  {url} -> error {exc}")
-                continue
-            es_pdf = r.content.startswith(b"%PDF")
-            self.stdout.write(f"  {url} -> HTTP {r.status_code}, {len(r.content)} bytes, PDF: {es_pdf}")
+            es_pdf = False
+            for intento, headers in enumerate(({}, {"Referer": SIESA_REPORT_VIEW_URL})):
+                if intento:
+                    time.sleep(3)
+                try:
+                    r = s.get(url, timeout=60, headers=headers, allow_redirects=False)
+                except Exception as exc:
+                    self.stdout.write(f"  {url} -> error {exc}")
+                    continue
+                es_pdf = r.content.startswith(b"%PDF")
+                self.stdout.write(f"  {url} [{'con Referer, 3 s después' if intento else 'directo'}] -> "
+                                  f"HTTP {r.status_code}, {len(r.content)} bytes, PDF: {es_pdf}, "
+                                  f"Content-Type: {r.headers.get('Content-Type')}, "
+                                  f"Location: {r.headers.get('Location')}, "
+                                  f"Content-Disposition: {r.headers.get('Content-Disposition')}")
+                if not es_pdf and r.content:
+                    self.stdout.write(f"    Contenido: {r.content[:600]!r}")
+                if es_pdf:
+                    break
             if es_pdf:
                 self.stdout.write("    Texto (inicio): " + re.sub(r"\s+", " ", _texto_pdf(r.content)[:400]))
                 self.stdout.write(f"    ¿Es del estudio {estudio}? {_pdf_corresponde_al_estudio(r.content, estudio)}")
