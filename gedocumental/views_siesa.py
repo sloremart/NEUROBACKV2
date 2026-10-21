@@ -642,7 +642,12 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
     """
     Descarga el PDF de nota de enfermería de SIESA para un estudio
     de administración de medicamentos (ufuncional = 12).
+
+    Se fuerza una sesión PHP nueva por cada estudio para evitar que SIESA
+    use el estado de la sesión anterior y devuelva el PDF de otro paciente.
     """
+    global _siesa_session_cache
+    _siesa_session_cache = None          # sesión fresca → PHP session limpia en SIESA
     session = _get_siesa_session()
     usuario_session = getattr(settings, "SIESA_USUARIO_SESSION", "")
 
@@ -680,7 +685,8 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
 
         # Paso 3: descargar el PDF directamente desde la carpeta Temp de SIESA
         # c_informe_view.aspx escribe el PDF en ZeusSalud/Archivos/CLIENTE/Temp/
-        time.sleep(2)
+        # Se espera más tiempo para que SIESA termine de generar antes de descargar
+        time.sleep(5)
         pdf_url = f"http://192.168.1.209:8091/ZeusSalud/Archivos/CLIENTE/Temp/{nombre_pdf}"
         r3 = s.get(pdf_url, timeout=30)
         r3.raise_for_status()
