@@ -49,8 +49,12 @@ que se cargan a una ADMISIÓN. Te doy los datos reales de la admisión tomados d
 
 VERIFICACIONES OBLIGATORIAS (en este orden):
 1. PACIENTE: el nombre y/o número de identificación que aparece en el documento debe ser el mismo paciente de la admisión.
-   Tolera tildes, mayúsculas, orden de nombres/apellidos y un segundo nombre faltante, pero NO un paciente distinto.
-   Si es otra persona → tipo INFORMACION, indicando ambos nombres.
+   Tolera tildes, mayúsculas, orden de nombres/apellidos, guiones o comas y un segundo nombre faltante,
+   pero NO un paciente distinto NI errores de ortografía en el nombre (ej. PAULA vs PAOLA).
+   Si es OTRA PERSONA (nombres o apellidos distintos) → tipo INFORMACION: "Paciente no corresponde:
+   documento 'X', admisión 'Y'".
+   Si es el mismo paciente pero el nombre difiere solo en algunas letras (error de ortografía, ej. PAULA
+   vs PAOLA) → tipo INFORMACION: "Nombre del usuario incorrecto: documento 'X', admisión 'Y'".
    Si el documento NO trae nombre ni identificación del paciente, eso NO es un error por sí solo
    (paciente_coincide = NO_APARECE): sigue con las demás verificaciones.
 2. PROCEDIMIENTOS: en órdenes médicas, autorizaciones y resultados, los procedimientos/CUPS del documento deben
@@ -369,30 +373,30 @@ def _tokens_nombre(texto) -> list[str]:
 
 def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
     """
-    True si el documento es del paciente de la admisión aunque la IA diga que no:
-    mismo número de documento, o todos los nombres del documento están en el de la
-    admisión (en cualquier orden, tolerando un error menor de digitación por palabra).
+    True si el documento es del paciente de la admisión aunque la IA diga que no, por
+    diferencias solo de FORMATO: nombres en otro orden, guiones, comas, tildes, mayúsculas
+    o un nombre/apellido faltante. Un error de ORTOGRAFÍA (PAULA vs PAOLA) NO se tolera:
+    es un hallazgo INFORMACION (nombre del usuario incorrecto), aunque el documento coincida.
     """
     import re
-    from difflib import SequenceMatcher
 
     id_adm = re.sub(r'\D', '', datos_admision.get('identificacion') or '')
     id_doc = re.sub(r'\D', '', str(resultado.get('identificacion_documento') or ''))
-    if id_adm and id_doc and len(id_doc) >= 5:
-        if id_doc == id_adm:
-            return True
+    if id_adm and id_doc and len(id_doc) >= 5 and id_doc != id_adm:
         return False  # número distinto: es otra persona aunque el nombre se parezca
 
     adm = _tokens_nombre(datos_admision.get('paciente'))
     doc = _tokens_nombre(resultado.get('nombre_documento') or resultado.get('paciente_documento'))
+    if not doc:
+        # Sin nombre legible: solo el número de documento decide
+        return bool(id_adm and id_doc == id_adm)
     if len(doc) < 2 or not adm:
         return False
     disponibles = list(adm)
     for palabra in doc:
-        mejor = max(disponibles, key=lambda a: SequenceMatcher(None, palabra, a).ratio(), default=None)
-        if mejor is None or SequenceMatcher(None, palabra, mejor).ratio() < 0.8:
-            return False
-        disponibles.remove(mejor)
+        if palabra not in disponibles:
+            return False  # palabra que no está en el nombre de la admisión (otra persona o mal escrita)
+        disponibles.remove(palabra)
     return True
 
 
