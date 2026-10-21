@@ -687,11 +687,24 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True) -> bytes:
         if not nombre_pdf:
             raise Exception("SIESA no devolvió el nombre del archivo PDF — el estudio puede no tener nota de enfermería")
 
-        # Paso 2: POST a c_informe_view.aspx — genera y escribe el PDF en disco
+        # Paso 2: POST a c_informe_view.aspx — genera el informe en el visor de FastReport
         r2 = s.post(SIESA_REPORT_VIEW_URL, data=form_fields, timeout=60)
         r2.raise_for_status()
 
-        # Paso 3: descargar el PDF desde la carpeta Temp de SIESA.
+        # Paso 3a: exportar a PDF desde el visor (el informe recién generado de ESTE estudio).
+        # SIESA ya no siempre escribe el PDF en Temp: ahí queda el último que se imprimió con
+        # ese usuario (puede ser otro paciente).
+        for url in _urls_exportacion_pdf(r2.text):
+            try:
+                r_exp = s.get(url, timeout=60)
+            except requests.RequestException:
+                continue
+            if r_exp.status_code != 200 or not r_exp.content.startswith(b"%PDF"):
+                continue
+            if not verificar or _pdf_corresponde_al_estudio(r_exp.content, estudio) is not False:
+                return r_exp.content
+
+        # Paso 3b: descargar el PDF desde la carpeta Temp de SIESA.
         # c_informe_view.aspx escribe el PDF en ZeusSalud/Archivos/CLIENTE/Temp/ y puede tardar:
         # si se descarga antes de que termine, queda el PDF del estudio ANTERIOR (otro paciente).
         # Por eso se verifica que el PDF sea del estudio pedido y se reintenta.
@@ -721,6 +734,39 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True) -> bytes:
         _siesa_session_cache = None
         session = _get_siesa_session()
         return _do_fetch_enfermeria(session)
+
+
+def _urls_exportacion_pdf(html: str) -> list:
+    """
+    URLs candidatas para exportar a PDF el informe que muestra el visor de FastReport
+    (c_informe_view.aspx). Se buscan en el HTML los enlaces de exportación y el id del informe.
+    """
+    from urllib.parse import urljoin
+    html = html.replace("&amp;", "&")
+    urls = []
+
+    def agregar(u):
+        u = urljoin(SIESA_REPORT_VIEW_URL, u)
+        if u not in urls:
+            urls.append(u)
+
+    # Enlaces explícitos de exportación a PDF
+    for m in re.finditer(r"""["']([^"'\s<>]*Export[^"'\s<>]*)["']""", html, re.IGNORECASE):
+        u = m.group(1)
+        if re.search(r"pdf", u, re.IGNORECASE):
+            agregar(u)
+    # Id del informe (frxreport / previewobject) → URL de exportación a PDF
+    ids = []
+    for patron in (r"frxreport=([\w-]+)", r"previewobject=([\w-]+)", r"ExportPDF=([\w-]+)"):
+        for m in re.finditer(patron, html, re.IGNORECASE):
+            if m.group(1) not in ids:
+                ids.append(m.group(1))
+    for rid in ids:
+        agregar(f"{SIESA_EXPORT_BASE_URL}FastReport.Export.aspx?frxprint=pdf&frxreport={rid}")
+        agregar(f"{SIESA_EXPORT_BASE_URL}FastReport.Export.aspx?frxexport=pdf&frxreport={rid}")
+        agregar(f"{SIESA_EXPORT_BASE_URL}FastReport.Export.axd?ExportPDF={rid}")
+        agregar(f"{SIESA_EXPORT_BASE_URL}FastReport.Export.axd?previewobject={rid}&export_pdf=1")
+    return urls
 
 
 def _pdf_corresponde_al_estudio(pdf_bytes: bytes, estudio: int):

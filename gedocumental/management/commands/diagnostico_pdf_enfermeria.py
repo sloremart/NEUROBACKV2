@@ -11,7 +11,6 @@ Uso:
 import io
 import re
 import time
-import uuid
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
@@ -19,7 +18,8 @@ from django.db import connections
 
 from gedocumental import views_siesa
 from gedocumental.views_siesa import (SIESA_FORMULARIO_URL, SIESA_REPORT_VIEW_URL, _get_siesa_session,
-                                      _parse_hidden_inputs, _pdf_corresponde_al_estudio)
+                                      _fetch_pdf_enfermeria, _parse_hidden_inputs, _pdf_corresponde_al_estudio,
+                                      _urls_exportacion_pdf)
 
 URL_TEMP = "http://192.168.1.209:8091/ZeusSalud/Archivos/CLIENTE/Temp/"
 
@@ -101,14 +101,38 @@ class Command(BaseCommand):
         self.stdout.write(f"\nPASO 2 c_informe_view -> HTTP {r2.status_code}, {len(r2.content)} bytes")
         self.stdout.write("  Texto de la respuesta: " + _texto_html(r2.text)[:800])
 
-        self.stdout.write(f"\nPASO 3 descarga con el nombre de SIESA ({nombre})")
+        # Fragmentos del visor relacionados con exportar (para ver el formato real de SIESA)
+        html = r2.text.replace("&amp;", "&")
+        self.stdout.write("\nFragmentos del visor con 'export' / 'frx' / '.axd':")
+        vistos = set()
+        for m in re.finditer(r"[^\s<>]{0,120}(?:export|frx|\.axd)[^\s<>]{0,160}", html, re.IGNORECASE):
+            frag = m.group(0)
+            if frag not in vistos and len(vistos) < 25:
+                vistos.add(frag)
+                self.stdout.write(f"  {frag}")
+
+        self.stdout.write("\nPASO 3a exportación a PDF desde el visor")
+        urls = _urls_exportacion_pdf(r2.text)
+        if not urls:
+            self.stdout.write("  No se encontraron URLs de exportación en el visor")
+        for url in urls:
+            try:
+                r = s.get(url, timeout=60)
+            except Exception as exc:
+                self.stdout.write(f"  {url} -> error {exc}")
+                continue
+            es_pdf = r.content.startswith(b"%PDF")
+            self.stdout.write(f"  {url} -> HTTP {r.status_code}, {len(r.content)} bytes, PDF: {es_pdf}")
+            if es_pdf:
+                self.stdout.write("    Texto (inicio): " + re.sub(r"\s+", " ", _texto_pdf(r.content)[:400]))
+                self.stdout.write(f"    ¿Es del estudio {estudio}? {_pdf_corresponde_al_estudio(r.content, estudio)}")
+
+        self.stdout.write(f"\nPASO 3b descarga de la carpeta Temp ({nombre})")
         self._descargar(s, nombre, estudio)
 
-        # Prueba: mismo informe con un nombre de archivo único (si SIESA lo respeta, no puede
-        # devolver un PDF viejo de otro paciente)
-        unico = f"enf_{estudio}_{uuid.uuid4().hex[:10]}.pdf"
-        campos_unicos = dict(campos, nombreArchivoPdf=unico)
-        r2b = s.post(SIESA_REPORT_VIEW_URL, data=campos_unicos, timeout=60)
-        self.stdout.write(f"\nPRUEBA con nombre único ({unico}) -> generación HTTP {r2b.status_code}")
-        self.stdout.write("  Texto de la respuesta: " + _texto_html(r2b.text)[:400])
-        self._descargar(s, unico, estudio)
+        self.stdout.write("\nRESULTADO con la función del sistema (_fetch_pdf_enfermeria, con verificación):")
+        try:
+            pdf = _fetch_pdf_enfermeria(estudio)
+            self.stdout.write(f"  OK, {len(pdf)} bytes, del estudio: {_pdf_corresponde_al_estudio(pdf, estudio)}")
+        except Exception as exc:
+            self.stdout.write(f"  Falla: {exc}")
