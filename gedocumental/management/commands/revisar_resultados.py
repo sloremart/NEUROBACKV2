@@ -64,6 +64,7 @@ class Command(BaseCommand):
             resumen[tipo] = resumen.get(tipo, 0) + 1
             detalle = f" — {res['descripcion']}" if res and tipo != 'OK' else ''
             self.stdout.write(f"  {a.Admision_id} {tipo}{detalle}")
+            self.stdout.flush()  # avance visible aunque se ejecute sin terminal (docker exec / cron)
         self.stdout.write(f"Resumen revisión: {resumen}")
 
     # ── 2. Admisiones sin RESULTADO después del plazo ────────────────────────

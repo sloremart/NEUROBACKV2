@@ -35,6 +35,11 @@ TIPOS_OBSERVACION = [
 MIN_CARACTERES_TEXTO = 50
 # Páginas máximas que se envían como imagen (controla costo y tiempo)
 MAX_PAGINAS_IMAGEN = 3
+# Lectura del PDF: a la IA solo van MAX_CARACTERES_TEXTO de texto, así que no se leen más páginas
+# de las necesarias (los RESULTADOS de SIESA pueden tener muchas páginas con gráficas muy pesadas)
+MAX_CARACTERES_TEXTO = 6000
+MAX_PAGINAS_LEER = 6
+MAX_SEGUNDOS_LECTURA = 45
 # Formatos que se revisan: PDF (digital, escaneado o mixto) e imágenes sueltas
 EXTENSIONES_IMAGEN = ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff')
 EXTENSIONES_REVISABLES = ('.pdf',) + EXTENSIONES_IMAGEN
@@ -188,18 +193,30 @@ def _leer_pdf(ruta_absoluta: str, siempre_imagen: bool = False) -> tuple[str, li
     siempre_imagen: además del texto, envía la imagen de las páginas (para ver la firma).
     """
     try:
+        import time
         import pdfplumber
         textos, imagenes = [], []
+        caracteres = 0
+        inicio = time.monotonic()
         with pdfplumber.open(ruta_absoluta) as pdf:
             for num, pagina in enumerate(pdf.pages, start=1):
+                if num > MAX_PAGINAS_LEER or time.monotonic() - inicio > MAX_SEGUNDOS_LECTURA:
+                    logger.info("Lectura de %s cortada en la página %s (límite de páginas/tiempo)", ruta_absoluta, num)
+                    break
                 texto_pagina = (pagina.extract_text() or "").strip()
                 tiene_texto = len(texto_pagina) >= MIN_CARACTERES_TEXTO
                 if tiene_texto:
                     textos.append(f"[Página {num}]\n{texto_pagina}")
+                    caracteres += len(texto_pagina)
                 if (not tiene_texto or siempre_imagen) and len(imagenes) < MAX_PAGINAS_IMAGEN:
                     buffer = io.BytesIO()
                     pagina.to_image(resolution=200).original.convert("RGB").save(buffer, format="PNG")
                     imagenes.append(base64.b64encode(buffer.getvalue()).decode())
+                if hasattr(pagina, "close"):
+                    pagina.close()  # libera la memoria de la página
+                # Ya hay todo el texto que se va a enviar (y las imágenes, si se piden)
+                if caracteres >= MAX_CARACTERES_TEXTO and (not siempre_imagen or imagenes):
+                    break
         return "\n\n".join(textos), imagenes
     except Exception as exc:
         logger.warning("No se pudo leer el PDF %s: %s", ruta_absoluta, exc)

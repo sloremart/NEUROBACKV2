@@ -54,6 +54,7 @@ class Command(BaseCommand):
             detalle = f" — {res['descripcion']}" if res and tipo != 'OK' else ''
             estilo = self.style.SUCCESS if tipo == 'OK' else self.style.WARNING
             self.stdout.write(estilo(f"  {a.Admision_id} {a.Tipo:<14} {tipo}{detalle}"))
+            self.stdout.flush()  # avance visible aunque se ejecute sin terminal (docker exec / cron)
 
         self.stdout.write(f"Resumen: {resumen}")
         if resumen.get('OMITIDO'):
