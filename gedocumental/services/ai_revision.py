@@ -101,6 +101,8 @@ Responde ÚNICAMENTE con un JSON válido sin texto adicional. Completa SIEMPRE l
 aunque la primera ya haya fallado:
 {
   "paciente_documento": "<nombre e identificación tal como aparecen en el documento, o 'no aparece'>",
+  "nombre_documento": "<solo el nombre completo del paciente tal como aparece, o ''>",
+  "identificacion_documento": "<solo el número de documento del paciente, sin tipo, o ''>",
   "paciente_coincide": "SI | NO | NO_APARECE",
   "procedimientos_documento": "<CUPS/procedimientos que trae el documento, o 'no aplica'>",
   "procedimientos_coinciden": "SI | NO | NO_APLICA",
@@ -236,7 +238,7 @@ def _formatear_contexto(datos_admision: dict) -> str:
 
 
 def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_admision: dict,
-                   _reintento: bool = False, _contenido=None) -> dict:
+                   _reintento: bool = False, _contenido=None, firma_detectada: bool | None = None) -> dict:
     """
     Llama a GPT-4o-mini y devuelve {"tipo": ..., "descripcion": ...}.
     Puede lanzar excepciones si la API falla.
@@ -259,7 +261,9 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             "VERIFICACIÓN ADICIONAL (este documento es un COMPROBANTE): mira la imagen y verifica que haya una "
             "firma o trazo manuscrito del paciente (o su acompañante) en el espacio \"Firma del paciente\". "
             "El texto impreso \"Firma del paciente:\" NO es una firma. Si el espacio está vacío → SOPORTES "
-            "\"Ausencia de firma en el comprobante de la atención\".\n\n"
+            "\"Ausencia de firma en el comprobante de la atención\". "
+            "En el comprobante la sección de procedimientos puede venir vacía: eso NO es error "
+            "(procedimientos_coinciden = NO_APLICA); solo compáralos si el comprobante los trae.\n\n"
         )
     else:
         encabezado += (
@@ -306,27 +310,122 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                 logger.info("Descartado hallazgo de firma en documento %s (no es comprobante)", tipo_documento)
                 resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_firma=True)
 
-    # La IA a veces marca "no coincide" solo porque el texto difiere ("TAC de cráneo" vs
-    # "tomografía computada de cráneo simple"). Si la comparación estructurada dice que es el
-    # mismo estudio, se vuelve a preguntar indicándolo, para que reporte solo otros problemas.
-    if (not _reintento and resultado.get("procedimientos_coinciden") == "NO"
+    # Verificaciones del sistema sobre lo que la IA marcó como error. La IA a veces falla por la
+    # forma de escribir (nombre invertido o con guiones, "TAC de cráneo" vs "tomografía computada
+    # de cráneo simple", comprobante sin procedimientos). Si el sistema confirma que está bien,
+    # se repite la consulta UNA vez indicándolo, para que reporte solo otros problemas.
+    notas, ajustes = [], {}
+    if resultado.get("paciente_coincide") == "NO" and _mismo_paciente(resultado, datos_admision):
+        notas.append("el PACIENTE del documento SÍ es el de la admisión (mismo número de documento o mismo "
+                     "nombre escrito en otro orden, con guiones/comas o con un error menor de digitación): "
+                     "paciente_coincide = SI")
+        ajustes["paciente_coincide"] = "SI"
+    if (resultado.get("procedimientos_coinciden") == "NO"
             and _mismo_estudio(resultado.get("estudio_documento"), resultado.get("estudio_admision"))):
-        logger.info("Procedimiento equivalente detectado por el sistema; se repite la revisión: %s",
-                    resultado.get("procedimientos_documento"))
-        nota = ("\n\nVERIFICADO POR EL SISTEMA: el procedimiento del documento SÍ corresponde al de la admisión "
-                "(mismo tipo de estudio, región, lateralidad y contraste; solo cambia la forma de escribirlo). "
-                "No lo reportes como error: procedimientos_coinciden = SI. Reporta únicamente otros problemas, "
-                "si los hay; si no hay ninguno, el tipo es OK.")
+        notas.append("el PROCEDIMIENTO del documento SÍ corresponde al de la admisión (mismo tipo de estudio, "
+                     "región, lateralidad y contraste; solo cambia la forma de escribirlo): procedimientos_coinciden = SI")
+        ajustes["procedimientos_coinciden"] = "SI"
+    if (_es_comprobante(tipo_documento) and resultado.get("procedimientos_coinciden") == "NO"
+            and _sin_dato(resultado.get("procedimientos_documento"))):
+        notas.append("el COMPROBANTE no trae procedimientos y eso NO es un error: procedimientos_coinciden = NO_APLICA")
+        ajustes["procedimientos_coinciden"] = "NO_APLICA"
+
+    if (_es_comprobante(tipo_documento) and firma_detectada
+            and str(resultado.get("firma_paciente", "")).upper().startswith("NO")
+            and not str(resultado.get("firma_paciente", "")).upper().startswith("NO_APLICA")):
+        notas.append("el sistema detectó en el PDF la imagen de la FIRMA manuscrita del paciente (puede estar al "
+                     "final de la hoja, debajo de otro rótulo \"Firma del paciente\"): firma_paciente = SI")
+        ajustes["firma_paciente"] = "SI"
+
+    if notas and not _reintento and resultado["tipo"] != "OK":
+        logger.info("Verificación del sistema corrige a la IA (%s); se repite la revisión", ", ".join(ajustes))
+        nota = ("\n\nVERIFICADO POR EL SISTEMA: " + "; ".join(notas) + ". No reportes esto como error. "
+                "Reporta únicamente otros problemas, si los hay; si no hay ninguno, el tipo es OK.")
         if isinstance(contenido, list):
             contenido_2 = [dict(contenido[0], text=contenido[0]["text"] + nota)] + contenido[1:]
         else:
             contenido_2 = contenido + nota
         resultado = _llamar_openai(texto, imagenes, tipo_documento, datos_admision,
-                                   _reintento=True, _contenido=contenido_2)
-        resultado["procedimientos_coinciden"] = "SI"
-        resultado["ajuste_procedimiento"] = True
+                                   _reintento=True, _contenido=contenido_2, firma_detectada=firma_detectada)
+        resultado.update(ajustes)
+        resultado["ajuste_sistema"] = list(ajustes)
 
     return resultado
+
+
+def _sin_dato(valor) -> bool:
+    v = (str(valor or '')).strip().lower()
+    return v in ('', 'no aplica', 'no aparece', 'ninguno', 'n/a', 'na', '-') or v.startswith('no ')
+
+
+def _tokens_nombre(texto) -> list[str]:
+    """'MARQUEZ_ACERO,PEDRO_JULIO' -> ['marquez', 'acero', 'pedro', 'julio'] (sin tildes ni signos)."""
+    import re
+    import unicodedata
+    t = unicodedata.normalize('NFKD', str(texto or '')).encode('ascii', 'ignore').decode().lower()
+    t = re.sub(r'[^a-z\s]', ' ', t.replace('_', ' '))
+    return [p for p in t.split() if len(p) >= 3 and p not in ('del', 'los', 'las', 'cc', 'ti', 'rc')]
+
+
+def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
+    """
+    True si el documento es del paciente de la admisión aunque la IA diga que no:
+    mismo número de documento, o todos los nombres del documento están en el de la
+    admisión (en cualquier orden, tolerando un error menor de digitación por palabra).
+    """
+    import re
+    from difflib import SequenceMatcher
+
+    id_adm = re.sub(r'\D', '', datos_admision.get('identificacion') or '')
+    id_doc = re.sub(r'\D', '', str(resultado.get('identificacion_documento') or ''))
+    if id_adm and id_doc and len(id_doc) >= 5:
+        if id_doc == id_adm:
+            return True
+        return False  # número distinto: es otra persona aunque el nombre se parezca
+
+    adm = _tokens_nombre(datos_admision.get('paciente'))
+    doc = _tokens_nombre(resultado.get('nombre_documento') or resultado.get('paciente_documento'))
+    if len(doc) < 2 or not adm:
+        return False
+    disponibles = list(adm)
+    for palabra in doc:
+        mejor = max(disponibles, key=lambda a: SequenceMatcher(None, palabra, a).ratio(), default=None)
+        if mejor is None or SequenceMatcher(None, palabra, mejor).ratio() < 0.8:
+            return False
+        disponibles.remove(mejor)
+    return True
+
+
+def _detectar_firma_pdf(ruta_absoluta: str) -> bool | None:
+    """
+    Comprobantes digitales de Zeus: la firma del paciente va como imagen dentro del PDF.
+    Devuelve True si alguna imagen pequeña (tamaño de firma) tiene trazo visible,
+    False si las hay pero están en blanco, None si no se puede saber (escaneado, sin imágenes).
+    """
+    if not ruta_absoluta.lower().endswith('.pdf'):
+        return None
+    try:
+        import pdfplumber
+        with pdfplumber.open(ruta_absoluta) as pdf:
+            vistas = 0
+            for pagina in pdf.pages[:2]:
+                for img in pagina.images:
+                    ancho, alto = img['x1'] - img['x0'], img['bottom'] - img['top']
+                    # Una página escaneada completa no es una firma
+                    if ancho > pagina.width * 0.6 or alto > pagina.height * 0.4 or ancho < 15 or alto < 8:
+                        continue
+                    vistas += 1
+                    region = pagina.crop((max(img['x0'], 0), max(img['top'], 0),
+                                          min(img['x1'], pagina.width), min(img['bottom'], pagina.height)))
+                    gris = region.to_image(resolution=100).original.convert('L')
+                    pixeles = list(gris.getdata())
+                    oscuros = sum(1 for v in pixeles if v < 128)
+                    if pixeles and oscuros / len(pixeles) > 0.004:
+                        return True
+            return False if vistas else None
+    except Exception as exc:
+        logger.warning("No se pudo analizar la firma de %s: %s", ruta_absoluta, exc)
+        return None
 
 
 def _es_comprobante(tipo_documento) -> bool:
@@ -365,7 +464,8 @@ def analizar_documento(ruta_absoluta: str, tipo_documento: str, datos_admision: 
     if not texto and not imagenes:
         logger.info("PDF sin contenido legible: %s", ruta_absoluta)
         return None
-    resultado = _llamar_openai(texto, imagenes, tipo_documento, datos_admision)
+    firma = _detectar_firma_pdf(ruta_absoluta) if _es_comprobante(tipo_documento) else None
+    resultado = _llamar_openai(texto, imagenes, tipo_documento, datos_admision, firma_detectada=firma)
     resultado["modo"] = ("mixto" if texto else "imagen") if imagenes else "texto"
     return resultado
 
