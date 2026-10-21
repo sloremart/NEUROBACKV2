@@ -361,6 +361,7 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     if tipo not in TIPOS_OBSERVACION:
         tipo = "INFORMACION"
     resultado["tipo"] = tipo
+    _ajustar_lateralidad_admision(resultado, datos_admision)
 
     if not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK":
         desc = (resultado.get("descripcion") or "").lower()
@@ -495,8 +496,27 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                          ajuste_procedimiento_orden=True)
 
     _coherencia_tipo_descripcion(resultado)
-
     return resultado
+
+
+def _lateralidad_cups(datos_admision: dict) -> str:
+    """DERECHA / IZQUIERDA solo si el texto de los CUPS lo dice; 'AP. LATERAL' es proyección, no lado."""
+    import re
+    import unicodedata
+    t = ' '.join(str(c) for c in (datos_admision.get('cups') or []))
+    t = unicodedata.normalize('NFKD', t).encode('ascii', 'ignore').decode().upper()
+    der, izq = bool(re.search(r'\bDERECH', t)), bool(re.search(r'\bIZQUIERD', t))
+    if der and not izq:
+        return 'DERECHA'
+    if izq and not der:
+        return 'IZQUIERDA'
+    return 'NO_ESPECIFICA'
+
+
+def _ajustar_lateralidad_admision(resultado: dict, datos_admision: dict) -> None:
+    adm = resultado.get("estudio_admision")
+    if isinstance(adm, dict):
+        adm["lateralidad"] = _lateralidad_cups(datos_admision)
 
 
 def _coherencia_tipo_descripcion(resultado: dict) -> None:

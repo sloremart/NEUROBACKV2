@@ -31,8 +31,8 @@ class Command(BaseCommand):
                             help="Revisar de nuevo solo los archivos con un hallazgo IA pendiente (no los que están OK)")
 
     def handle(self, *args, **o):
-        if not (o['admision'] or o['desde']):
-            raise CommandError("Indique --admision o --desde para no revisar todo el histórico")
+        if not (o['admision'] or o['desde'] or o['solo_hallazgos']):
+            raise CommandError("Indique --admision, --desde o --solo-hallazgos para no revisar todo el histórico")
 
         archivos = ArchivoFacturacion.objects.exclude(Tipo__in=TIPOS_SIN_REVISION_IA)
         if o['admision']:
