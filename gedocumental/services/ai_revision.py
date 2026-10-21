@@ -146,6 +146,29 @@ que más se le parece. Usa SOLO estos valores (en mayúsculas):
 Si el documento no trae procedimiento (comprobante, factura…), usa NO_APLICA en ambos."""
 
 
+def _reparar_texto(texto) -> str:
+    """
+    Repara texto de Zeus guardado con doble codificación (UTF-8 leído como Windows-1252):
+    "MEDICINA FÃSICA Y REHABILITACIÃ“N" -> "MEDICINA FÍSICA Y REHABILITACIÓN".
+    Pasa en ~13 % de las descripciones de CUPS. Si no se puede reparar, lo deja igual.
+    """
+    if not texto or not any(c in texto for c in ('Ã', 'Â')):
+        return texto or ''
+    crudo = bytearray()
+    for ch in texto:
+        if ord(ch) < 256:
+            crudo.append(ord(ch))
+        else:
+            try:
+                crudo.extend(ch.encode('cp1252'))
+            except UnicodeEncodeError:
+                return texto
+    try:
+        return crudo.decode('utf-8')
+    except UnicodeDecodeError:
+        return texto
+
+
 def obtener_contexto_admision(consecutivo) -> dict:
     """
     Consulta en ZeusSalud los datos de la admisión contra los que se valida el documento.
@@ -170,12 +193,12 @@ def obtener_contexto_admision(consecutivo) -> dict:
             )
             fila = cursor.fetchone()
             if fila:
-                nombre = ' '.join((p or '').strip() for p in fila[2:6] if (p or '').strip())
+                nombre = _reparar_texto(' '.join((p or '').strip() for p in fila[2:6] if (p or '').strip()))
                 datos.update({
                     "paciente": nombre,
                     "identificacion": f"{(fila[0] or '').strip()} {(fila[1] or '').strip()}".strip(),
-                    "entidad": (fila[6] or '').strip(),
-                    "contrato": (fila[7] or '').strip(),
+                    "entidad": _reparar_texto((fila[6] or '').strip()),
+                    "contrato": _reparar_texto((fila[7] or '').strip()),
                     "fecha": str(fila[8].date()) if fila[8] else '',
                 })
 
@@ -188,7 +211,7 @@ def obtener_contexto_admision(consecutivo) -> dict:
                 [consecutivo],
             )
             datos["cups"] = [
-                f"{cups} - {desc} (cant. {int(cant) if cant is not None else 1})"
+                f"{cups} - {_reparar_texto(desc)} (cant. {int(cant) if cant is not None else 1})"
                 for cups, desc, cant in cursor.fetchall()
             ]
     except Exception as exc:
