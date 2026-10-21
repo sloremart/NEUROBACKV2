@@ -20,7 +20,7 @@ from gedocumental import views_siesa
 from gedocumental.views_siesa import (SIESA_FORMULARIO_URL, SIESA_REPORT_VIEW_URL, _get_siesa_session,
                                       _fetch_pdf_enfermeria, _parse_hidden_inputs, _pdf_corresponde_al_estudio,
                                       _urls_exportacion_pdf, _campos_formulario_visor,
-                                      _urls_descarga_exportacion)
+                                      _urls_descarga_exportacion, _pdf_desde_html_visor)
 
 URL_TEMP = "http://192.168.1.209:8091/ZeusSalud/Archivos/CLIENTE/Temp/"
 
@@ -163,6 +163,18 @@ class Command(BaseCommand):
                     self.stdout.write(f"    ¿Es del estudio {estudio}? {_pdf_corresponde_al_estudio(rd.content, estudio)}")
                 elif rd.content:
                     self.stdout.write(f"    Contenido: {rd.content[:300]!r}")
+
+        self.stdout.write("\nHTML DEL VISOR -> PDF (wkhtmltopdf)")
+        try:
+            pdf_h = _pdf_desde_html_visor(s, r2.text, campos)
+            if pdf_h:
+                self.stdout.write(f"  PDF: {len(pdf_h)} bytes")
+                self.stdout.write("  Texto (inicio): " + re.sub(r"\s+", " ", _texto_pdf(pdf_h)[:400]))
+                self.stdout.write(f"  ¿Es del estudio {estudio}? {_pdf_corresponde_al_estudio(pdf_h, estudio)}")
+            else:
+                self.stdout.write("  No se generó PDF")
+        except Exception as exc:
+            self.stdout.write(f"  Error: {exc!r}")
 
         self.stdout.write("\nPASO 3a exportación a PDF desde el visor")
         urls = _urls_exportacion_pdf(r2.text)

@@ -697,6 +697,14 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True) -> bytes:
         pdf_visor = _exportar_pdf_visor(s, r2.text, form_fields)
         if pdf_visor and (not verificar or _pdf_corresponde_al_estudio(pdf_visor, estudio) is not False):
             return pdf_visor
+        # El exportador PDF de SIESA puede devolver archivos vacíos: se convierte el HTML del
+        # visor (que sí trae la nota de este estudio) a PDF con wkhtmltopdf
+        try:
+            pdf_html = _pdf_desde_html_visor(s, r2.text, form_fields)
+        except Exception:
+            pdf_html = None
+        if pdf_html and (not verificar or _pdf_corresponde_al_estudio(pdf_html, estudio) is not False):
+            return pdf_html
         for url in _urls_exportacion_pdf(r2.text):
             try:
                 r_exp = s.get(url, timeout=60)
@@ -822,6 +830,114 @@ def _exportar_pdf_visor(s: requests.Session, html: str, campos_informe: dict = N
         if r_pdf.content.startswith(b"%PDF"):
             return r_pdf.content
     return None
+
+
+def _quitar_tabla_que_contiene(html: str, pos: int) -> str:
+    """Quita la <table> más interna que contiene la posición dada (p. ej. la barra del visor)."""
+    bajo = html.lower()
+    inicio = bajo.rfind("<table", 0, pos)
+    if inicio == -1:
+        return html
+    profundidad, i = 0, inicio + 1
+    while True:
+        abre = bajo.find("<table", i)
+        cierra = bajo.find("</table>", i)
+        if cierra == -1:
+            return html
+        if abre != -1 and abre < cierra:
+            profundidad += 1
+            i = abre + 1
+        elif profundidad:
+            profundidad -= 1
+            i = cierra + 1
+        else:
+            return html[:inicio] + html[cierra + len("</table>"):]
+
+
+def _pagina_visor_html(s: requests.Session, html: str) -> tuple:
+    """(estilos del <head>, cuerpo de la página sin barra ni scripts, con imágenes incrustadas)."""
+    from urllib.parse import urljoin
+    cabeza = re.search(r"<head\b[^>]*>(.*?)</head>", html, re.IGNORECASE | re.DOTALL)
+    estilos = "".join(re.findall(r"<style\b.*?</style>", cabeza.group(1) if cabeza else "",
+                                 re.IGNORECASE | re.DOTALL))
+    cuerpo_m = re.search(r"<body\b[^>]*>(.*)</body>", html, re.IGNORECASE | re.DOTALL)
+    cuerpo = cuerpo_m.group(1) if cuerpo_m else html
+    # Quitar la barra de herramientas (tabla que contiene el menú Export)
+    m = re.search(r"<select\b[^>]*title=[\"']Export", cuerpo, re.IGNORECASE)
+    if m:
+        cuerpo = _quitar_tabla_que_contiene(cuerpo, m.start())
+    cuerpo = re.sub(r"<script\b.*?</script>", "", cuerpo, flags=re.IGNORECASE | re.DOTALL)
+    cuerpo = re.sub(r"<input\b[^>]*>|<select\b.*?</select>", "", cuerpo, flags=re.IGNORECASE | re.DOTALL)
+    cuerpo = re.sub(r"</?form\b[^>]*>", "", cuerpo, flags=re.IGNORECASE)
+
+    # Incrustar las imágenes del informe (requieren la sesión de SIESA)
+    def incrustar(mi):
+        src = mi.group(2).replace("&amp;", "&")
+        if src.startswith("data:"):
+            return mi.group(0)
+        try:
+            ri = s.get(urljoin(SIESA_REPORT_VIEW_URL, src), timeout=30)
+            if ri.status_code != 200 or not ri.content:
+                return mi.group(0)
+            tipo = (ri.headers.get("Content-Type") or "image/png").split(";")[0]
+            return f'{mi.group(1)}data:{tipo};base64,{base64.b64encode(ri.content).decode()}{mi.group(3)}'
+        except requests.RequestException:
+            return mi.group(0)
+    cuerpo = re.sub(r"""(<img\b[^>]*\bsrc=["'])([^"']+)(["'])""", incrustar, cuerpo, flags=re.IGNORECASE)
+    return estilos, cuerpo
+
+
+def _pdf_desde_html_visor(s: requests.Session, html: str, campos_informe: dict = None):
+    """
+    Convierte a PDF (wkhtmltopdf) el informe que muestra el visor FastReport, recorriendo sus
+    páginas con el mismo postback del campo "página". Devuelve bytes del PDF o None.
+    """
+    texto = re.sub(r"<[^>]+>", " ", html)
+    m_total = re.search(r"\bof\s+(\d+)\b", html_lib.unescape(texto))
+    total = min(int(m_total.group(1)), 30) if m_total else 1
+
+    estilos, cuerpo = _pagina_visor_html(s, html)
+    cuerpos = [cuerpo]
+    actual = html
+    for pagina in range(2, total + 1):
+        campos, _, _ = _campos_formulario_visor(actual)
+        campo_pagina = next((k for k, v in campos.items()
+                             if not k.startswith("__") and v.strip() == str(pagina - 1)), None)
+        if not campo_pagina:
+            break
+        datos = dict(campos_informe or {})
+        datos.update(campos)
+        datos[campo_pagina] = str(pagina)
+        datos["__EVENTTARGET"] = campo_pagina
+        datos["__EVENTARGUMENT"] = ""
+        r = s.post(SIESA_REPORT_VIEW_URL, data=datos, timeout=60, headers={"Referer": SIESA_REPORT_VIEW_URL})
+        if r.status_code != 200:
+            break
+        actual = r.text
+        cuerpos.append(_pagina_visor_html(s, actual)[1])
+
+    documento = (
+        '<html><head><meta charset="UTF-8">' + estilos + "</head><body>"
+        + '<div style="page-break-after:always"></div>'.join(cuerpos)
+        + "</body></html>"
+    )
+    tmp_html_path = tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8") as th:
+            th.write(documento)
+            tmp_html_path = th.name
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tp:
+            tmp_path = tp.name
+        res = subprocess.run(["wkhtmltopdf", "--encoding", "UTF-8", "--quiet", tmp_html_path, tmp_path],
+                             capture_output=True, timeout=90)
+        # wkhtmltopdf puede terminar con código 1 por un recurso que no cargó y aun así generar el PDF
+        with open(tmp_path, "rb") as f:
+            datos_pdf = f.read()
+        return datos_pdf if datos_pdf.startswith(b"%PDF") else None
+    finally:
+        for p in (tmp_html_path, tmp_path):
+            if p and os.path.exists(p):
+                os.remove(p)
 
 
 def _urls_descarga_exportacion(r) -> list:
