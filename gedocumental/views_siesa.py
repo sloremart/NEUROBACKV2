@@ -703,7 +703,7 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
     try:
         return _do_fetch_enfermeria(session)
     except Exception:
-        global _siesa_session_cache
+        # (_siesa_session_cache ya está declarado global al inicio de la función)
         _siesa_session_cache = None
         session = _get_siesa_session()
         return _do_fetch_enfermeria(session)
