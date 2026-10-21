@@ -137,7 +137,8 @@ aunque la primera ya haya fallado:
 que más se le parece. Usa SOLO estos valores (en mayúsculas):
   M (modalidad): TAC | RM | RX | ECOGRAFIA | EMG | NEUROCONDUCCION | EMG_NEUROCONDUCCION | EEG | PSG |
                  POTENCIALES_EVOCADOS | CONSULTA | LABORATORIO | PROCEDIMIENTO | OTRO | NO_APLICA
-                 (TAC = tomografía computada/computarizada/escanografía; RM = resonancia magnética)
+                 (TAC = tomografía computada/computarizada/escanografía y también PET/CT o PET-TC =
+                 tomografía por emisión de positrones; RM = resonancia magnética)
   R (región):    CABEZA (cráneo, cerebro, encéfalo, silla turca, órbitas) | CUELLO | COLUMNA_CERVICAL |
                  COLUMNA_DORSAL | COLUMNA_LUMBAR | COLUMNA_TOTAL | TORAX | ABDOMEN | PELVIS |
                  MIEMBRO_SUPERIOR | MIEMBRO_INFERIOR | CUERPO_ENTERO | OTRA | NO_APLICA
@@ -429,7 +430,10 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     # Falta del código CUPS, redacción distinta o detalle insuficiente NO son hallazgo.
     if ((tipo_documento or '').upper() == 'RESULTADO' and resultado["tipo"] != "OK"
             and resultado.get("paciente_coincide") != "NO"
-            and not _diferencia_clara(resultado.get("estudio_documento"), resultado.get("estudio_admision"))):
+            and (not _diferencia_clara(resultado.get("estudio_documento"), resultado.get("estudio_admision"))
+                 or (_imagen_documentada(texto, datos_admision)
+                     and not _lateralidad_opuesta(resultado.get("estudio_documento"),
+                                                  resultado.get("estudio_admision"))))):
         logger.info("RESULTADO sin diferencia clara de estudio: se descarta '%s'", resultado.get("descripcion"))
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_resultado=True)
@@ -848,6 +852,76 @@ def _solo_motivo_procedimiento(descripcion) -> bool:
     return bool(sobre_procedimiento and not otros_motivos)
 
 
+def _modalidad_base(m: str) -> str:
+    """Agrupa modalidades equivalentes: PET/PET-CT con TAC; EMG con neuroconducción."""
+    m = (m or '').upper().replace('-', '_').replace(' ', '_')
+    if m in ('PET', 'PET_CT', 'PET_TC', 'PETCT', 'MEDICINA_NUCLEAR', 'TOMOGRAFIA', 'TC'):
+        return 'TAC'
+    if m in ('EMG', 'NEUROCONDUCCION', 'EMG_NEUROCONDUCCION'):
+        return 'EMG'
+    if m in ('RMN', 'RESONANCIA'):
+        return 'RM'
+    if m in ('RADIOGRAFIA', 'RAYOS_X'):
+        return 'RX'
+    return m
+
+
+def _region_base(r: str) -> str:
+    """Regiones vecinas que la IA etiqueta indistintamente (cadera = pelvis o miembro inferior)."""
+    r = (r or '').upper()
+    if r in ('PELVIS', 'MIEMBRO_INFERIOR', 'CADERA'):
+        return 'PELVIS_MIEMBRO_INFERIOR'
+    if r.startswith('COLUMNA'):
+        return 'COLUMNA'
+    if r in ('TORAX', 'ABDOMEN', 'CUERPO_ENTERO'):
+        return r if r != 'CUERPO_ENTERO' else ''  # cuerpo entero (PET) no se compara por región
+    return r
+
+
+# Imágenes: palabras con que se nombra cada modalidad y zonas anatómicas (sin tildes)
+_MODALIDADES_IMAGEN = {
+    'RX':  ('RADIOGRAF', 'RAYOS X', ' RX '),
+    'TAC': ('TOMOGRAF', 'ESCANOGRAF', ' TAC ', ' TC ', 'PET', 'POSITRONES'),
+    'RM':  ('RESONANCIA', ' RM ', ' RMN '),
+    'ECO': ('ECOGRAF', 'ULTRASONID', 'DOPPLER', 'ECOCARDIOGRAF'),
+}
+_ZONAS = ('CRANEO', 'CEREBRO', 'ENCEFALO', 'CARA', 'SENOS PARANASALES', 'ORBITA', 'SILLA TURCA', 'CUELLO',
+          'TORAX', 'ABDOMEN', 'PELVIS', 'COLUMNA', 'CERVICAL', 'DORSAL', 'LUMBAR', 'LUMBOSACRA', 'SACRO',
+          'CADERA', 'COXO', 'RODILLA', 'TOBILLO', 'PIE', 'HOMBRO', 'CODO', 'MUNECA', 'MANO', 'FEMUR', 'TIBIA',
+          'HUMERO', 'ANTEBRAZO', 'PIERNA', 'MAMA', 'TIROIDES', 'RENAL', 'RINON', 'HIGADO', 'PROSTATA',
+          'OBSTETRIC', 'ARTICULACION', 'VESICULA', 'TESTICUL', 'CAROTID')
+
+
+def _imagen_documentada(texto: str, datos_admision: dict) -> bool:
+    """
+    True si un CUPS de imagen de la admisión está documentado: el texto menciona su tipo de estudio
+    (radiografía / tomografía o PET / resonancia / ecografía) y, si el CUPS nombra una zona, al
+    menos una de esas zonas. Ej. "PET/CT" para "tomografía por emisión de positrones", o
+    "RX de cadera y rodillas" para CUPS de radiografía de cadera y de rodilla.
+    """
+    import re
+    import unicodedata
+
+    def plano(t):
+        t = unicodedata.normalize('NFKD', t or '').encode('ascii', 'ignore').decode().upper()
+        return ' ' + ' '.join(re.sub(r'[^A-Z]+', ' ', t).split()) + ' '
+
+    doc = plano(texto)
+    if len(doc) < 10:
+        return False
+    for cups in datos_admision.get('cups') or []:
+        c = plano(re.sub(r'^\s*\S+\s*-\s*', '', str(cups)))
+        for raices in _MODALIDADES_IMAGEN.values():
+            if any(r in c for r in raices):
+                if not any(r in doc for r in raices):
+                    break
+                zonas = [z for z in _ZONAS if z in c]
+                if not zonas or any(z in doc for z in zonas):
+                    return True
+                break
+    return False
+
+
 def _diferencia_clara(doc, adm) -> bool:
     """
     True solo si el estudio del documento es CLARAMENTE otro que el de la admisión:
@@ -866,11 +940,10 @@ def _diferencia_clara(doc, adm) -> bool:
         return True
 
     desconocidos = {'', 'OTRO', 'NO_APLICA', 'NO_ESPECIFICA', 'OTRA', 'PROCEDIMIENTO'}
-    mod_d, mod_a = val(doc, 'modalidad'), val(adm, 'modalidad')
+    mod_d, mod_a = _modalidad_base(val(doc, 'modalidad')), _modalidad_base(val(adm, 'modalidad'))
     if mod_d in desconocidos or mod_a in desconocidos:
         return False
-    combinado = {'EMG', 'NEUROCONDUCCION', 'EMG_NEUROCONDUCCION'}
-    if mod_d != mod_a and not (mod_d in combinado and mod_a in combinado):
+    if mod_d != mod_a:
         return True
 
     if mod_d == 'CONSULTA':
@@ -878,7 +951,7 @@ def _diferencia_clara(doc, adm) -> bool:
         return bool(esp_d and esp_a and esp_d != esp_a)
 
     if mod_d in ('TAC', 'RM', 'RX', 'ECOGRAFIA'):
-        reg_d, reg_a = val(doc, 'region'), val(adm, 'region')
+        reg_d, reg_a = _region_base(val(doc, 'region')), _region_base(val(adm, 'region'))
         if reg_d not in desconocidos and reg_a not in desconocidos and reg_d != reg_a:
             return True
         lat = {val(doc, 'lateralidad'), val(adm, 'lateralidad')}
