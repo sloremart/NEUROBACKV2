@@ -325,22 +325,30 @@ def _ya_existe_resultado(estudio: int) -> bool:
 
 
 def _registrar_en_bd(estudio: int, nombre: str, ruta_relativa: str):
-    """Registra el PDF generado en la tabla archivos (upsert para evitar duplicados)."""
-    ArchivoFacturacion.objects.update_or_create(
-        Admision_id=estudio,
-        Tipo="RESULTADO",
-        defaults={
-            "NombreArchivo": nombre,
-            "RutaArchivo": ruta_relativa,
-            "NumeroAdmision": str(estudio),
-            "FechaCreacionArchivo": datetime.now(),
-            "FechaCreacionAntares": datetime.now(),
-            "RevisionPrimera": False,
-            "RevisionSegunda": False,
-            "RevisionTercera": False,
-            "Radicado": False,
-        },
-    )
+    """
+    Registra el PDF generado en la tabla archivos (upsert para evitar duplicados).
+    Si la admisión ya tiene más de un RESULTADO (ej. uno importado de la carpeta de exámenes
+    y otro de SIESA), se actualiza el generado por SIESA ({estudio}R.pdf) o, si no hay, el primero.
+    """
+    campos = {
+        "NombreArchivo": nombre,
+        "RutaArchivo": ruta_relativa,
+        "NumeroAdmision": str(estudio),
+        "FechaCreacionArchivo": datetime.now(),
+        "FechaCreacionAntares": datetime.now(),
+        "RevisionPrimera": False,
+        "RevisionSegunda": False,
+        "RevisionTercera": False,
+        "Radicado": False,
+    }
+    existentes = ArchivoFacturacion.objects.filter(Admision_id=estudio, Tipo="RESULTADO").order_by("IdArchivo")
+    archivo = existentes.filter(NombreArchivo=nombre).first() or existentes.first()
+    if archivo is None:
+        ArchivoFacturacion.objects.create(Admision_id=estudio, Tipo="RESULTADO", **campos)
+        return
+    for campo, valor in campos.items():
+        setattr(archivo, campo, valor)
+    archivo.save()
 
 
 def _estudios_por_fecha(fecha_inicio: str, fecha_fin: str):
