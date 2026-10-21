@@ -68,6 +68,16 @@ VERIFICACIONES OBLIGATORIAS (en este orden):
    - Autorización que no cubre los procedimientos de la admisión → AUTORIZACION
    - Resultado/informe de un procedimiento distinto al de la admisión → REPORTE
    Indica qué trae el documento y qué esperaba la admisión.
+   CONSULTAS: una consulta de primera vez, de control o de seguimiento de la MISMA especialidad coincide
+   (ej. "CONTROL MEDICINA FISICA Y REHABILITACION" vs CUPS "consulta de primera vez por especialista en
+   medicina física y rehabilitación" → coincide). Solo es error si la especialidad es otra.
+   PROCEDIMIENTO REALIZADO vs ORDENADO: compara solo lo que el documento muestra como REALIZADO (el tipo
+   de informe o historia clínica, su encabezado, la especialidad que atendió y el estudio informado). Las
+   secciones "Plan de tratamiento", "Procedimientos ordenados", "Órdenes", "Se solicita", "Se ordena",
+   "Recomendaciones" o "Control con resultados" son ÓRDENES para después: NO se comparan con la admisión.
+   Ej.: la historia clínica de una consulta de MEDICINA FÍSICA Y REHABILITACIÓN que ordena resonancia,
+   electromiografía y terapias corresponde a un CUPS de "consulta por especialista en medicina física y
+   rehabilitación" → coincide.
    Compara el ESTUDIO, no el texto literal: la descripción del CUPS casi nunca se escribe igual en los
    documentos. Son EQUIVALENTES (no es error):
      TAC = TC = tomografía computada = tomografía computarizada = escanografía = scanner;
@@ -116,12 +126,12 @@ aunque la primera ya haya fallado:
   "procedimientos_documento": "<CUPS/procedimientos que trae el documento, o 'no aplica'>",
   "procedimientos_coinciden": "SI | NO | NO_APLICA",
   "firma_paciente": "SI | NO | NO_APLICA   (solo COMPROBANTE; en otros documentos NO_APLICA)",
-  "estudio_documento": {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>"},
-  "estudio_admision":  {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>"},
+  "estudio_documento": {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
+  "estudio_admision":  {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
   "tipo": "<uno de los tipos de arriba>",
   "descripcion": "<máximo 220 caracteres, concreta, citando el dato del documento y el esperado, incluyendo todos los problemas encontrados; o 'Documento correcto' si es OK>"
 }
-"estudio_documento" = el estudio principal que trae el documento; "estudio_admision" = el CUPS de la admisión
+"estudio_documento" = el estudio o atención REALIZADA que documenta (nunca los procedimientos ordenados para después); "estudio_admision" = el CUPS de la admisión
 que más se le parece. Usa SOLO estos valores (en mayúsculas):
   M (modalidad): TAC | RM | RX | ECOGRAFIA | EMG | NEUROCONDUCCION | EMG_NEUROCONDUCCION | EEG | PSG |
                  POTENCIALES_EVOCADOS | CONSULTA | LABORATORIO | PROCEDIMIENTO | OTRO | NO_APLICA
@@ -131,6 +141,8 @@ que más se le parece. Usa SOLO estos valores (en mayúsculas):
                  MIEMBRO_SUPERIOR | MIEMBRO_INFERIOR | CUERPO_ENTERO | OTRA | NO_APLICA
   L (lateralidad): DERECHA | IZQUIERDA | BILATERAL | NO_ESPECIFICA
   C (contraste):   CON | SIN | NO_ESPECIFICA   ("simple" = SIN)
+  E (especialidad, solo si M = CONSULTA): nombre corto de la especialidad, ej. MEDICINA_FISICA_REHABILITACION,
+                 NEUROLOGIA, NEUROCIRUGIA, PSIQUIATRIA; si no es consulta, NO_APLICA
 Si el documento no trae procedimiento (comprobante, factura…), usa NO_APLICA en ambos."""
 
 
@@ -346,6 +358,13 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         notas.append("el PROCEDIMIENTO del documento SÍ corresponde al de la admisión (mismo tipo de estudio, "
                      "región, lateralidad y contraste; solo cambia la forma de escribirlo): procedimientos_coinciden = SI")
         ajustes["procedimientos_coinciden"] = "SI"
+    if ((resultado.get("procedimientos_coinciden") == "NO" or resultado["tipo"] in ("REPORTE", "SOPORTES"))
+            and "procedimientos_coinciden" not in ajustes
+            and _consulta_documentada(texto, datos_admision)):
+        notas.append("el documento es la HISTORIA CLÍNICA de una consulta de la MISMA especialidad que el CUPS de la "
+                     "admisión (primera vez, control o seguimiento da igual); los procedimientos que menciona como "
+                     "antecedentes u ordenados para después NO son lo realizado: procedimientos_coinciden = SI")
+        ajustes["procedimientos_coinciden"] = "SI"
     if (_es_comprobante(tipo_documento) and resultado.get("procedimientos_coinciden") == "NO"
             and _sin_dato(resultado.get("procedimientos_documento"))):
         notas.append("el COMPROBANTE no trae procedimientos y eso NO es un error: procedimientos_coinciden = NO_APLICA")
@@ -398,6 +417,49 @@ def _coherencia_tipo_descripcion(resultado: dict) -> None:
         resultado["descripcion"] = "Documento correcto"
     elif resultado.get("tipo") == "OK":
         resultado["descripcion"] = "Documento correcto"
+
+
+# Encabezados de secciones con procedimientos ORDENADOS para después (no realizados)
+_INICIO_ORDENES = (
+    r'plan de tratamiento', r'procedimientos ordenados', r'ordenes medicas', r'ordenes externas',
+    r'solicitud(?:es)? de (?:procedimientos|ordenes|examenes)', r'se solicita[n]?', r'se ordena[n]?',
+    r'examenes solicitados', r'paraclinicos solicitados', r'conducta',
+)
+# Encabezados que cierran esa sección
+_FIN_ORDENES = (
+    r'impresion (?:clinica|diagnostica)', r'diagnostico(?:s)?(?: principal)?', r'atendido por',
+    r'firma', r'\[pagina \d+\]', r'revision por sistemas', r'examen fisico', r'conclusion(?:es)?',
+)
+
+
+def _quitar_secciones_ordenes(texto: str) -> str:
+    """
+    En RESULTADOS/historias clínicas, las secciones "Plan de tratamiento", "Procedimientos
+    ordenados", "Se solicita"... son órdenes para después, no lo realizado. Se reemplazan por
+    una nota para que la IA no las compare con los CUPS de la admisión.
+    """
+    import re
+    import unicodedata
+
+    def sin_tildes(t):
+        return unicodedata.normalize('NFKD', t).encode('ascii', 'ignore').decode()
+
+    lineas = texto.split('\n')
+    salida, omitiendo = [], False
+    inicio = re.compile(r'^\s*\W*\s*(?:' + '|'.join(_INICIO_ORDENES) + r')\b', re.I)
+    fin = re.compile(r'^\s*\W*\s*(?:' + '|'.join(_FIN_ORDENES) + r')\b', re.I)
+    for linea in lineas:
+        plano = sin_tildes(linea)
+        if not omitiendo and inicio.search(plano):
+            omitiendo = True
+            salida.append("[Sección de procedimientos ORDENADOS para después omitida por el sistema: "
+                          "no es lo realizado y no se compara con la admisión]")
+            continue
+        if omitiendo and fin.search(plano):
+            omitiendo = False
+        if not omitiendo:
+            salida.append(linea)
+    return '\n'.join(salida)
 
 
 def _sin_dato(valor) -> bool:
@@ -475,6 +537,55 @@ def _detectar_firma_pdf(ruta_absoluta: str) -> bool | None:
         return None
 
 
+def _consulta_documentada(texto: str, datos_admision: dict) -> bool:
+    """
+    True si la admisión tiene una CONSULTA de especialista y el documento es la historia clínica
+    de esa misma especialidad (ej. CUPS "consulta de primera vez por especialista en medicina física
+    y rehabilitación" y documento "CONTROL MEDICINA FISICA Y REHABILITACION").
+    """
+    import re
+    import unicodedata
+
+    def plano(t):
+        t = unicodedata.normalize('NFKD', t or '').encode('ascii', 'ignore').decode().upper()
+        return ' '.join(re.sub(r'[^A-Z]+', ' ', t).split())
+
+    doc = plano(texto)
+    if not doc or not re.search(r'HISTORIA CLINICA|MOTIVO DE CONSULTA|CONSULTA|ENFERMEDAD ACTUAL', doc):
+        return False
+    for cups in datos_admision.get('cups') or []:
+        c = plano(cups)
+        if 'CONSULTA' not in c:
+            continue
+        m = re.search(r'ESPECIALISTA EN (.+?)(?: CANT.*)?$', c) or re.search(r'CONSULTA .*? POR (.+?)(?: CANT.*)?$', c)
+        if not m:
+            continue
+        especialidad = _norm_especialidad(m.group(1))
+        if not especialidad:
+            continue
+        if especialidad == 'FISIATRIA':
+            if 'FISIATR' in doc or 'MEDICINA FISICA Y REHABILITACION' in doc:
+                return True
+        elif especialidad in doc:
+            return True
+    return False
+
+
+def _norm_especialidad(texto: str) -> str:
+    """'MEDICINA FÍSICA Y REHABILITACIÓN' / 'FISIATRIA' -> 'FISIATRIA'."""
+    import re
+    import unicodedata
+    t = unicodedata.normalize('NFKD', texto or '').encode('ascii', 'ignore').decode().upper()
+    t = re.sub(r'[^A-Z]+', ' ', t).strip()
+    if t in ('', 'NO APLICA', 'NO ESPECIFICA'):
+        return ''
+    if 'FISIATR' in t or ('FISICA' in t and 'REHABILITACION' in t):
+        return 'FISIATRIA'
+    for palabra in ('ESPECIALISTA', 'MEDICINA', 'EN', 'POR', 'DE', 'Y'):
+        t = re.sub(rf'\b{palabra}\b', ' ', t)
+    return ' '.join(t.split())
+
+
 def _es_comprobante(tipo_documento) -> bool:
     return (tipo_documento or '').upper() in TIPOS_CON_FIRMA
 
@@ -497,6 +608,11 @@ def _mismo_estudio(doc, adm) -> bool:
     def compatibles(a, b, comodines):
         return a == b or a in comodines or b in comodines
 
+    if mod_d == 'CONSULTA':
+        # Primera vez / control / seguimiento da igual: cuenta la especialidad
+        esp_d, esp_a = _norm_especialidad(val(doc, 'especialidad')), _norm_especialidad(val(adm, 'especialidad'))
+        return not esp_d or not esp_a or esp_d == esp_a
+
     return (compatibles(val(doc, 'region'), val(adm, 'region'), {'', 'NO_APLICA'})
             and compatibles(val(doc, 'lateralidad'), val(adm, 'lateralidad'), {'', 'NO_ESPECIFICA'})
             and compatibles(val(doc, 'contraste'), val(adm, 'contraste'), {'', 'NO_ESPECIFICA'}))
@@ -508,6 +624,8 @@ def analizar_documento(ruta_absoluta: str, tipo_documento: str, datos_admision: 
     Devuelve None si no se pudo leer. Puede lanzar excepciones de la API.
     """
     texto, imagenes = _leer_documento(ruta_absoluta, tipo_documento)
+    if (tipo_documento or '').upper() == 'RESULTADO' and texto:
+        texto = _quitar_secciones_ordenes(texto)
     if not texto and not imagenes:
         logger.info("PDF sin contenido legible: %s", ruta_absoluta)
         return None
