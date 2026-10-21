@@ -43,6 +43,7 @@ class Command(BaseCommand):
         self.stdout.write("---")
         self.stdout.write(f"¿Contiene el número de estudio {estudio}? {str(estudio) in texto}")
         num_id = re.sub(r"\D", "", (fila[0] if fila else "") or "")
-        self.stdout.write(f"¿Contiene el documento {num_id}? "
-                          f"{bool(num_id) and num_id in re.sub(r'[.,\s]', '', texto)}")
+        texto_compacto = re.sub(r"[.,\s]", "", texto)
+        contiene_documento = bool(num_id) and num_id in texto_compacto
+        self.stdout.write(f"¿Contiene el documento {num_id}? {contiene_documento}")
         self.stdout.write(f"Verificación del sistema: {_pdf_corresponde_al_estudio(pdf, estudio)}")
