@@ -445,7 +445,7 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     # y "no se leyó el nombre" (la IA a veces toma "RESULTADO" o "PACIENTE" como si fuera el nombre).
     # Si la IA aceptó el paciente pero el nombre del documento (PDF digital o escaneado) tiene letras
     # distintas a las de la admisión, es "nombre mal escrito".
-    if (resultado.get("paciente_coincide") == "SI"
+    if (resultado.get("paciente_coincide") == "SI" and (tipo_documento or '').upper() != 'RESULTADO'
             and (_nombre_en_texto(resultado.get("nombre_documento"), texto)
                  or (imagenes and len([t for t in _tokens_nombre(resultado.get("nombre_documento"))
                                        if t not in _NO_SON_NOMBRE]) >= 2))
@@ -455,6 +455,10 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
 
     if resultado.get("paciente_coincide") == "NO":
         clase = _clasificar_paciente(resultado, texto, datos_admision)
+        # En el RESULTADO (lo genera el equipo/software del estudio) una letra o un dígito distinto en el
+        # nombre o el documento no es error del resultado: solo importa que no sea OTRA persona.
+        if (tipo_documento or '').upper() == 'RESULTADO' and clase in ("nombre_mal_escrito", "documento_incorrecto"):
+            clase = "misma_persona"
         if clase == "misma_persona":
             resultado["paciente_coincide"] = "SI"
             if resultado["tipo"] == "INFORMACION" and _solo_motivo_paciente(resultado.get("descripcion")):
