@@ -318,8 +318,8 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             "firma o trazo manuscrito del paciente (o su acompañante) en el espacio \"Firma del paciente\". "
             "El texto impreso \"Firma del paciente:\" NO es una firma. Si el espacio está vacío → SOPORTES "
             "\"Ausencia de firma en el comprobante de la atención\". "
-            "En el comprobante la sección de procedimientos puede venir vacía: eso NO es error "
-            "(procedimientos_coinciden = NO_APLICA); solo compáralos si el comprobante los trae.\n\n"
+            "En el COMPROBANTE solo se verifican el PACIENTE y la FIRMA. NO compares procedimientos ni CUPS "
+            "(procedimientos_coinciden = NO_APLICA) aunque vengan vacíos o sean distintos.\n\n"
         )
     else:
         encabezado += (
@@ -388,6 +388,14 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                      "admisión (primera vez, control o seguimiento da igual); los procedimientos que menciona como "
                      "antecedentes u ordenados para después NO son lo realizado: procedimientos_coinciden = SI")
         ajustes["procedimientos_coinciden"] = "SI"
+    if (_es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
+            and resultado.get("paciente_coincide") != "NO"
+            and str(resultado.get("firma_paciente", "")).upper() != "NO"
+            and not (firma_detectada is False)):
+        # En el comprobante solo importan el paciente y la firma: cualquier otro motivo se descarta
+        logger.info("Comprobante con paciente y firma correctos: se descarta '%s'", resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="NO_APLICA",
+                         ajuste_comprobante=True)
     if (_es_comprobante(tipo_documento) and resultado.get("procedimientos_coinciden") == "NO"
             and _sin_dato(resultado.get("procedimientos_documento"))):
         notas.append("el COMPROBANTE no trae procedimientos y eso NO es un error: procedimientos_coinciden = NO_APLICA")
@@ -580,30 +588,50 @@ def _consulta_documentada(texto: str, datos_admision: dict) -> bool:
         c = plano(cups)
         if 'CONSULTA' not in c:
             continue
-        m = re.search(r'ESPECIALISTA EN (.+?)(?: CANT.*)?$', c) or re.search(r'CONSULTA .*? POR (.+?)(?: CANT.*)?$', c)
+        m = (re.search(r'ESPECIALISTA EN (.+?)(?: CANT.*)?$', c)
+             or re.search(r'CONSULTA .*? POR (.+?)(?: CANT.*)?$', c)
+             or re.search(r'CONSULTA (.+?)(?: CANT.*)?$', c))
         if not m:
             continue
         especialidad = _norm_especialidad(m.group(1))
         if not especialidad:
             continue
-        if especialidad == 'FISIATRIA':
-            if 'FISIATR' in doc or 'MEDICINA FISICA Y REHABILITACION' in doc:
+        raices = dict(ESPECIALIDADES).get(especialidad)
+        if raices:
+            if any(re.search(r, doc) for r in raices):
                 return True
         elif especialidad in doc:
             return True
     return False
 
 
+# Raíces sin tildes: funcionan aunque Zeus entregue "FÃ?SICA" o "NEUROLOGÃ\x8dA".
+# El orden importa (neurocirugía y neuropediatría antes que neurología).
+ESPECIALIDADES = (
+    ('FISIATRIA',        (r'REHABILIT', r'FISIATR')),
+    ('NEUROCIRUGIA',     (r'NEUROCIRUG',)),
+    ('NEUROPEDIATRIA',   (r'NEUROLOG\w*\W*\w*\W*PEDI', r'NEUROPEDIAT')),
+    ('NEUROLOGIA',       (r'NEUROLOG',)),
+    ('PSIQUIATRIA',      (r'PSIQUIAT',)),
+    ('ANESTESIOLOGIA',   (r'ANESTESIOLOG',)),
+    ('ORTOPEDIA',        (r'ORTOPED',)),
+    ('MEDICINA_INTERNA', (r'MEDICINA\W+INTERNA',)),
+    ('DOLOR',            (r'\bDOLOR\b.*\bPALIATIV', r'CLINICA\W+DEL\W+DOLOR')),
+    ('MEDICINA_GENERAL', (r'MEDICINA\W+GENERAL',)),
+)
+
+
 def _norm_especialidad(texto: str) -> str:
-    """'MEDICINA FÍSICA Y REHABILITACIÓN' / 'FISIATRIA' -> 'FISIATRIA'."""
+    """'MEDICINA FÍSICA Y REHABILITACIÓN' / 'FISIATRIA' / 'MEDICINA FÃ?SICA Y REHABILITACIÃ?N' -> 'FISIATRIA'."""
     import re
     import unicodedata
     t = unicodedata.normalize('NFKD', texto or '').encode('ascii', 'ignore').decode().upper()
-    t = re.sub(r'[^A-Z]+', ' ', t).strip()
-    if t in ('', 'NO APLICA', 'NO ESPECIFICA'):
+    if not t.strip() or t.strip() in ('NO_APLICA', 'NO APLICA', 'NO_ESPECIFICA', 'NO ESPECIFICA'):
         return ''
-    if 'FISIATR' in t or ('FISICA' in t and 'REHABILITACION' in t):
-        return 'FISIATRIA'
+    for nombre, raices in ESPECIALIDADES:
+        if any(re.search(r, t) for r in raices):
+            return nombre
+    t = re.sub(r'[^A-Z]+', ' ', t)
     for palabra in ('ESPECIALISTA', 'MEDICINA', 'EN', 'POR', 'DE', 'Y'):
         t = re.sub(rf'\b{palabra}\b', ' ', t)
     return ' '.join(t.split())
