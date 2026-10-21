@@ -56,6 +56,8 @@ que se cargan a una ADMISIÓN. Te doy los datos reales de la admisión tomados d
 
 VERIFICACIONES OBLIGATORIAS (en este orden):
 1. PACIENTE: el nombre y/o número de identificación que aparece en el documento debe ser el mismo paciente de la admisión.
+   El paciente es quien aparece como "Paciente", "Nombre del paciente" o en los DATOS DEL PACIENTE. NUNCA tomes
+   como paciente al médico, especialista, tecnólogo, transcriptor, profesional que firma o usuario que imprime.
    Tolera tildes, mayúsculas, orden de nombres/apellidos, guiones o comas y un segundo nombre faltante,
    pero NO un paciente distinto NI errores de ortografía en el nombre (ej. PAULA vs PAOLA).
    Si es OTRA PERSONA (nombres o apellidos distintos) → tipo INFORMACION: "Paciente no corresponde:
@@ -486,7 +488,7 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     # ÓRDENES y AUTORIZACIONES: un hallazgo cuyo ÚNICO motivo es el procedimiento ("no se especifican
     # procedimientos", "no aparece el CUPS"...) se descarta si no hay diferencia clara de estudio.
     # Otros motivos (vencida, sin número, ilegible, cantidades, firma) se mantienen.
-    if ((tipo_documento or '').upper() in ('ORDEN', 'AUTORIZACION') and resultado["tipo"] != "OK"
+    if (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
             and resultado.get("paciente_coincide") != "NO"
             and _solo_motivo_procedimiento(resultado.get("descripcion"))
             and not _diferencia_clara(resultado.get("estudio_documento"), resultado.get("estudio_admision"))):
@@ -639,6 +641,14 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
     if _mismo_paciente(resultado, datos_admision):
         return "misma_persona"
 
+    # El nombre COMPLETO del paciente de la admisión está escrito en el documento: es su documento,
+    # aunque la IA haya tomado otro nombre (el médico que firma, el tecnólogo, quien imprime...).
+    adm_completo = _tokens_nombre(datos_admision.get('paciente'))
+    if len(adm_completo) >= 2:
+        del_texto = _tokens_nombre(texto)
+        if all(_buscar_palabra(t, del_texto) for t in adm_completo):
+            return "misma_persona"
+
     adm = _tokens_nombre(datos_admision.get('paciente'))
     doc = [t for t in _tokens_nombre(resultado.get('nombre_documento') or resultado.get('paciente_documento'))
            if t not in _NO_SON_NOMBRE]
@@ -653,11 +663,9 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
         return "otra_persona"
 
     if len(doc) < 2:
-        # El nombre no se leyó bien: basta con que el documento o el nombre de la admisión estén en el texto
-        tokens_texto = set(_tokens_nombre(texto))
-        if mismo_id or (adm and all(t in tokens_texto for t in adm)):
-            return "misma_persona"
-        return "otra_persona"
+        # El nombre no se leyó (ej. la IA devolvió "RESULTADO"): sin evidencia de otra persona no es hallazgo.
+        # (Un número de documento distinto ya se resolvió arriba.)
+        return "misma_persona"
 
     # Nombre casi igual: cada palabra del documento se parece (≥ 0.8) a una distinta de la admisión
     disponibles, parecido = list(adm), True
