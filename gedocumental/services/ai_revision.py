@@ -432,6 +432,18 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_resultado=True)
 
+    # ÓRDENES y AUTORIZACIONES: un hallazgo cuyo ÚNICO motivo es el procedimiento ("no se especifican
+    # procedimientos", "no aparece el CUPS"...) se descarta si no hay diferencia clara de estudio.
+    # Otros motivos (vencida, sin número, ilegible, cantidades, firma) se mantienen.
+    if ((tipo_documento or '').upper() in ('ORDEN', 'AUTORIZACION') and resultado["tipo"] != "OK"
+            and resultado.get("paciente_coincide") != "NO"
+            and _solo_motivo_procedimiento(resultado.get("descripcion"))
+            and not _diferencia_clara(resultado.get("estudio_documento"), resultado.get("estudio_admision"))):
+        logger.info("%s: motivo solo de procedimiento sin diferencia clara, se descarta '%s'",
+                    tipo_documento, resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
+                         ajuste_procedimiento_orden=True)
+
     _coherencia_tipo_descripcion(resultado)
 
     return resultado
@@ -697,6 +709,18 @@ def _norm_especialidad(texto: str) -> str:
 
 def _es_comprobante(tipo_documento) -> bool:
     return (tipo_documento or '').upper() in TIPOS_CON_FIRMA
+
+
+def _solo_motivo_procedimiento(descripcion) -> bool:
+    """True si la descripción del hallazgo solo habla del procedimiento/CUPS y de ningún otro motivo."""
+    import re
+    import unicodedata
+    d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    sobre_procedimiento = re.search(r'procedimiento|cups|estudio|servicio|no se especifica|no incluye|no aparece', d)
+    otros_motivos = re.search(r'vencid|vigencia|caducad|numero de autorizacion|sin numero|no cuenta con numero|'
+                              r'legib|cantidad|firma|paciente no|nombre|documento de identidad|identificacion|'
+                              r'fecha|tachon|enmendad', d)
+    return bool(sobre_procedimiento and not otros_motivos)
 
 
 def _diferencia_clara(doc, adm) -> bool:
