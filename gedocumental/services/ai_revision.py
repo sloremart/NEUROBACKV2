@@ -122,7 +122,7 @@ Responde ÚNICAMENTE con un JSON válido sin texto adicional. Completa SIEMPRE l
 aunque la primera ya haya fallado:
 {
   "paciente_documento": "<nombre e identificación tal como aparecen en el documento, o 'no aparece'>",
-  "nombre_documento": "<solo el nombre completo del paciente tal como aparece, o ''>",
+  "nombre_documento": "<solo el nombre completo del paciente TRANSCRITO LETRA POR LETRA tal como está escrito en el documento, sin corregir ortografía ni completarlo con el de la admisión, o ''>",
   "identificacion_documento": "<solo el número de documento del paciente, sin tipo, o ''>",
   "paciente_coincide": "SI | NO | NO_APARECE",
   "procedimientos_documento": "<CUPS/procedimientos que trae el documento, o 'no aplica'>",
@@ -436,10 +436,12 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
 
     # Paciente: el sistema decide entre "otra persona", "misma persona con el nombre mal escrito"
     # y "no se leyó el nombre" (la IA a veces toma "RESULTADO" o "PACIENTE" como si fuera el nombre).
-    # Si la IA aceptó el paciente pero el nombre del PDF digital tiene letras distintas a las de la
-    # admisión, es "nombre mal escrito" (solo con texto real del PDF: en imágenes la IA puede leer mal letras).
-    if (resultado.get("paciente_coincide") == "SI" and texto
-            and _nombre_en_texto(resultado.get("nombre_documento"), texto)
+    # Si la IA aceptó el paciente pero el nombre del documento (PDF digital o escaneado) tiene letras
+    # distintas a las de la admisión, es "nombre mal escrito".
+    if (resultado.get("paciente_coincide") == "SI"
+            and (_nombre_en_texto(resultado.get("nombre_documento"), texto)
+                 or (imagenes and len([t for t in _tokens_nombre(resultado.get("nombre_documento"))
+                                       if t not in _NO_SON_NOMBRE]) >= 2))
             and not _mismo_paciente(resultado, datos_admision)
             and _clasificar_paciente(resultado, texto, datos_admision) == "nombre_mal_escrito"):
         resultado["paciente_coincide"] = "NO"
