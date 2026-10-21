@@ -22,7 +22,7 @@ from login.models import CustomUser
 from resultadosgedocumental.models import ConsolidadoEstudios
 from .serializers import   ArchivoFacturacionSerializer, ObservacionSinArchivoSerializer,  RevisionCuentaMedicaSerializer
 from django.http import Http404
-from .models import ArchivoFacturacion, AuditoriaCuentasMedicas, ObservacionSinArchivo, ObservacionesArchivos
+from .models import ArchivoFacturacion, AuditoriaCuentasMedicas, ObservacionSinArchivo, ObservacionesArchivos, RevisionIA
 from django.conf import settings
 import os
 from django.db.models import Count
@@ -33,7 +33,8 @@ from rest_framework.permissions import AllowAny
 from datetime import date
 from rest_framework.decorators import api_view, permission_classes
 import zipfile
-from gedocumental.services.ai_revision import revisar_archivo
+from gedocumental.services.ai_revision import revisar_archivo, obtener_contexto_admision, revisar_en_segundo_plano
+from gedocumental.services.validacion_paciente import validar_datos_paciente
 
 
 # ── Helper ZeusSalud ─────────────────────────────────────────────────────────
@@ -153,7 +154,7 @@ class GeDocumentalView(APIView):
                     'ContratoAlias':     admision_data[18],
                     'ContratoRegimen':   admision_data[19],
                     'FechaIngreso':      admision_data[20].isoformat() if admision_data[20] else None,
-                    'ValidacionPaciente': None,
+                    'ValidacionPaciente': validar_datos_paciente(consecutivo),
                 }
 
                 return Response({
@@ -206,6 +207,7 @@ class ArchivoUploadView(APIView):
                 settings.MEDIA_ROOT, 'gdocumental', 'archivosFacturacion', str(admision.Consecutivo)
             )
             os.makedirs(folder_path, exist_ok=True)
+
             for archivo in archivos:
                 archivo.seek(0)
                 hash_archivo = calcular_hash_archivo(archivo)
@@ -245,23 +247,19 @@ class ArchivoUploadView(APIView):
                 archivo_obj.NumeroAdmision = admision.Consecutivo
                 archivo_obj.save()
 
-                # Revisión automática con IA (si OPENAI_API_KEY está configurada)
-                datos_admision = {
-                    "consecutivo": admision.Consecutivo,
-                    "paciente": "",
-                    "entidad": admision.CodigoEntidad or admision.IDPaciente or "",
-                    "procedimiento": tipo_documento,
-                    "fecha": str(admision.FechaCreado.date()) if admision.FechaCreado else "",
-                }
-                ai_revision = revisar_archivo(archivo_obj, datos_admision)
-
                 hashes_existentes.add(hash_archivo)
                 archivos_guardados.append({
                     "id": archivo_obj.IdArchivo,
                     "ruta": archivo_obj.RutaArchivo.url,
                     "nombre": archivo_obj.NombreArchivo,
-                    "ai_revision": ai_revision,
                 })
+
+            # Revisión IA en segundo plano: la subida responde de inmediato y el resultado
+            # se consulta después (archivos-por-admision → revision_ia)
+            revision_pendiente = revisar_en_segundo_plano(
+                [a["id"] for a in archivos_guardados], admision.Consecutivo)
+            for a in archivos_guardados:
+                a["ai_revision_pendiente"] = revision_pendiente
 
             return JsonResponse({
                 "success": True,
@@ -314,15 +312,16 @@ class ArchivoEditView(APIView):
                 auditoria.FechaCargueArchivo = datetime.now()  # Aquí se cambia a datetime.now()
                 auditoria.save(update_fields=['FechaCargueArchivo'])
 
-            # La IA revisa de nuevo el archivo reemplazado; si sale OK, el hallazgo anterior queda resuelto
-            ai_revision = None
-            if 'archivo' in request.FILES and getattr(settings, 'REVISAR_CON_IA', False):
-                ai_revision = revisar_archivo(archivo, obtener_contexto_admision(admision.Consecutivo))
+            # La IA revisa de nuevo el archivo reemplazado (en segundo plano);
+            # si sale OK, el hallazgo anterior queda resuelto
+            revision_pendiente = False
+            if 'archivo' in request.FILES:
+                revision_pendiente = revisar_en_segundo_plano([archivo.IdArchivo], admision.Consecutivo)
 
             response_data = {
                 "success": True,
                 "detail": f"Archivo {archivo_id} editado exitosamente para la admisión con consecutivo {consecutivo}",
-                "data": {"ai_revision": ai_revision} if ai_revision else None
+                "data": {"ai_revision_pendiente": revision_pendiente} if revision_pendiente else None
             }
 
             return JsonResponse(response_data, status=status.HTTP_200_OK)
@@ -386,13 +385,21 @@ def archivos_por_admision(request, numero_admision):
         
         archivo_serializer = ArchivoFacturacionSerializer(archivos, many=True)
         observacion_serializer = ObservacionSinArchivoSerializer(observaciones, many=True)
-        
+
+        # Última revisión IA de cada archivo: {IdArchivo: {tipo, descripcion, resuelta}}
+        revision_ia = {}
+        for r in RevisionIA.objects.filter(IdArchivo__in=archivos).order_by('IdRevision'):
+            revision_ia[r.IdArchivo_id] = {
+                "tipo": r.TipoHallazgo, "descripcion": r.Descripcion, "resuelta": r.Resuelta,
+            }
+
         response_data = {
             "success": True,
             "detail": f"Archivos encontrados para la admisión con número {numero_admision}",
             "data": {
                 "archivos": archivo_serializer.data,
-                "observaciones": observacion_serializer.data
+                "observaciones": observacion_serializer.data,
+                "revision_ia": revision_ia,
             }
         }
       

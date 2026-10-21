@@ -4,7 +4,7 @@ from django.dispatch import receiver
 from django.db.models.signals import pre_delete,pre_save,post_save
 from django.contrib.auth.models import User
 from django.conf import settings
-
+from django.utils import timezone
 
 from django.core.files.storage import default_storage
 
@@ -168,3 +168,72 @@ class HistorialRevision(models.Model):
 
 from django.db import models
 
+
+
+######### REVISIÓN AUTOMÁTICA CON IA ###########
+class RevisionIA(models.Model):
+    """
+    Historial de revisiones de la IA. No modifica los campos del flujo de
+    Cuentas Médicas / Programación de Pagos (EstadoRevision, TipoHallazgo):
+    solo registra el hallazgo para el reporte "Hallazgos IA".
+    Una revisión queda pendiente hasta que el archivo se vuelve a revisar
+    (al editarlo) o se elimina.
+    """
+    RESOLUCIONES = [
+        ('CORREGIDO', 'Corregido (nueva revisión OK)'),
+        ('REEMPLAZADO', 'Reemplazado por una nueva revisión'),
+        ('ARCHIVO_ELIMINADO', 'Archivo eliminado'),
+    ]
+
+    IdRevision = models.AutoField(primary_key=True)
+    IdArchivo = models.ForeignKey(ArchivoFacturacion, on_delete=models.SET_NULL, null=True, blank=True, related_name='RevisionesIA')
+    # Copiados del archivo para conservar el historial aunque el archivo se elimine
+    AdmisionId = models.IntegerField(db_index=True)
+    TipoDocumento = models.CharField(max_length=255, blank=True, default='')
+    UsuarioId = models.IntegerField(null=True, blank=True, db_index=True)
+
+    Fecha = models.DateTimeField(auto_now_add=True, db_index=True)
+    TipoHallazgo = models.CharField(max_length=20, db_index=True)  # OK, INFORMACION, AUTORIZACION...
+    Descripcion = models.TextField(blank=True, default='')
+    Modo = models.CharField(max_length=10, blank=True, default='')  # texto | imagen | mixto
+
+    Resuelta = models.BooleanField(default=False, db_index=True)
+    Resolucion = models.CharField(max_length=20, choices=RESOLUCIONES, null=True, blank=True)
+    FechaResolucion = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'revision_ia'
+        managed = True
+
+
+@receiver(pre_delete, sender=ArchivoFacturacion)
+def cerrar_revisiones_ia_al_eliminar(sender, instance, **kwargs):
+    from django.utils import timezone
+    RevisionIA.objects.filter(IdArchivo=instance, Resuelta=False).update(
+        Resuelta=True, Resolucion='ARCHIVO_ELIMINADO', FechaResolucion=timezone.now(),
+    )
+
+
+class AutorizacionRPA(models.Model):
+    """
+    Registro persistente de consultas RPA de autorización por paciente/EPS.
+    Se reutiliza mientras la autorización esté vigente; se re-consulta si venció.
+    """
+    eps          = models.CharField(max_length=50)
+    doc_num      = models.CharField(max_length=30)
+    status       = models.CharField(max_length=30)   # AUTORIZADO | SIN_VOLANTE | SIN_CONTRATO | ERROR
+    num_autorizacion = models.CharField(max_length=120, blank=True, null=True)
+    fecha_vigencia   = models.CharField(max_length=60, blank=True, null=True)
+    servicio         = models.CharField(max_length=300, blank=True, null=True)
+    cups             = models.CharField(max_length=20, blank=True, null=True)
+    mensaje          = models.TextField(blank=True, null=True)
+    datos_completos  = models.JSONField(default=dict)   # resultado completo del bot
+    fecha_consulta   = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table        = 'rpa_autorizaciones'
+        unique_together = [('eps', 'doc_num')]
+        indexes         = [models.Index(fields=['eps', 'doc_num'])]
+
+    def __str__(self):
+        return f"{self.eps} | {self.doc_num} | {self.status}"

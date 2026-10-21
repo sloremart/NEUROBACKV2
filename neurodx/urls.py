@@ -46,6 +46,8 @@ from gedocumental.views import (
     radicar_other_view,
 )
 from gedocumental.utils.codigoentidad import obtener_hallazgos
+from gedocumental.views_ia import hallazgos_ia, bandeja_cuentas_medicas
+from gedocumental.views_demanda_inducida import demanda_inducida_view, consultar_autorizacion_view
 from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote, debug_siesa_login, generar_pdf_enfermeria, generar_pdfs_enfermeria_lote
 
 # =============================================================================
@@ -71,6 +73,8 @@ gedocumental_urls = [
     path('archivos/<str:consecutivo>/editar/<int:archivo_id>/',  ArchivoEditView.as_view(),              name='v2-archivo-edit'),
     path('eliminar-archivo/',                                    ArchivoFacturacionDeleteView.as_view(), name='v2-archivo-delete'),
     path('hallazgos/',                                           obtener_hallazgos,                      name='v2-hallazgos'),
+    path('hallazgos-ia/',                                        hallazgos_ia,                           name='v2-hallazgos-ia'),
+    path('bandeja-cuentas-medicas/',                             bandeja_cuentas_medicas,                name='v2-bandeja-cuentas-medicas'),
     path('lista-codigo-entidad/',                                CodigoListView.as_view(),               name='v2-codigo-entidad'),
     path('actualizar-regimen/<int:consecutivo>/',                ActualizarRegimenArchivosView.as_view(),name='v2-actualizar-regimen'),
     path('admision-revision/<int:consecutivo>/',                 AdmisionCuentaMedicaView.as_view(),     name='v2-admision-revision'),
@@ -92,6 +96,9 @@ gedocumental_urls = [
     path('radicar-medisanitas/<int:numero_admision>/<str:idusuario>/',     radicar_mes01_view,           name='v2-radicar-medisanitas'),
     path('radicar-san02/<int:numero_admision>/<str:idusuario>/',           radicar_san02_view,           name='v2-radicar-san02'),
     path('radicar-otros/<int:numero_admision>/<str:idusuario>/',           radicar_other_view,           name='v2-radicar-otros'),
+    # ── Demanda Inducida ──────────────────────────────────────────────────────
+    path('demanda-inducida/',                                     demanda_inducida_view,        name='v2-demanda-inducida'),
+    path('consultar-autorizacion/',                               consultar_autorizacion_view,  name='v2-consultar-autorizacion'),
     # ── Generación PDFs desde SIESA (reemplaza el flujo Antares) ─────────────
     path('generar-pdf-siesa/',       generar_pdf_siesa,          name='v2-generar-pdf-siesa'),
     path('generar-pdfs-siesa/',      generar_pdfs_siesa_lote,    name='v2-generar-pdfs-siesa-lote'),

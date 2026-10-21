@@ -22,6 +22,10 @@ SECRET_KEY = 'django-insecure-+749%6yh6m6u-h!ft8j&1*exs16d3$vz=i^69hjv@!%exade*!
 
 REVISAR_CON_IA = os.environ.get('REVISAR_CON_IA', 'False').lower() not in ('false', '0', 'no', '')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+# Responsable de los hallazgos de documentos cargados por el sistema (RESULTADOS automáticos)
+USUARIO_COORDINACION_MEDICA_ID = int(os.environ.get('USUARIO_COORDINACION_MEDICA_ID', '256'))  # Valentina Matus
+# Días desde el ingreso sin RESULTADO cargado antes de generar el hallazgo "ausencia del reporte"
+DIAS_ESPERA_RESULTADO = int(os.environ.get('DIAS_ESPERA_RESULTADO', '5'))
 
 
 DEBUG = True

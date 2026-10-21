@@ -11,11 +11,30 @@ services:
         required: false
     environment:
       - REVISAR_CON_IA=False
+      - RPA_HUB_URL=http://rpa_bots_api:5055
 
     volumes:
       - /media/disco1/examenes:/media/disco1/examenes
       - /media/disco1/:/neuro
       - /mnt/prueba:/mnt/prueba:rw
+
+  rpa_bots_api:
+    build: ../RPA_BOTS_HUB
+    container_name: rpa_bots_api
+    restart: unless-stopped
+    command: python -u api.py
+    ports:
+      - "5055:5055"
+    env_file:
+      - path: ../RPA_BOTS_HUB/.env
+        required: true
+    environment:
+      - TZ=America/Bogota
+    volumes:
+      - rpa_data:/app/data
+
+volumes:
+  rpa_data:
 
       
 

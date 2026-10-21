@@ -9,6 +9,7 @@ from dashboard.view import (
     DashboardFacturacionNuevoView,
     DashboardAdmisionesVsFacturacionView,
     CargaAutorizacionesView,
+    DashboardFacturacionRegularDetalladaView,
 )
 
 
@@ -25,5 +26,6 @@ urlpatterns = [
     path('resultados-estudios/',   ResultadosEstudiosView.as_view(),            name='resultados-estudios'),
     path('facturacion-nuevo/',      DashboardFacturacionNuevoView.as_view(),             name='facturacion-nuevo'),
     path('facturacion-admisiones/', DashboardAdmisionesVsFacturacionView.as_view(),     name='facturacion-admisiones'),
-    path('carga-autorizaciones/',   CargaAutorizacionesView.as_view(),                 name='carga-autorizaciones'),
+    path('carga-autorizaciones/',           CargaAutorizacionesView.as_view(),                          name='carga-autorizaciones'),
+    path('facturacion-regular-detallada/', DashboardFacturacionRegularDetalladaView.as_view(),         name='facturacion-regular-detallada'),
 ]

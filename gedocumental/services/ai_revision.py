@@ -1,8 +1,10 @@
 """
 Revisión automática de documentos de facturación con IA.
 
-Extrae el texto del PDF subido y lo envía a GPT-4o-mini para detectar
-inconsistencias según los tipos de observación SIESA:
+Lee el PDF o imagen subida (texto si es digital, imagen si es escaneado/foto), lo compara
+con los datos reales de la admisión en ZeusSalud (paciente, identificación,
+EPS, CUPS) y lo envía a GPT-4o-mini para detectar inconsistencias según los
+tipos de observación SIESA:
   OK | AUTORIZACION | SOPORTES | REPORTE | FARMACIA | TARIFA |
   CONTRATO | INFORMACION | RECAUDO
 
@@ -11,11 +13,14 @@ un registro en ObservacionesArchivos para que regrese al usuario que lo subió.
 Si la API key no está configurada la función devuelve None sin lanzar error.
 """
 
+import base64
+import io
 import json
 import logging
 import os
 
 from django.conf import settings
+from django.db import connections
 
 logger = logging.getLogger(__name__)
 
@@ -26,47 +31,218 @@ TIPOS_OBSERVACION = [
     'FARMACIA', 'TARIFA', 'CONTRATO', 'INFORMACION', 'RECAUDO',
 ]
 
+# Por debajo de este número de caracteres el PDF se trata como escaneado
+MIN_CARACTERES_TEXTO = 50
+# Páginas máximas que se envían como imagen (controla costo y tiempo)
+MAX_PAGINAS_IMAGEN = 3
+# Formatos que se revisan: PDF (digital, escaneado o mixto) e imágenes sueltas
+EXTENSIONES_IMAGEN = ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff')
+EXTENSIONES_REVISABLES = ('.pdf',) + EXTENSIONES_IMAGEN
+# Lado máximo en píxeles de una foto antes de enviarla (fotos de celular son enormes)
+MAX_LADO_IMAGEN = 2000
+# Tipos de documento en los que hay que VER la página aunque tenga texto (firma manuscrita)
+TIPOS_CON_FIRMA = ('COMPROBANTE',)
+
 PROMPT_SISTEMA = """Eres un auditor experto en facturación de servicios de salud en Colombia.
-Revisas documentos de gestión documental (Factura, Comprobante de pago, Autorización del seguro y Resultado/informe médico).
+Revisas documentos de gestión documental (factura, comprobante, autorización, orden médica, resultado/informe, etc.)
+que se cargan a una ADMISIÓN. Te doy los datos reales de la admisión tomados del sistema; el documento DEBE corresponder a ella.
 
-Tu tarea es detectar problemas que generarían una devolución por parte de Cuentas Médicas.
-Los tipos de observación posibles son exactamente estos (en mayúsculas sin tildes):
+VERIFICACIONES OBLIGATORIAS (en este orden):
+1. PACIENTE: el nombre y/o número de identificación que aparece en el documento debe ser el mismo paciente de la admisión.
+   Tolera tildes, mayúsculas, orden de nombres/apellidos y un segundo nombre faltante, pero NO un paciente distinto.
+   Si es otra persona → tipo INFORMACION, indicando ambos nombres.
+   Si el documento NO trae nombre ni identificación del paciente, eso NO es un error por sí solo
+   (paciente_coincide = NO_APARECE): sigue con las demás verificaciones.
+2. PROCEDIMIENTOS: en órdenes médicas, autorizaciones y resultados, los procedimientos/CUPS del documento deben
+   corresponder a los CUPS de la admisión. Compara por código CUPS y, si no hay código, por la descripción.
+   - Orden médica que no incluye los procedimientos de la admisión → SOPORTES
+   - Autorización que no cubre los procedimientos de la admisión → AUTORIZACION
+   - Resultado/informe de un procedimiento distinto al de la admisión → REPORTE
+   Indica qué trae el documento y qué esperaba la admisión.
+   Compara el ESTUDIO, no el texto literal: la descripción del CUPS casi nunca se escribe igual en los
+   documentos. Son EQUIVALENTES (no es error):
+     TAC = TC = tomografía computada = tomografía computarizada = escanografía = scanner;
+     RM = RMN = resonancia magnética = resonancia nuclear magnética;
+     cráneo ≈ cerebro ≈ encéfalo (para TAC/RM de cabeza); "simple" = sin contraste (puede no mencionarse);
+     EMG = electromiografía; neuroconducción = velocidad de conducción nerviosa = VCN = estudio de neuroconducción;
+     EEG = electroencefalograma; PSG = polisomnografía; ecografía = ultrasonido = ecografía doppler cuando el CUPS es doppler;
+     RX = radiografía. También son normales abreviaturas, órdenes distintos de palabras y textos más cortos o más largos.
+   SOLO es error de procedimiento cuando cambia algo de fondo:
+     - otro tipo de estudio (resonancia vs tomografía, EMG vs EEG);
+     - otra región anatómica (resonancia de abdomen vs resonancia de cerebro; columna lumbar vs cervical);
+     - otra LATERALIDAD (estudio de miembro derecho y la orden pide el izquierdo);
+     - con contraste explícito cuando el CUPS es simple, o al revés.
+   Ante la duda razonable de que sea el mismo estudio, considéralo coincidente (procedimientos_coinciden = SI).
+   COMPROBANTE de atención: MIRA LA IMAGEN y verifica que haya una firma o trazo manuscrito del paciente
+   (o su acompañante) en el espacio "Firma del paciente". El texto "Firma del paciente:" impreso NO es
+   una firma. Si el espacio está vacío → SOPORTES "Ausencia de firma en el comprobante de la atención".
+3. Solo si 1 y 2 están bien, revisa el resto según la tabla de convenciones (fechas, vigencia, cantidades,
+   firmas, legibilidad, datos incompletos).
+Si hay varios problemas, el tipo es el del primero según este orden, y en la descripción menciona también los demás de forma breve.
+No marques como error que el documento no traiga un dato que normalmente no lleva ese tipo de documento.
 
-- OK: el documento está completo y no tiene errores
-- AUTORIZACION: la autorización del seguro falta, está vencida o no corresponde al procedimiento
-- SOPORTES: faltan soportes obligatorios (historia clínica, orden médica, fórmula, etc.)
-- REPORTE: el informe o resultado médico tiene inconsistencias con el procedimiento facturado
-- FARMACIA: hay errores en medicamentos (nombre, concentración, cantidad, lote)
-- TARIFA: el valor cobrado no corresponde al contrato o a la tarifa acordada
-- CONTRATO: el servicio prestado no está cubierto por el contrato de la EPS
-- INFORMACION: datos del paciente, EPS, fecha o procedimiento están incorrectos o incompletos
-- RECAUDO: hay inconsistencias en valores pagados, copagos o cuotas moderadoras
+Tipos de observación (convenciones del informe SIESA de auditoría de facturas; en mayúsculas sin tildes):
+- OK: soportes correctamente cargados e información validada.
+- AUTORIZACION: no cuenta con número de autorización; la autorización no coincide con la información del
+  paciente y/o el procedimiento a facturar; inconsistencia en las cantidades autorizadas; autorización no
+  legible; autorización vencida.
+- SOPORTES: ausencia de soportes en su totalidad o parte de ellos (historia clínica si aplica, autorización,
+  orden médica, comprobante); incoherencia en soportes (no corresponde la información del paciente);
+  orden médica vencida; ausencia de firma en el comprobante de la atención.
+- REPORTE: incoherencia en el reporte (no corresponde al procedimiento realizado); ausencia del reporte;
+  error en lateralidad (ej.: tomado en derecho y la orden pide izquierdo).
+- FARMACIA: ausencia de cargue o relación de insumos y/o medicamentos suministrados al paciente.
+- TARIFA: incoherencia en el valor a cobrar según el anexo tarifario pactado.
+- CONTRATO: incoherencia en el contrato en el que se clasifica el usuario.
+- INFORMACION: información incorrecta del paciente (tipo de documento, número de documento, tipo de usuario,
+  cobertura, régimen, nombre del usuario); ausencia de vale.
+- RECAUDO: ausencia de cobro de cuota moderadora o copago; cobro incompleto de cuota moderadora o copago;
+  error en el tipo de cobro generado.
 
-Responde ÚNICAMENTE con un JSON válido sin texto adicional:
+Responde ÚNICAMENTE con un JSON válido sin texto adicional. Completa SIEMPRE las dos verificaciones,
+aunque la primera ya haya fallado:
 {
-  "tipo": "<uno de los tipos de arriba en mayúsculas>",
-  "descripcion": "<máximo 200 caracteres explicando el problema concreto, o 'Documento correcto' si tipo es OK>"
-}"""
+  "paciente_documento": "<nombre e identificación tal como aparecen en el documento, o 'no aparece'>",
+  "paciente_coincide": "SI | NO | NO_APARECE",
+  "procedimientos_documento": "<CUPS/procedimientos que trae el documento, o 'no aplica'>",
+  "procedimientos_coinciden": "SI | NO | NO_APLICA",
+  "firma_paciente": "SI | NO | NO_APLICA   (solo COMPROBANTE; en otros documentos NO_APLICA)",
+  "estudio_documento": {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>"},
+  "estudio_admision":  {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>"},
+  "tipo": "<uno de los tipos de arriba>",
+  "descripcion": "<máximo 220 caracteres, concreta, citando el dato del documento y el esperado, incluyendo todos los problemas encontrados; o 'Documento correcto' si es OK>"
+}
+"estudio_documento" = el estudio principal que trae el documento; "estudio_admision" = el CUPS de la admisión
+que más se le parece. Usa SOLO estos valores (en mayúsculas):
+  M (modalidad): TAC | RM | RX | ECOGRAFIA | EMG | NEUROCONDUCCION | EMG_NEUROCONDUCCION | EEG | PSG |
+                 POTENCIALES_EVOCADOS | CONSULTA | LABORATORIO | PROCEDIMIENTO | OTRO | NO_APLICA
+                 (TAC = tomografía computada/computarizada/escanografía; RM = resonancia magnética)
+  R (región):    CABEZA (cráneo, cerebro, encéfalo, silla turca, órbitas) | CUELLO | COLUMNA_CERVICAL |
+                 COLUMNA_DORSAL | COLUMNA_LUMBAR | COLUMNA_TOTAL | TORAX | ABDOMEN | PELVIS |
+                 MIEMBRO_SUPERIOR | MIEMBRO_INFERIOR | CUERPO_ENTERO | OTRA | NO_APLICA
+  L (lateralidad): DERECHA | IZQUIERDA | BILATERAL | NO_ESPECIFICA
+  C (contraste):   CON | SIN | NO_ESPECIFICA   ("simple" = SIN)
+Si el documento no trae procedimiento (comprobante, factura…), usa NO_APLICA en ambos."""
 
 
-def _extraer_texto_pdf(ruta_absoluta: str) -> str:
-    """Extrae texto de un PDF digital. Devuelve cadena vacía si falla o es escaneado."""
+def obtener_contexto_admision(consecutivo) -> dict:
+    """
+    Consulta en ZeusSalud los datos de la admisión contra los que se valida el documento.
+    Devuelve un dict con lo que encuentre; nunca lanza excepción.
+    """
+    datos = {"consecutivo": consecutivo}
+    try:
+        with connections['zeussalud'].cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT TOP 1
+                    sp.tipo_id, sp.num_id,
+                    sp.primer_nom, sp.segundo_nom, sp.primer_ape, sp.segundo_ape,
+                    se.nombre AS entidad, c.alias AS contrato, sm.fecha_ing
+                FROM sis_maes sm
+                LEFT JOIN sis_paci sp ON sm.autoid = sp.autoid
+                LEFT JOIN sis_empre se ON LTRIM(RTRIM(sm.EPSPaciente)) = LTRIM(RTRIM(se.codigo))
+                LEFT JOIN contratos c ON sm.contrato = c.codigo
+                WHERE sm.con_estudio = %s
+                """,
+                [consecutivo],
+            )
+            fila = cursor.fetchone()
+            if fila:
+                nombre = ' '.join((p or '').strip() for p in fila[2:6] if (p or '').strip())
+                datos.update({
+                    "paciente": nombre,
+                    "identificacion": f"{(fila[0] or '').strip()} {(fila[1] or '').strip()}".strip(),
+                    "entidad": (fila[6] or '').strip(),
+                    "contrato": (fila[7] or '').strip(),
+                    "fecha": str(fila[8].date()) if fila[8] else '',
+                })
+
+            cursor.execute(
+                """
+                SELECT LTRIM(RTRIM(sd.cups)), LTRIM(RTRIM(sd.descripcion)), sd.cantidad
+                FROM sis_deta sd
+                WHERE sd.estudio = %s
+                """,
+                [consecutivo],
+            )
+            datos["cups"] = [
+                f"{cups} - {desc} (cant. {int(cant) if cant is not None else 1})"
+                for cups, desc, cant in cursor.fetchall()
+            ]
+    except Exception as exc:
+        logger.warning("No se pudo obtener contexto de la admisión %s: %s", consecutivo, exc)
+    return datos
+
+
+def _leer_pdf(ruta_absoluta: str, siempre_imagen: bool = False) -> tuple[str, list[str]]:
+    """
+    Devuelve (texto, imagenes_base64), decidiendo página por página: las que
+    tienen texto se leen como texto; las escaneadas o fotos guardadas en PDF
+    se renderizan como PNG (hasta MAX_PAGINAS_IMAGEN). Así un PDF mixto
+    (factura digital + autorización escaneada) se revisa completo.
+    siempre_imagen: además del texto, envía la imagen de las páginas (para ver la firma).
+    """
     try:
         import pdfplumber
-        texto = ""
+        textos, imagenes = [], []
         with pdfplumber.open(ruta_absoluta) as pdf:
-            for pagina in pdf.pages:
-                texto += pagina.extract_text() or ""
-        return texto.strip()
+            for num, pagina in enumerate(pdf.pages, start=1):
+                texto_pagina = (pagina.extract_text() or "").strip()
+                tiene_texto = len(texto_pagina) >= MIN_CARACTERES_TEXTO
+                if tiene_texto:
+                    textos.append(f"[Página {num}]\n{texto_pagina}")
+                if (not tiene_texto or siempre_imagen) and len(imagenes) < MAX_PAGINAS_IMAGEN:
+                    buffer = io.BytesIO()
+                    pagina.to_image(resolution=200).original.convert("RGB").save(buffer, format="PNG")
+                    imagenes.append(base64.b64encode(buffer.getvalue()).decode())
+        return "\n\n".join(textos), imagenes
     except Exception as exc:
-        logger.warning("pdfplumber no pudo leer %s: %s", ruta_absoluta, exc)
-        return ""
+        logger.warning("No se pudo leer el PDF %s: %s", ruta_absoluta, exc)
+        return "", []
 
 
-def _llamar_openai(texto: str, tipo_documento: str, datos_admision: dict) -> dict:
+def _leer_imagen(ruta_absoluta: str) -> tuple[str, list[str]]:
+    """Foto o imagen subida directamente (JPG, PNG...). Devuelve ("", [png_base64])."""
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(ruta_absoluta) as img:
+            img = ImageOps.exif_transpose(img).convert("RGB")  # respeta la rotación del celular
+            img.thumbnail((MAX_LADO_IMAGEN, MAX_LADO_IMAGEN))
+            buffer = io.BytesIO()
+            img.save(buffer, format="PNG")
+        return "", [base64.b64encode(buffer.getvalue()).decode()]
+    except Exception as exc:
+        logger.warning("No se pudo leer la imagen %s: %s", ruta_absoluta, exc)
+        return "", []
+
+
+def _leer_documento(ruta_absoluta: str, tipo_documento: str = '') -> tuple[str, list[str]]:
+    if ruta_absoluta.lower().endswith(EXTENSIONES_IMAGEN):
+        return _leer_imagen(ruta_absoluta)
+    return _leer_pdf(ruta_absoluta, siempre_imagen=(tipo_documento or '').upper() in TIPOS_CON_FIRMA)
+
+
+def _formatear_contexto(datos_admision: dict) -> str:
+    cups = datos_admision.get('cups') or []
+    lineas_cups = "\n".join(f"  - {c}" for c in cups) if cups else "  (no disponibles)"
+    return (
+        f"Admisión/estudio: {datos_admision.get('consecutivo', 'N/A')}\n"
+        f"Paciente: {datos_admision.get('paciente') or 'N/A'}\n"
+        f"Identificación: {datos_admision.get('identificacion') or 'N/A'}\n"
+        f"EPS/Entidad: {datos_admision.get('entidad') or 'N/A'}\n"
+        f"Contrato: {datos_admision.get('contrato') or 'N/A'}\n"
+        f"Fecha de ingreso: {datos_admision.get('fecha') or 'N/A'}\n"
+        f"CUPS de la admisión:\n{lineas_cups}"
+    )
+
+
+def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_admision: dict,
+                   _reintento: bool = False, _contenido=None) -> dict:
     """
     Llama a GPT-4o-mini y devuelve {"tipo": ..., "descripcion": ...}.
     Puede lanzar excepciones si la API falla.
+    _reintento/_contenido: uso interno para repetir la consulta con una nota del sistema.
     """
     from openai import OpenAI
 
@@ -76,28 +252,33 @@ def _llamar_openai(texto: str, tipo_documento: str, datos_admision: dict) -> dic
 
     client = OpenAI(api_key=api_key)
 
-    contexto_admision = (
-        f"Admisión: {datos_admision.get('consecutivo', 'N/A')} | "
-        f"Paciente: {datos_admision.get('paciente', 'N/A')} | "
-        f"EPS/Entidad: {datos_admision.get('entidad', 'N/A')} | "
-        f"Procedimiento: {datos_admision.get('procedimiento', 'N/A')} | "
-        f"Fecha: {datos_admision.get('fecha', 'N/A')}"
+    encabezado = (
+        f"TIPO DE DOCUMENTO CARGADO: {tipo_documento}\n\n"
+        f"DATOS REALES DE LA ADMISIÓN (sistema):\n{_formatear_contexto(datos_admision)}\n\n"
     )
-
-    mensaje_usuario = (
-        f"TIPO DE DOCUMENTO: {tipo_documento}\n"
-        f"DATOS DE LA ADMISIÓN:\n{contexto_admision}\n\n"
-        f"CONTENIDO DEL DOCUMENTO:\n{texto[:5000]}"
-    )
+    if imagenes:
+        texto_digital = f"Páginas con texto:\n{texto[:6000]}\n\n" if texto else ""
+        contenido = [{"type": "text", "text": (
+            encabezado + "CONTENIDO DEL DOCUMENTO:\n" + texto_digital
+            + "Imágenes de las páginas (escaneadas, o para ver firmas): ver imágenes adjuntas."
+        )}]
+        contenido += [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"}}
+            for img in imagenes
+        ]
+    else:
+        contenido = encabezado + f"CONTENIDO DEL DOCUMENTO:\n{texto[:6000]}"
+    if _contenido is not None:
+        contenido = _contenido
 
     respuesta = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": PROMPT_SISTEMA},
-            {"role": "user",   "content": mensaje_usuario},
+            {"role": "user",   "content": contenido},
         ],
         response_format={"type": "json_object"},
-        max_tokens=200,
+        max_tokens=500,
         temperature=0,
     )
 
@@ -109,6 +290,63 @@ def _llamar_openai(texto: str, tipo_documento: str, datos_admision: dict) -> dic
         tipo = "INFORMACION"
     resultado["tipo"] = tipo
 
+    # La IA a veces marca "no coincide" solo porque el texto difiere ("TAC de cráneo" vs
+    # "tomografía computada de cráneo simple"). Si la comparación estructurada dice que es el
+    # mismo estudio, se vuelve a preguntar indicándolo, para que reporte solo otros problemas.
+    if (not _reintento and resultado.get("procedimientos_coinciden") == "NO"
+            and _mismo_estudio(resultado.get("estudio_documento"), resultado.get("estudio_admision"))):
+        logger.info("Procedimiento equivalente detectado por el sistema; se repite la revisión: %s",
+                    resultado.get("procedimientos_documento"))
+        nota = ("\n\nVERIFICADO POR EL SISTEMA: el procedimiento del documento SÍ corresponde al de la admisión "
+                "(mismo tipo de estudio, región, lateralidad y contraste; solo cambia la forma de escribirlo). "
+                "No lo reportes como error: procedimientos_coinciden = SI. Reporta únicamente otros problemas, "
+                "si los hay; si no hay ninguno, el tipo es OK.")
+        if isinstance(contenido, list):
+            contenido_2 = [dict(contenido[0], text=contenido[0]["text"] + nota)] + contenido[1:]
+        else:
+            contenido_2 = contenido + nota
+        resultado = _llamar_openai(texto, imagenes, tipo_documento, datos_admision,
+                                   _reintento=True, _contenido=contenido_2)
+        resultado["procedimientos_coinciden"] = "SI"
+        resultado["ajuste_procedimiento"] = True
+
+    return resultado
+
+
+def _mismo_estudio(doc, adm) -> bool:
+    """True si la IA describió el estudio del documento y el de la admisión como el mismo."""
+    if not isinstance(doc, dict) or not isinstance(adm, dict):
+        return False
+
+    def val(d, k):
+        return str(d.get(k) or '').upper().strip()
+
+    mod_d, mod_a = val(doc, 'modalidad'), val(adm, 'modalidad')
+    if not mod_d or not mod_a or 'OTRO' in (mod_d, mod_a) or 'NO_APLICA' in (mod_d, mod_a):
+        return False
+    combinado = {'EMG', 'NEUROCONDUCCION', 'EMG_NEUROCONDUCCION'}
+    if mod_d != mod_a and not (mod_d in combinado and mod_a in combinado):
+        return False
+
+    def compatibles(a, b, comodines):
+        return a == b or a in comodines or b in comodines
+
+    return (compatibles(val(doc, 'region'), val(adm, 'region'), {'', 'NO_APLICA'})
+            and compatibles(val(doc, 'lateralidad'), val(adm, 'lateralidad'), {'', 'NO_ESPECIFICA'})
+            and compatibles(val(doc, 'contraste'), val(adm, 'contraste'), {'', 'NO_ESPECIFICA'}))
+
+
+def analizar_documento(ruta_absoluta: str, tipo_documento: str, datos_admision: dict) -> dict | None:
+    """
+    Lee el PDF o la imagen y lo envía a la IA. No toca la base de datos.
+    Devuelve None si no se pudo leer. Puede lanzar excepciones de la API.
+    """
+    texto, imagenes = _leer_documento(ruta_absoluta, tipo_documento)
+    if not texto and not imagenes:
+        logger.info("PDF sin contenido legible: %s", ruta_absoluta)
+        return None
+    resultado = _llamar_openai(texto, imagenes, tipo_documento, datos_admision)
+    resultado["modo"] = ("mixto" if texto else "imagen") if imagenes else "texto"
     return resultado
 
 
@@ -118,18 +356,20 @@ def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
 
     Parámetros:
       archivo_obj   : instancia de ArchivoFacturacion ya guardada en DB
-      datos_admision: dict con claves consecutivo, paciente, entidad, procedimiento, fecha
+      datos_admision: dict de obtener_contexto_admision()
 
     Retorna:
-      {"tipo": "AUTORIZACION", "descripcion": "..."} si hay observación
-      {"tipo": "OK", "descripcion": "Documento correcto"}       si está bien
-      None si la revisión no pudo ejecutarse (sin API key, PDF escaneado, error de red)
+      {"tipo": "AUTORIZACION", "descripcion": "...", "modo": "texto|imagen|mixto"} si hay observación
+      {"tipo": "OK", "descripcion": "Documento correcto", ...}                si está bien
+      None si la revisión no pudo ejecutarse (sin API key, PDF ilegible, error de red)
 
-    Efectos secundarios al detectar un problema:
-      - Crea ObservacionesArchivos con el texto generado por la IA
-      - Actualiza EstadoRevision a 'RECHAZADA' en archivo_obj
+    Efectos secundarios:
+      - Registra el resultado en RevisionIA (tabla revision_ia), incluso si es OK
+      - Cierra las revisiones pendientes anteriores del mismo archivo
+        (CORREGIDO si la nueva sale OK, REEMPLAZADO si no)
+    No modifica EstadoRevision ni TipoHallazgo del archivo: la IA solo avisa,
+    no bloquea el flujo de Cuentas Médicas.
     """
-    from gedocumental.models import ObservacionesArchivos
 
     # Interruptor de emergencia — si REVISAR_CON_IA = False en settings, no hace nada
     if not getattr(settings, 'REVISAR_CON_IA', True):
@@ -151,36 +391,91 @@ def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
         logger.warning("Archivo no encontrado en disco: %s", ruta_absoluta)
         return None
 
-    # Solo revisamos PDFs
-    if not ruta_absoluta.lower().endswith('.pdf'):
+    # Solo revisamos PDFs e imágenes
+    if not ruta_absoluta.lower().endswith(EXTENSIONES_REVISABLES):
         return None
 
-    # Extraer texto
-    texto = _extraer_texto_pdf(ruta_absoluta)
-    if not texto:
-        # PDF escaneado o vacío — no podemos revisarlo por texto
-        logger.info("PDF sin texto extraíble (posiblemente escaneado): %s", ruta_absoluta)
-        return None
-
-    # Llamar a la IA
     try:
-        resultado = _llamar_openai(texto, archivo_obj.Tipo, datos_admision)
+        resultado = analizar_documento(ruta_absoluta, archivo_obj.Tipo, datos_admision)
     except Exception as exc:
         logger.error("Error al llamar a OpenAI para archivo %s: %s", archivo_obj.IdArchivo, exc)
         return None
+    if resultado is None:
+        return None
 
-    # Si hay problema → crear observación y marcar RECHAZADA
-    if resultado["tipo"] != "OK":
-        try:
-            descripcion_completa = f"[IA] {resultado['tipo']}: {resultado['descripcion']}"
-            ObservacionesArchivos.objects.create(
-                IdArchivo=archivo_obj,
-                Descripcion=descripcion_completa[:255],
-            )
-            archivo_obj.EstadoRevision = 'RECHAZADA'
-            archivo_obj.TipoHallazgo = resultado["tipo"]
-            archivo_obj.save(update_fields=['EstadoRevision', 'TipoHallazgo'])
-        except Exception as exc:
-            logger.error("Error guardando observación IA: %s", exc)
-
+    _registrar_revision(archivo_obj, resultado)
     return resultado
+
+
+def _registrar_revision(archivo_obj, resultado: dict) -> None:
+    from django.utils import timezone
+    from gedocumental.models import RevisionIA
+
+    try:
+        RevisionIA.objects.filter(IdArchivo=archivo_obj, Resuelta=False).update(
+            Resuelta=True,
+            Resolucion='CORREGIDO' if resultado["tipo"] == "OK" else 'REEMPLAZADO',
+            FechaResolucion=timezone.now(),
+        )
+        # "Reemplazar" en GE Documental borra el archivo y sube uno nuevo del mismo tipo:
+        # el hallazgo cerrado como ARCHIVO_ELIMINADO pasa a CORREGIDO (o REEMPLAZADO si el nuevo también falla)
+        RevisionIA.objects.filter(
+            AdmisionId=archivo_obj.Admision_id, TipoDocumento=archivo_obj.Tipo or '',
+            Resolucion='ARCHIVO_ELIMINADO',
+        ).exclude(TipoHallazgo='OK').update(
+            Resolucion='CORREGIDO' if resultado["tipo"] == "OK" else 'REEMPLAZADO',
+        )
+        # Si llegó el RESULTADO, se cierra el hallazgo de "ausencia del reporte" de la admisión
+        if (archivo_obj.Tipo or '').upper() == 'RESULTADO':
+            RevisionIA.objects.filter(
+                AdmisionId=archivo_obj.Admision_id, TipoDocumento='RESULTADO',
+                IdArchivo__isnull=True, Resuelta=False,
+            ).update(Resuelta=True, Resolucion='CORREGIDO', FechaResolucion=timezone.now())
+        RevisionIA.objects.create(
+            IdArchivo=archivo_obj,
+            AdmisionId=archivo_obj.Admision_id,
+            TipoDocumento=archivo_obj.Tipo or '',
+            # Archivos cargados por el sistema (sin usuario) quedan a cargo de la coordinación médica
+            UsuarioId=archivo_obj.Usuario_id or getattr(settings, 'USUARIO_COORDINACION_MEDICA_ID', None),
+            TipoHallazgo=resultado["tipo"],
+            Descripcion=resultado.get("descripcion", ""),
+            Modo=resultado.get("modo", ""),
+            # Un OK no deja nada pendiente
+            Resuelta=resultado["tipo"] == "OK",
+        )
+    except Exception as exc:
+        logger.error("Error guardando revisión IA del archivo %s: %s", archivo_obj.IdArchivo, exc)
+
+
+def revisar_en_segundo_plano(archivo_ids, consecutivo) -> bool:
+    """
+    Lanza la revisión IA de los archivos en un hilo aparte, para que la subida responda
+    de inmediato. El resultado queda en RevisionIA y el frontend lo consulta después.
+    Devuelve True si se lanzó (IA activa y con API key).
+    """
+    import threading
+    from django.db import close_old_connections, transaction
+
+    if not getattr(settings, 'REVISAR_CON_IA', True):
+        return False
+    if not (getattr(settings, 'OPENAI_API_KEY', '') or os.environ.get('OPENAI_API_KEY', '')):
+        return False
+    ids = list(archivo_ids)
+    if not ids:
+        return False
+
+    def _trabajo():
+        from gedocumental.models import ArchivoFacturacion
+        close_old_connections()
+        try:
+            datos = obtener_contexto_admision(consecutivo)
+            for archivo in ArchivoFacturacion.objects.filter(IdArchivo__in=ids):
+                revisar_archivo(archivo, datos)
+        except Exception as exc:
+            logger.error("Error en revisión IA en segundo plano (admisión %s): %s", consecutivo, exc)
+        finally:
+            close_old_connections()
+
+    # Se lanza cuando el archivo ya está confirmado en la BD
+    transaction.on_commit(lambda: threading.Thread(target=_trabajo, daemon=True).start())
+    return True

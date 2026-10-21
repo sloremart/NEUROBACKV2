@@ -1,0 +1,191 @@
+import os
+import json
+import urllib.request
+import urllib.error
+from datetime import datetime
+
+from django.db import connections
+from django.http import JsonResponse
+from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.csrf import csrf_exempt
+from django.utils import timezone
+
+RPA_HUB_URL = os.getenv("RPA_HUB_URL", "http://localhost:5055")
+
+# Mapa: fragmentos del nombre de entidad → código bot RPA
+EPS_MAPA = {
+    "SANITAS":       "colsanitas",
+    "COLSANITAS":    "colsanitas",
+    "CAPITAL SALUD": "capital_salud",
+    "CAPITALSALUD":  "capital_salud",
+    "FOMAG":         "fomag",
+    "SALUD TOTAL":   "salud_total",
+    "SALUDTOTAL":    "salud_total",
+}
+
+
+def detectar_eps_bot(nombre_entidad: str) -> str | None:
+    """Retorna el código de bot RPA si la entidad está soportada, o None."""
+    nombre_upper = (nombre_entidad or "").upper()
+    for fragmento, codigo in EPS_MAPA.items():
+        if fragmento in nombre_upper:
+            return codigo
+    return None
+
+
+@require_GET
+def demanda_inducida_view(request):
+    try:
+        with connections['zeussalud'].cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    CAST(o.numero AS VARCHAR) + '-' + CAST(i.codigo AS VARCHAR) AS IdUnico,
+                    CONVERT(varchar, o.fecha, 23) + ' ' + ISNULL(o.hora, '00:00')       AS FechaRegistro,
+                    ISNULL(p.primer_nom,'') + ' ' + ISNULL(p.segundo_nom,'') + ' ' +
+                        ISNULL(p.primer_ape,'') + ' ' + ISNULL(p.segundo_ape,'')        AS NombresPaciente,
+                    p.num_id                                                             AS NumeroDocumento,
+                    ISNULL(p.telefono, 'No registra')                                   AS TelefonosContacto,
+                    e.nombre                                                             AS Entidad,
+                    i.codigo                                                             AS Cups,
+                    i.detalle                                                            AS DetalleOrden,
+                    ISNULL(i.ObservacionItem, '')                                        AS ObservacionItem,
+                    ISNULL(med.nombre, 'MÉDICO NO ASIGNADO')                             AS Medico
+                FROM ordenes_detalle i
+                JOIN ordenes o   ON i.numero_orden = o.numero
+                JOIN sis_maes m  ON o.ingreso       = m.con_estudio
+                JOIN sis_paci p  ON m.autoid         = p.autoid
+                JOIN contratos c ON m.contrato       = c.codigo
+                JOIN sis_empre e ON c.empresa        = e.codigo
+                LEFT JOIN sis_medi med ON o.cod_med  = med.codigo
+                WHERE c.codigo NOT IN (5, 6)
+                  AND EXISTS (
+                      SELECT 1 FROM servicios s
+                      WHERE s.contrato = c.codigo
+                        AND LTRIM(RTRIM(s.cod_proc)) = LTRIM(RTRIM(i.codigo))
+                        AND s.A = 1
+                  )
+                  AND o.fecha >= DATEADD(day, -30, GETDATE())
+            """)
+            columns = [col[0] for col in cursor.description]
+            rows = cursor.fetchall()
+
+        data = []
+        for row in rows:
+            record = dict(zip(columns, row))
+            entidad = record["Entidad"] or ""
+            eps_bot = detectar_eps_bot(entidad)
+            data.append({
+                "Id":         record["IdUnico"],
+                "Fecha":      (record["FechaRegistro"] or "").strip(),
+                "Paciente":   (record["NombresPaciente"] or "").strip(),
+                "Documento":  record["NumeroDocumento"],
+                "Telefono":   record["TelefonosContacto"],
+                "Entidad":    entidad,
+                "EpsBot":     eps_bot,          # código bot o null
+                "Cups":       record["Cups"],
+                "Orden":      record["DetalleOrden"],
+                "Observacion": record["ObservacionItem"],
+                "Medico":     (record["Medico"] or "").strip(),
+                "Estado":     "PENDIENTE",
+            })
+
+        return JsonResponse({"data": data})
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+def _vigencia_expirada(fecha_vigencia_str: str) -> bool:
+    """Retorna True si la fecha de vigencia ya pasó. Si no puede parsear, asume vigente."""
+    if not fecha_vigencia_str:
+        return False
+    formatos = [
+        "%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y",
+        "%B/%d/%Y", "%b/%d/%Y",                     # enero/14/2027
+        "%d-%m-%Y", "%Y/%m/%d",
+    ]
+    # Normalizar nombres de meses en español a inglés para strptime
+    meses_es = {
+        "enero": "January", "febrero": "February", "marzo": "March",
+        "abril": "April", "mayo": "May", "junio": "June",
+        "julio": "July", "agosto": "August", "septiembre": "September",
+        "octubre": "October", "noviembre": "November", "diciembre": "December",
+    }
+    fecha_str = fecha_vigencia_str.strip().lower()
+    for es, en in meses_es.items():
+        fecha_str = fecha_str.replace(es, en)
+    for fmt in formatos:
+        try:
+            fecha = datetime.strptime(fecha_str, fmt.lower())
+            return fecha.date() < datetime.now().date()
+        except ValueError:
+            continue
+    return False
+
+
+@csrf_exempt
+@require_POST
+def consultar_autorizacion_view(request):
+    """
+    Proxy al RPA Hub con persistencia en BD.
+    Flujo: buscar en tabla → si existe y no venció, devolver → si no, llamar RPA y guardar.
+    """
+    from gedocumental.models import AutorizacionRPA
+
+    try:
+        body = json.loads(request.body)
+        eps      = body.get("eps", "")
+        doc_tipo = body.get("doc_tipo", "CC")
+        doc_num  = (body.get("doc_num", "") or "").replace(" ", "")
+
+        if not eps or not doc_num:
+            return JsonResponse({"success": False, "error": "eps y doc_num son requeridos"}, status=400)
+
+        # 1. Buscar en base de datos
+        try:
+            registro = AutorizacionRPA.objects.get(eps=eps, doc_num=doc_num)
+            # Solo devolver si no es ERROR y la vigencia no ha expirado
+            if registro.status not in ("ERROR", "ERROR_CREDENCIALES") and \
+               not _vigencia_expirada(registro.fecha_vigencia):
+                datos = registro.datos_completos or {}
+                datos["_from_db"] = True
+                return JsonResponse({"success": True, "data": datos})
+            # Si venció o fue error → re-consultar (continúa abajo)
+        except AutorizacionRPA.DoesNotExist:
+            pass
+
+        # 2. Llamar al RPA Hub
+        payload = json.dumps({"eps": eps, "doc_tipo": doc_tipo, "doc_num": doc_num, "headless": True}).encode()
+        req = urllib.request.Request(
+            f"{RPA_HUB_URL}/api/validar",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            resultado = json.loads(resp.read().decode())
+
+        # 3. Guardar en BD si el bot respondió con un status válido
+        datos = resultado.get("data") or resultado
+        if isinstance(datos, dict) and datos.get("status") not in (None, ""):
+            AutorizacionRPA.objects.update_or_create(
+                eps=eps,
+                doc_num=doc_num,
+                defaults={
+                    "status":           datos.get("status", ""),
+                    "num_autorizacion": datos.get("num_autorizacion") or "",
+                    "fecha_vigencia":   datos.get("fecha_vigencia") or "",
+                    "servicio":         datos.get("servicio") or "",
+                    "cups":             datos.get("cups") or "",
+                    "mensaje":          datos.get("mensaje") or "",
+                    "datos_completos":  datos,
+                    "fecha_consulta":   timezone.now(),
+                },
+            )
+
+        return JsonResponse(resultado)
+
+    except urllib.error.URLError as e:
+        return JsonResponse({"success": False, "error": f"RPA Hub no disponible: {e.reason}"}, status=503)
+    except Exception as e:
+        return JsonResponse({"success": False, "error": str(e)}, status=500)

@@ -2630,3 +2630,279 @@ class CargaAutorizacionesView(APIView):
             **stats,
             'resultados': resultados,
         })
+
+
+class DashboardFacturacionRegularDetalladaView(APIView):
+    """
+    Cartera detallada de facturación regular (replica la lógica del proyecto
+    Facturaciondetallada pero consultando Zeus Salud SQL Server directamente).
+    Segmentos: asegurada / por_radicar / no_facturado / particulares.
+    Filtros opcionales: cartera_filter, servicio_filter, contrato_filter.
+    """
+
+    def get(self, request):
+        hoy = datetime.now().date()
+        fecha_inicio_str = request.GET.get('fecha_inicio')
+        fecha_fin_str    = request.GET.get('fecha_fin')
+
+        try:
+            fecha_inicio = (datetime.strptime(fecha_inicio_str, '%Y-%m-%d').date()
+                            if fecha_inicio_str else hoy.replace(day=1))
+            fecha_fin = (datetime.strptime(fecha_fin_str, '%Y-%m-%d').date()
+                         if fecha_fin_str else hoy)
+        except ValueError:
+            return Response({"error": "Formato inválido. Use YYYY-MM-DD."}, status=400)
+
+        if fecha_fin > hoy:
+            fecha_fin = hoy
+
+        cartera_filter  = request.GET.get('cartera_filter', '')
+        servicio_filter = request.GET.get('servicio_filter', '')
+        contrato_filter = request.GET.get('contrato_filter', '')
+
+        base_where = (
+            "CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s"
+            " AND ISNULL(sm.Prefijo, '') != 'MGL'"
+            " AND sm.contrato NOT IN (5, 6)"
+        )
+        base_params = [fecha_inicio, fecha_fin]
+
+        # Filtro de segmento de cartera
+        cartera_clause = ""
+        if cartera_filter == 'particulares':
+            cartera_clause = " AND UPPER(ISNULL(c.nombre, '')) LIKE '%%PARTICULAR%%'"
+        elif cartera_filter == 'asegurada':
+            cartera_clause = (
+                " AND UPPER(ISNULL(c.nombre, '')) NOT LIKE '%%PARTICULAR%%'"
+                " AND sm.contabilizado = 1 AND ISNULL(sm.radicado, 0) = 1"
+            )
+        elif cartera_filter == 'por_radicar':
+            cartera_clause = (
+                " AND UPPER(ISNULL(c.nombre, '')) NOT LIKE '%%PARTICULAR%%'"
+                " AND sm.contabilizado = 1 AND ISNULL(sm.radicado, 0) = 0"
+            )
+        elif cartera_filter == 'no_facturado':
+            cartera_clause = (
+                " AND UPPER(ISNULL(c.nombre, '')) NOT LIKE '%%PARTICULAR%%'"
+                " AND sm.contabilizado = 0"
+            )
+
+        servicio_clause = ""
+        servicio_params: list = []
+        if servicio_filter:
+            servicio_clause = (
+                " AND LTRIM(RTRIM(COALESCE(uf.descripcion,"
+                " CAST(sm.ufuncional AS VARCHAR(10)), 'Sin servicio'))) = %s"
+            )
+            servicio_params = [servicio_filter]
+
+        contrato_clause = ""
+        contrato_params: list = []
+        if contrato_filter:
+            contrato_clause = (
+                " AND LTRIM(RTRIM(ISNULL(c.nombre,"
+                " CAST(sm.contrato AS VARCHAR(20))))) = %s"
+            )
+            contrato_params = [contrato_filter]
+
+        extra_clause = cartera_clause + servicio_clause + contrato_clause
+        extra_params = servicio_params + contrato_params
+
+        with connections['zeussalud'].cursor() as cursor:
+
+            # 1. Cartera summary (siempre sobre el rango completo, sin filtros extra)
+            cursor.execute(f'''
+                SELECT
+                    CASE
+                        WHEN UPPER(ISNULL(c.nombre, '')) LIKE '%%PARTICULAR%%' THEN 'particulares'
+                        WHEN sm.contabilizado = 1 AND ISNULL(sm.radicado, 0) = 1  THEN 'asegurada'
+                        WHEN sm.contabilizado = 1 AND ISNULL(sm.radicado, 0) = 0  THEN 'por_radicar'
+                        ELSE 'no_facturado'
+                    END AS segmento,
+                    COUNT(sm.autoid)               AS estudios,
+                    SUM(ISNULL(sm.vlr_factura, 0)) AS valor
+                FROM sis_maes sm
+                LEFT JOIN contratos c ON c.codigo = sm.contrato
+                WHERE {base_where}
+                GROUP BY
+                    CASE
+                        WHEN UPPER(ISNULL(c.nombre, '')) LIKE '%%PARTICULAR%%' THEN 'particulares'
+                        WHEN sm.contabilizado = 1 AND ISNULL(sm.radicado, 0) = 1  THEN 'asegurada'
+                        WHEN sm.contabilizado = 1 AND ISNULL(sm.radicado, 0) = 0  THEN 'por_radicar'
+                        ELSE 'no_facturado'
+                    END
+            ''', base_params)
+            rows_cartera = cursor.fetchall()
+
+            # 2. Tendencia mensual
+            cursor.execute(f'''
+                SELECT
+                    LEFT(CONVERT(varchar(20), sm.fecha_ing, 120), 7) AS mes,
+                    COUNT(sm.autoid)               AS estudios,
+                    SUM(ISNULL(sm.vlr_factura, 0)) AS valor
+                FROM sis_maes sm
+                LEFT JOIN contratos c    ON c.codigo    = sm.contrato
+                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                WHERE {base_where}{extra_clause}
+                GROUP BY LEFT(CONVERT(varchar(20), sm.fecha_ing, 120), 7)
+                ORDER BY mes
+            ''', base_params + extra_params)
+            rows_tendencia = cursor.fetchall()
+
+            # 3. Top contratos (top 10 por estudios)
+            cursor.execute(f'''
+                SELECT
+                    LTRIM(RTRIM(ISNULL(c.nombre, CAST(sm.contrato AS VARCHAR(20))))) AS contrato,
+                    COUNT(sm.autoid)               AS estudios,
+                    SUM(ISNULL(sm.vlr_factura, 0)) AS valor
+                FROM sis_maes sm
+                LEFT JOIN contratos c    ON c.codigo = sm.contrato
+                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                WHERE {base_where}{extra_clause}
+                GROUP BY LTRIM(RTRIM(ISNULL(c.nombre, CAST(sm.contrato AS VARCHAR(20)))))
+                ORDER BY estudios DESC
+            ''', base_params + extra_params)
+            rows_contratos = cursor.fetchall()
+
+            # 4. Por servicio (donut)
+            cursor.execute(f'''
+                SELECT
+                    LTRIM(RTRIM(COALESCE(uf.descripcion,
+                        CAST(sm.ufuncional AS VARCHAR(10)), 'Sin servicio'))) AS servicio,
+                    COUNT(sm.autoid)               AS estudios,
+                    SUM(ISNULL(sm.vlr_factura, 0)) AS valor
+                FROM sis_maes sm
+                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                LEFT JOIN contratos c     ON c.codigo = sm.contrato
+                WHERE {base_where}{extra_clause}
+                GROUP BY LTRIM(RTRIM(COALESCE(uf.descripcion,
+                    CAST(sm.ufuncional AS VARCHAR(10)), 'Sin servicio')))
+                ORDER BY estudios DESC
+            ''', base_params + extra_params)
+            rows_servicios = cursor.fetchall()
+
+            # 5. Médicos
+            cursor.execute(f'''
+                SELECT
+                    LTRIM(RTRIM(COALESCE(m.nombre, 'Sin médico'))) AS medico,
+                    COUNT(sm.autoid)               AS estudios,
+                    SUM(ISNULL(sm.vlr_factura, 0)) AS valor
+                FROM sis_maes sm
+                LEFT JOIN Medicos m       ON m.codigo = sm.cod_medico
+                LEFT JOIN contratos c     ON c.codigo = sm.contrato
+                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                WHERE {base_where}{extra_clause}
+                GROUP BY LTRIM(RTRIM(COALESCE(m.nombre, 'Sin médico')))
+                ORDER BY estudios DESC
+            ''', base_params + extra_params)
+            rows_medicos = cursor.fetchall()
+
+            # 6. Procedimientos (top 100 por total)
+            cursor.execute(f'''
+                SELECT TOP 100
+                    LTRIM(RTRIM(ISNULL(c.nombre, CAST(sm.contrato AS VARCHAR(20))))) AS contrato,
+                    LTRIM(RTRIM(ISNULL(sd.cups, '')))                                AS cups,
+                    LTRIM(RTRIM(ISNULL(sp.nombreve, ISNULL(sd.cups, 'Sin nombre')))) AS nombre,
+                    CAST(SUM(sd.cantidad) AS INT)                                     AS cantidad,
+                    CAST(AVG(sd.vlr_servicio) AS DECIMAL(18, 0))                     AS valor_uni,
+                    SUM(sd.cantidad * sd.vlr_servicio)                               AS total
+                FROM sis_maes sm
+                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                LEFT JOIN sis_proc sp ON LTRIM(RTRIM(sp.cups)) = LTRIM(RTRIM(sd.cups))
+                LEFT JOIN contratos c    ON c.codigo = sm.contrato
+                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                WHERE {base_where}{extra_clause}
+                GROUP BY
+                    LTRIM(RTRIM(ISNULL(c.nombre, CAST(sm.contrato AS VARCHAR(20))))),
+                    LTRIM(RTRIM(ISNULL(sd.cups, ''))),
+                    LTRIM(RTRIM(ISNULL(sp.nombreve, ISNULL(sd.cups, 'Sin nombre'))))
+                ORDER BY total DESC
+            ''', base_params + extra_params)
+            rows_procedimientos = cursor.fetchall()
+
+            # 7. Opciones de filtro (sobre el rango completo, sin filtros de cartera/servicio/contrato)
+            cursor.execute(f'''
+                SELECT DISTINCT LTRIM(RTRIM(COALESCE(uf.descripcion,
+                    CAST(sm.ufuncional AS VARCHAR(10)), 'Sin servicio')))
+                FROM sis_maes sm
+                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                WHERE {base_where}
+                ORDER BY 1
+            ''', base_params)
+            filtros_servicios = [r[0] for r in cursor.fetchall() if r[0] and r[0] != 'Sin servicio']
+
+            cursor.execute(f'''
+                SELECT DISTINCT LTRIM(RTRIM(ISNULL(c.nombre, CAST(sm.contrato AS VARCHAR(20)))))
+                FROM sis_maes sm
+                LEFT JOIN contratos c ON c.codigo = sm.contrato
+                WHERE {base_where}
+                ORDER BY 1
+            ''', base_params)
+            filtros_contratos = [r[0] for r in cursor.fetchall() if r[0]]
+
+        # Procesar cartera
+        _labels  = {'asegurada': 'Cartera Asegurada', 'por_radicar': 'Facturado por Radicar',
+                    'no_facturado': 'No Facturado',    'particulares': 'Ventas Particulares'}
+        _colors  = {'asegurada': '#10b981', 'por_radicar': '#f59e0b',
+                    'no_facturado': '#ef4444', 'particulares': '#6366f1'}
+        cartera_acc = {s: {'estudios': 0, 'valor': 0.0} for s in _labels}
+        for seg, estudios, valor in rows_cartera:
+            if seg in cartera_acc:
+                cartera_acc[seg] = {'estudios': int(estudios), 'valor': round(float(valor or 0))}
+
+        return Response({
+            'fecha_inicio': str(fecha_inicio),
+            'fecha_fin':    str(fecha_fin),
+            'kpis': {
+                'total_valor':    sum(v['valor']    for v in cartera_acc.values()),
+                'total_estudios': sum(v['estudios'] for v in cartera_acc.values()),
+                'total_contratos': len(rows_contratos),
+                'total_medicos':   len(rows_medicos),
+            },
+            'cartera': [
+                {
+                    'segmento': seg,
+                    'label':    _labels[seg],
+                    'color':    _colors[seg],
+                    'estudios': cartera_acc[seg]['estudios'],
+                    'valor':    cartera_acc[seg]['valor'],
+                }
+                for seg in _labels
+            ],
+            'tendencia': [
+                {'mes': mes, 'estudios': int(est), 'valor': round(float(val or 0))}
+                for mes, est, val in rows_tendencia
+            ],
+            'top_contratos': [
+                {'contrato': c, 'estudios': int(est), 'valor': round(float(val or 0))}
+                for c, est, val in rows_contratos[:10]
+            ],
+            'por_servicio': [
+                {'servicio': s, 'estudios': int(est), 'valor': round(float(val or 0))}
+                for s, est, val in rows_servicios
+            ],
+            'medicos': [
+                {'nombre': m, 'estudios': int(est), 'valor': round(float(val or 0))}
+                for m, est, val in rows_medicos
+            ],
+            'procedimientos': [
+                {
+                    'contrato':  ctr,
+                    'cups':      cups,
+                    'nombre':    nombre,
+                    'cantidad':  int(cant),
+                    'valor_uni': round(float(vuni or 0)),
+                    'total':     round(float(tot  or 0)),
+                }
+                for ctr, cups, nombre, cant, vuni, tot in rows_procedimientos
+            ],
+            'filtros': {
+                'servicios': filtros_servicios,
+                'contratos': filtros_contratos,
+            },
+            'filtros_activos': {
+                'cartera':  cartera_filter,
+                'servicio': servicio_filter,
+                'contrato': contrato_filter,
+            },
+        })
