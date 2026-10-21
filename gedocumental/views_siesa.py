@@ -870,20 +870,33 @@ def _pagina_visor_html(s: requests.Session, html: str) -> tuple:
     cuerpo = re.sub(r"<input\b[^>]*>|<select\b.*?</select>", "", cuerpo, flags=re.IGNORECASE | re.DOTALL)
     cuerpo = re.sub(r"</?form\b[^>]*>", "", cuerpo, flags=re.IGNORECASE)
 
-    # Incrustar las imágenes del informe (requieren la sesión de SIESA)
+    # Incrustar las imágenes del informe (requieren la sesión de SIESA). La primera es el logo:
+    # si SIESA no la entrega se usa el logo de la clínica; las demás que no carguen se quitan
+    # para que no queden recuadros de imagen rota.
+    logo_b64 = None
+    if os.path.exists("/app/siesa_logo.jpeg"):
+        with open("/app/siesa_logo.jpeg", "rb") as lf:
+            logo_b64 = base64.b64encode(lf.read()).decode()
+    contador = {"n": 0}
+
     def incrustar(mi):
-        src = mi.group(2).replace("&amp;", "&")
+        contador["n"] += 1
+        etiqueta = mi.group(0)
+        src = mi.group(1).replace("&amp;", "&")
         if src.startswith("data:"):
-            return mi.group(0)
+            return etiqueta
         try:
             ri = s.get(urljoin(SIESA_REPORT_VIEW_URL, src), timeout=30)
-            if ri.status_code != 200 or not ri.content:
-                return mi.group(0)
-            tipo = (ri.headers.get("Content-Type") or "image/png").split(";")[0]
-            return f'{mi.group(1)}data:{tipo};base64,{base64.b64encode(ri.content).decode()}{mi.group(3)}'
+            tipo = (ri.headers.get("Content-Type") or "").split(";")[0].lower()
+            if ri.status_code == 200 and ri.content and tipo.startswith("image/"):
+                return etiqueta.replace(mi.group(1), f"data:{tipo};base64,{base64.b64encode(ri.content).decode()}")
         except requests.RequestException:
-            return mi.group(0)
-    cuerpo = re.sub(r"""(<img\b[^>]*\bsrc=["'])([^"']+)(["'])""", incrustar, cuerpo, flags=re.IGNORECASE)
+            pass
+        if contador["n"] == 1 and logo_b64:
+            return (f'<img src="data:image/jpeg;base64,{logo_b64}" '
+                    f'style="max-height:70px;max-width:130px;">')
+        return ""
+    cuerpo = re.sub(r"""<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>""", incrustar, cuerpo, flags=re.IGNORECASE)
     return estilos, cuerpo
 
 
