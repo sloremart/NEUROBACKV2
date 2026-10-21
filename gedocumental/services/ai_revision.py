@@ -73,9 +73,6 @@ VERIFICACIONES OBLIGATORIAS (en este orden):
      - otra LATERALIDAD (estudio de miembro derecho y la orden pide el izquierdo);
      - con contraste explícito cuando el CUPS es simple, o al revés.
    Ante la duda razonable de que sea el mismo estudio, considéralo coincidente (procedimientos_coinciden = SI).
-   COMPROBANTE de atención: MIRA LA IMAGEN y verifica que haya una firma o trazo manuscrito del paciente
-   (o su acompañante) en el espacio "Firma del paciente". El texto "Firma del paciente:" impreso NO es
-   una firma. Si el espacio está vacío → SOPORTES "Ausencia de firma en el comprobante de la atención".
 3. Solo si 1 y 2 están bien, revisa el resto según la tabla de convenciones (fechas, vigencia, cantidades,
    firmas, legibilidad, datos incompletos).
 Si hay varios problemas, el tipo es el del primero según este orden, y en la descripción menciona también los demás de forma breve.
@@ -88,7 +85,8 @@ Tipos de observación (convenciones del informe SIESA de auditoría de facturas;
   legible; autorización vencida.
 - SOPORTES: ausencia de soportes en su totalidad o parte de ellos (historia clínica si aplica, autorización,
   orden médica, comprobante); incoherencia en soportes (no corresponde la información del paciente);
-  orden médica vencida; ausencia de firma en el comprobante de la atención.
+  orden médica vencida; ausencia de firma en el comprobante de la atención (SOLO si el documento
+  cargado es tipo COMPROBANTE).
 - REPORTE: incoherencia en el reporte (no corresponde al procedimiento realizado); ausencia del reporte;
   error en lateralidad (ej.: tomado en derecho y la orden pide izquierdo).
 - FARMACIA: ausencia de cargue o relación de insumos y/o medicamentos suministrados al paciente.
@@ -256,6 +254,17 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         f"TIPO DE DOCUMENTO CARGADO: {tipo_documento}\n\n"
         f"DATOS REALES DE LA ADMISIÓN (sistema):\n{_formatear_contexto(datos_admision)}\n\n"
     )
+    if _es_comprobante(tipo_documento):
+        encabezado += (
+            "VERIFICACIÓN ADICIONAL (este documento es un COMPROBANTE): mira la imagen y verifica que haya una "
+            "firma o trazo manuscrito del paciente (o su acompañante) en el espacio \"Firma del paciente\". "
+            "El texto impreso \"Firma del paciente:\" NO es una firma. Si el espacio está vacío → SOPORTES "
+            "\"Ausencia de firma en el comprobante de la atención\".\n\n"
+        )
+    else:
+        encabezado += (
+            "Este documento NO es un comprobante: no verifiques firmas del paciente (firma_paciente = NO_APLICA).\n\n"
+        )
     if imagenes:
         texto_digital = f"Páginas con texto:\n{texto[:6000]}\n\n" if texto else ""
         contenido = [{"type": "text", "text": (
@@ -290,6 +299,13 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         tipo = "INFORMACION"
     resultado["tipo"] = tipo
 
+    if not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK":
+        desc = (resultado.get("descripcion") or "").lower()
+        if "firma" in desc and "comprobante" in desc:
+            if resultado.get("paciente_coincide") != "NO" and resultado.get("procedimientos_coinciden") != "NO":
+                logger.info("Descartado hallazgo de firma en documento %s (no es comprobante)", tipo_documento)
+                resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_firma=True)
+
     # La IA a veces marca "no coincide" solo porque el texto difiere ("TAC de cráneo" vs
     # "tomografía computada de cráneo simple"). Si la comparación estructurada dice que es el
     # mismo estudio, se vuelve a preguntar indicándolo, para que reporte solo otros problemas.
@@ -311,6 +327,10 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado["ajuste_procedimiento"] = True
 
     return resultado
+
+
+def _es_comprobante(tipo_documento) -> bool:
+    return (tipo_documento or '').upper() in TIPOS_CON_FIRMA
 
 
 def _mismo_estudio(doc, adm) -> bool:
