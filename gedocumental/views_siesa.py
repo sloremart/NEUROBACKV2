@@ -691,22 +691,26 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
         r2 = s.post(SIESA_REPORT_VIEW_URL, data=form_fields, timeout=60)
         r2.raise_for_status()
 
-        # Paso 3: descargar el PDF directamente desde la carpeta Temp de SIESA
-        # c_informe_view.aspx escribe el PDF en ZeusSalud/Archivos/CLIENTE/Temp/
-        # Se espera más tiempo para que SIESA termine de generar antes de descargar
-        time.sleep(5)
+        # Paso 3: descargar el PDF desde la carpeta Temp de SIESA.
+        # c_informe_view.aspx escribe el PDF en ZeusSalud/Archivos/CLIENTE/Temp/ y puede tardar:
+        # si se descarga antes de que termine, queda el PDF del estudio ANTERIOR (otro paciente).
+        # Por eso se verifica que el PDF sea del estudio pedido y se reintenta.
         pdf_url = f"http://192.168.1.209:8091/ZeusSalud/Archivos/CLIENTE/Temp/{nombre_pdf}"
-        r3 = s.get(pdf_url, timeout=30)
-        r3.raise_for_status()
-
-        if not r3.content.startswith(b"%PDF"):
-            raise Exception(
-                f"El archivo descargado no es un PDF. "
-                f"URL: {pdf_url}. Status: {r3.status_code}. "
-                f"Content-Type: {r3.headers.get('Content-Type', '?')}. "
-                f"Inicio: {r3.content[:300]}"
-            )
-        return r3.content
+        ultimo_error = ""
+        for intento in range(4):
+            time.sleep(5 if intento == 0 else 4)
+            r3 = s.get(pdf_url, timeout=30)
+            r3.raise_for_status()
+            if not r3.content.startswith(b"%PDF"):
+                ultimo_error = (f"El archivo descargado no es un PDF. URL: {pdf_url}. "
+                                f"Content-Type: {r3.headers.get('Content-Type', '?')}. Inicio: {r3.content[:200]}")
+                continue
+            corresponde = _pdf_corresponde_al_estudio(r3.content, estudio)
+            if corresponde is not False:      # True, o None si no se puede verificar (sin texto)
+                return r3.content
+            ultimo_error = (f"El PDF descargado de SIESA no corresponde al estudio {estudio} "
+                            f"(trae otro paciente; posible PDF del estudio anterior)")
+        raise Exception(ultimo_error)
 
     try:
         return _do_fetch_enfermeria(session)
@@ -715,6 +719,39 @@ def _fetch_pdf_enfermeria(estudio: int) -> bytes:
         _siesa_session_cache = None
         session = _get_siesa_session()
         return _do_fetch_enfermeria(session)
+
+
+def _pdf_corresponde_al_estudio(pdf_bytes: bytes, estudio: int):
+    """
+    True si el texto del PDF contiene el número de estudio o el documento del paciente de ese
+    estudio (según ZeusSalud); False si tiene texto pero no los contiene (es de otro paciente);
+    None si no se puede verificar (PDF sin texto o error de lectura).
+    """
+    import io
+    import re
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            texto = " ".join((p.extract_text() or "") for p in pdf.pages[:2])
+    except Exception:
+        return None
+    if len(texto.strip()) < 30:
+        return None
+    numeros = set(re.findall(r"\d+", re.sub(r"[.,](?=\d{3})", "", texto)))
+    if str(estudio) in numeros:
+        return True
+    try:
+        with connections["zeussalud"].cursor() as cursor:
+            cursor.execute(
+                "SELECT LTRIM(RTRIM(sp.num_id)) FROM sis_maes sm JOIN sis_paci sp ON sp.autoid = sm.autoid "
+                "WHERE sm.con_estudio = %s", [estudio])
+            fila = cursor.fetchone()
+    except Exception:
+        return None
+    num_id = re.sub(r"\D", "", (fila[0] if fila else "") or "")
+    if num_id and num_id in numeros:
+        return True
+    return False
 
 
 def _estudios_enfermeria_por_fecha(fecha_inicio: str, fecha_fin: str) -> list:
