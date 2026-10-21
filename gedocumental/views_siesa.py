@@ -760,6 +760,8 @@ def _estudios_enfermeria_por_fecha(fecha_inicio: str, fecha_fin: str) -> list:
     """
     Devuelve lista de con_estudio para estudios de administración de
     medicamentos (ufuncional = 12) en el rango de fechas dado.
+    Solo los que tienen nota de enfermería: sin nota, SIESA no genera un PDF nuevo y en su
+    carpeta Temp queda el último generado (de otro paciente).
     """
     with connections["zeussalud"].cursor() as cursor:
         cursor.execute(
@@ -771,6 +773,7 @@ def _estudios_enfermeria_por_fecha(fecha_inicio: str, fecha_fin: str) -> list:
               AND sm.id_sede = 2
               AND sm.estado = 'A'
               AND sm.ufuncional = 12
+              AND EXISTS (SELECT 1 FROM notas_enfermeria ne WHERE ne.ingreso = sm.con_estudio)
             ORDER BY sm.con_estudio
             """,
             [fecha_inicio, fecha_fin],
