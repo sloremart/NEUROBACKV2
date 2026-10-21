@@ -694,7 +694,7 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True) -> bytes:
         # Paso 3a: exportar a PDF desde el visor (el informe recién generado de ESTE estudio).
         # SIESA ya no siempre escribe el PDF en Temp: ahí queda el último que se imprimió con
         # ese usuario (puede ser otro paciente).
-        pdf_visor = _exportar_pdf_visor(s, r2.text)
+        pdf_visor = _exportar_pdf_visor(s, r2.text, form_fields)
         if pdf_visor and (not verificar or _pdf_corresponde_al_estudio(pdf_visor, estudio) is not False):
             return pdf_visor
         for url in _urls_exportacion_pdf(r2.text):
@@ -776,7 +776,7 @@ def _campos_formulario_visor(html: str):
     return campos, select_export, boton
 
 
-def _exportar_pdf_visor(s: requests.Session, html: str):
+def _exportar_pdf_visor(s: requests.Session, html: str, campos_informe: dict = None):
     """
     Exporta a PDF el informe que muestra el visor FastReport de SIESA haciendo el mismo postback
     que el botón "Exportar" con "Adobe Acrobat" elegido. Devuelve los bytes del PDF o None.
@@ -787,7 +787,10 @@ def _exportar_pdf_visor(s: requests.Session, html: str):
         return None
     m = re.search(r"""<form\b[^>]*action=["']([^"']*)["']""", html, re.IGNORECASE)
     accion = urljoin(SIESA_REPORT_VIEW_URL, m.group(1).replace("&amp;", "&")) if m else SIESA_REPORT_VIEW_URL
-    datos = dict(campos)
+    # La página del visor vuelve a leer en cada postback los parámetros del informe (estudio,
+    # rptName, conexión...): sin ellos SIESA responde 500 "Referencia a objeto no establecida"
+    datos = dict(campos_informe or {})
+    datos.update(campos)
     datos[select_export] = "pdf"
     datos["__EVENTTARGET"] = ""
     datos["__EVENTARGUMENT"] = ""

@@ -133,7 +133,8 @@ class Command(BaseCommand):
         if m_boton:
             self.stdout.write("  HTML tras el menú Export: " + re.sub(r"\s+", " ", m_boton.group(0))[:1500])
         if select_export and boton:
-            datos = dict(campos_v, **{select_export: "pdf", f"{boton}.x": "8", f"{boton}.y": "8"})
+            datos = dict(campos, **campos_v)
+            datos.update({select_export: "pdf", f"{boton}.x": "8", f"{boton}.y": "8"})
             rp = s.post(SIESA_REPORT_VIEW_URL, data=datos, timeout=90, headers={"Referer": SIESA_REPORT_VIEW_URL})
             es_pdf = rp.content.startswith(b"%PDF")
             self.stdout.write(f"  POST -> HTTP {rp.status_code}, {len(rp.content)} bytes, PDF: {es_pdf}, "
