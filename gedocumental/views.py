@@ -389,8 +389,12 @@ def archivos_por_admision(request, numero_admision):
         # Última revisión IA de cada archivo: {IdArchivo: {tipo, descripcion, resuelta}}
         revision_ia = {}
         for r in RevisionIA.objects.filter(IdArchivo__in=archivos).order_by('IdRevision'):
+            # Un hallazgo cerrado como CORREGIDO (ej. el nombre se corrigió en Zeus) se muestra como OK
+            corregido = r.Resuelta and r.Resolucion == 'CORREGIDO' and r.TipoHallazgo != 'OK'
             revision_ia[r.IdArchivo_id] = {
-                "tipo": r.TipoHallazgo, "descripcion": r.Descripcion, "resuelta": r.Resuelta,
+                "tipo": "OK" if corregido else r.TipoHallazgo,
+                "descripcion": "Hallazgo corregido" if corregido else r.Descripcion,
+                "resuelta": r.Resuelta,
             }
 
         response_data = {

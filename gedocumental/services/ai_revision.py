@@ -1232,3 +1232,49 @@ def revisar_en_segundo_plano(archivo_ids, consecutivo) -> bool:
     # Se lanza cuando el archivo ya está confirmado en la BD
     transaction.on_commit(lambda: threading.Thread(target=_trabajo, daemon=True).start())
     return True
+
+
+def reverificar_hallazgos_con_zeus() -> int:
+    """
+    Cierra (CORREGIDO) los hallazgos pendientes de "Nombre del usuario incorrecto" y
+    "Número de documento incorrecto" cuando el dato del documento ya coincide con ZeusSalud
+    (alguien corrigió la admisión o la ficha del paciente). No usa IA.
+    Devuelve cuántos hallazgos se cerraron.
+    """
+    import re
+    from django.utils import timezone
+    from gedocumental.models import RevisionIA
+
+    patron = re.compile(r"documento '(?P<doc>[^']*)'")
+    pendientes = RevisionIA.objects.filter(Resuelta=False, TipoHallazgo='INFORMACION').filter(
+        models_q_nombre_o_documento())
+    cerrados = 0
+    contextos = {}
+    for h in pendientes:
+        m = patron.search(h.Descripcion or '')
+        if not m:
+            continue
+        valor_documento = m.group('doc')
+        if h.AdmisionId not in contextos:
+            contextos[h.AdmisionId] = obtener_contexto_admision(h.AdmisionId)
+        datos = contextos[h.AdmisionId]
+        if h.Descripcion.startswith('Nombre del usuario incorrecto'):
+            corregido = _mismo_paciente({'nombre_documento': valor_documento, 'identificacion_documento': ''}, datos)
+        else:
+            id_doc = re.sub(r'\D', '', valor_documento)
+            id_adm = re.sub(r'\D', '', datos.get('identificacion') or '')
+            corregido = bool(id_doc) and id_doc == id_adm
+        if corregido:
+            h.Resuelta = True
+            h.Resolucion = 'CORREGIDO'
+            h.FechaResolucion = timezone.now()
+            h.save(update_fields=['Resuelta', 'Resolucion', 'FechaResolucion'])
+            cerrados += 1
+            logger.info("Hallazgo %s cerrado: Zeus ya coincide con el documento", h.IdRevision)
+    return cerrados
+
+
+def models_q_nombre_o_documento():
+    from django.db.models import Q
+    return (Q(Descripcion__startswith='Nombre del usuario incorrecto')
+            | Q(Descripcion__startswith='Número de documento incorrecto'))

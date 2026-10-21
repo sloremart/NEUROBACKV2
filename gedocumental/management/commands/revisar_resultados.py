@@ -25,7 +25,9 @@ from django.db import connections
 from django.db.models import Max, Min
 
 from gedocumental.models import ArchivoFacturacion, RevisionIA
-from gedocumental.services.ai_revision import TIPOS_SIN_REVISION_IA, obtener_contexto_admision, revisar_archivo
+from gedocumental.services.ai_revision import (
+    TIPOS_SIN_REVISION_IA, obtener_contexto_admision, reverificar_hallazgos_con_zeus, revisar_archivo,
+)
 
 TIPO = 'RESULTADO'
 
@@ -41,6 +43,9 @@ class Command(BaseCommand):
         parser.add_argument('--solo-faltantes', action='store_true')
 
     def handle(self, *args, **o):
+        # 0. Hallazgos de nombre/documento que ya se corrigieron en ZeusSalud (sin IA)
+        cerrados = reverificar_hallazgos_con_zeus()
+        self.stdout.write(f"Hallazgos de nombre/documento corregidos en Zeus: {cerrados}")
         if not o['solo_faltantes']:
             self._revisar_resultados(o['dias'], o['limite'])
         self._registrar_faltantes(o['ventana_faltantes'])
