@@ -650,7 +650,10 @@ def _buscar_palabra(palabra: str, lista: list) -> str | None:
 
 # Palabras que la IA a veces devuelve como "nombre" y no lo son
 _NO_SON_NOMBRE = {'resultado', 'documento', 'informe', 'reporte', 'paciente', 'nombre', 'aparece', 'examen',
-                  'estudio', 'historia', 'clinica', 'usuario', 'aplica', 'identificacion', 'datos'}
+                  'estudio', 'historia', 'clinica', 'usuario', 'aplica', 'identificacion', 'datos',
+                  # Rótulos de columnas que se pegan al nombre en autorizaciones ("MARTI-TR EDAD")
+                  'edad', 'sexo', 'genero', 'fecha', 'nacimiento', 'tipo', 'telefono', 'direccion',
+                  'regimen', 'afiliado', 'afiliacion', 'anos', 'meses', 'ciudad', 'municipio'}
 
 
 def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> str:
@@ -744,15 +747,19 @@ def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
         return False  # número distinto: es otra persona aunque el nombre se parezca
 
     adm = _tokens_nombre(datos_admision.get('paciente'))
-    doc = _tokens_nombre(resultado.get('nombre_documento') or resultado.get('paciente_documento'))
+    doc = [t for t in _tokens_nombre(resultado.get('nombre_documento') or resultado.get('paciente_documento'))
+           if t not in _NO_SON_NOMBRE]
     if not doc:
         # Sin nombre legible: solo el número de documento decide
         return bool(id_adm and id_doc == id_adm)
     if len(doc) < 2 or not adm:
         return False
     disponibles = list(adm)
-    for palabra in doc:
+    for i, palabra in enumerate(doc):
         igual = _buscar_palabra(palabra, disponibles)
+        if igual is None and i == len(doc) - 1 and len(palabra) >= 4:
+            # Última palabra cortada por el ancho del campo del formulario ("MARTI" de MARTINEZ)
+            igual = next((a for a in disponibles if a.startswith(palabra)), None)
         if igual is None:
             return False  # palabra que no está en el nombre de la admisión (otra persona o mal escrita)
         disponibles.remove(igual)
