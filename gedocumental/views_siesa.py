@@ -797,11 +797,21 @@ def _exportar_pdf_visor(s: requests.Session, html: str, campos_informe: dict = N
     datos[f"{boton}.x"] = "8"
     datos[f"{boton}.y"] = "8"
     try:
-        r = s.post(accion, data=datos, timeout=90, headers={"Referer": accion})
+        # Sin seguir la redirección: la exportación puede borrarse tras la primera descarga
+        r = s.post(accion, data=datos, timeout=90, headers={"Referer": accion}, allow_redirects=False)
     except requests.RequestException:
         return None
     if r.content.startswith(b"%PDF"):
         return r.content
+    # SIESA redirige a FastReport.Export.aspx?ID=...: se prueba esa URL y la misma en Pages/
+    # (donde responde el manejador de exportación del visor), en descarga y en línea
+    for url in _urls_descarga_exportacion(r):
+        try:
+            r_pdf = s.get(url, timeout=60, headers={"Referer": accion})
+        except requests.RequestException:
+            continue
+        if r_pdf.content.startswith(b"%PDF"):
+            return r_pdf.content
     # Algunas versiones responden con la página y un enlace/script hacia FastReport.Export.aspx
     texto = r.text.replace("&amp;", "&")
     for mu in re.finditer(r"""(FastReport\.Export\.aspx\?[^"'\s<>]*frxexport[^"'\s<>]*)""", texto, re.IGNORECASE):
@@ -812,6 +822,24 @@ def _exportar_pdf_visor(s: requests.Session, html: str, campos_informe: dict = N
         if r_pdf.content.startswith(b"%PDF"):
             return r_pdf.content
     return None
+
+
+def _urls_descarga_exportacion(r) -> list:
+    """URLs para descargar la exportación a la que redirige el postback del visor (…Export.aspx?ID=…)."""
+    destinos = [h.headers.get("Location") or "" for h in r.history] + [r.headers.get("Location") or "", r.url]
+    urls = []
+    for destino in destinos:
+        m = re.search(r"FastReport\.Export\.aspx\?(?:[^#]*&)?ID=([\w-]+)", destino, re.IGNORECASE)
+        if not m:
+            continue
+        rid = m.group(1)
+        for base in ("http://192.168.1.209:8091/ZeusSalud/Reportes/FastReport/Pages/",
+                     "http://192.168.1.209:8091/ZeusSalud/Reportes/FastReport/"):
+            for inline in ("False", "True"):
+                u = f"{base}FastReport.Export.aspx?ID={rid}&displayinline={inline}"
+                if u not in urls:
+                    urls.append(u)
+    return urls
 
 
 def _urls_exportacion_pdf(html: str) -> list:

@@ -19,7 +19,8 @@ from django.db import connections
 from gedocumental import views_siesa
 from gedocumental.views_siesa import (SIESA_FORMULARIO_URL, SIESA_REPORT_VIEW_URL, _get_siesa_session,
                                       _fetch_pdf_enfermeria, _parse_hidden_inputs, _pdf_corresponde_al_estudio,
-                                      _urls_exportacion_pdf, _campos_formulario_visor)
+                                      _urls_exportacion_pdf, _campos_formulario_visor,
+                                      _urls_descarga_exportacion)
 
 URL_TEMP = "http://192.168.1.209:8091/ZeusSalud/Archivos/CLIENTE/Temp/"
 
@@ -135,7 +136,8 @@ class Command(BaseCommand):
         if select_export and boton:
             datos = dict(campos, **campos_v)
             datos.update({select_export: "pdf", f"{boton}.x": "8", f"{boton}.y": "8"})
-            rp = s.post(SIESA_REPORT_VIEW_URL, data=datos, timeout=90, headers={"Referer": SIESA_REPORT_VIEW_URL})
+            rp = s.post(SIESA_REPORT_VIEW_URL, data=datos, timeout=90, headers={"Referer": SIESA_REPORT_VIEW_URL},
+                        allow_redirects=False)
             es_pdf = rp.content.startswith(b"%PDF")
             self.stdout.write(f"  POST -> HTTP {rp.status_code}, {len(rp.content)} bytes, PDF: {es_pdf}, "
                               f"Content-Type: {rp.headers.get('Content-Type')}, "
@@ -149,6 +151,18 @@ class Command(BaseCommand):
                 for mm in re.finditer(r".{0,150}(?:frxexport|Export\.aspx|window\.open|location).{0,250}", t, re.I):
                     self.stdout.write("    >> " + re.sub(r"\s+", " ", mm.group(0)))
                 self.stdout.write("    Texto: " + _texto_html(rp.text)[:300])
+            self.stdout.write(f"  Location: {rp.headers.get('Location')} | cookies: {sorted(s.cookies.keys())}")
+            for url in _urls_descarga_exportacion(rp):
+                time.sleep(1)
+                rd = s.get(url, timeout=60, headers={"Referer": SIESA_REPORT_VIEW_URL}, allow_redirects=False)
+                ok = rd.content.startswith(b"%PDF")
+                self.stdout.write(f"  GET {url} -> HTTP {rd.status_code}, {len(rd.content)} bytes, PDF: {ok}, "
+                                  f"headers: {dict(rd.headers)}")
+                if ok:
+                    self.stdout.write("    Texto (inicio): " + re.sub(r"\s+", " ", _texto_pdf(rd.content)[:300]))
+                    self.stdout.write(f"    ¿Es del estudio {estudio}? {_pdf_corresponde_al_estudio(rd.content, estudio)}")
+                elif rd.content:
+                    self.stdout.write(f"    Contenido: {rd.content[:300]!r}")
 
         self.stdout.write("\nPASO 3a exportación a PDF desde el visor")
         urls = _urls_exportacion_pdf(r2.text)
