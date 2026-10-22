@@ -1014,61 +1014,74 @@ def _pdf_desde_html_visor(s: requests.Session, html: str, campos_informe: dict =
     return salida.getvalue()
 
 
+def _cierre_balanceado(html: str, inicio: int, etiqueta: str) -> int:
+    """Posición justo después del cierre de la etiqueta que abre en `inicio` (o -1)."""
+    bajo = html.lower()
+    abre_tag, cierra_tag = f"<{etiqueta}", f"</{etiqueta}>"
+    profundidad, i = 0, bajo.find(">", inicio) + 1
+    while True:
+        abre = bajo.find(abre_tag, i)
+        cierra = bajo.find(cierra_tag, i)
+        if cierra == -1:
+            return -1
+        if abre != -1 and abre < cierra:
+            profundidad += 1
+            i = abre + len(abre_tag)
+        elif profundidad:
+            profundidad -= 1
+            i = cierra + len(cierra_tag)
+        else:
+            return cierra + len(cierra_tag)
+
+
 def _extraer_hoja_visor(cuerpo: str):
     """
-    La hoja del informe dentro del visor: el primer <div> con ancho y alto fijos en px de tamaño de
-    página. Devuelve (html de la hoja, ancho_px, alto_px) o (None, None, None) si no se encuentra.
+    El folio del informe dentro del visor FastReport. En SIESA es una tabla de ancho fijo
+    (<a name="PageN1"><table width="718px;" style="table-layout: fixed;">) cuyas filas tienen la
+    altura en px. Devuelve (html del folio, ancho_px, alto_px) o (None, None, None).
     """
-    for m in re.finditer(r"<div\b[^>]*>", cuerpo, re.IGNORECASE):
-        m_estilo = re.search(r"""\bstyle\s*=\s*["']([^"']*)["']""", m.group(0), re.IGNORECASE)
-        if not m_estilo:
+    for m in re.finditer(r"<table\b[^>]*>", cuerpo, re.IGNORECASE):
+        mw = re.search(r"""\bwidth\s*=\s*["']?\s*(\d+(?:\.\d+)?)\s*px""", m.group(0), re.IGNORECASE)
+        if not mw or not (400 <= float(mw.group(1)) <= 1400):
             continue
-        estilo = m_estilo.group(1)
-        mw = re.search(r"(?<![-\w])width\s*:\s*(\d+(?:\.\d+)?)px", estilo, re.IGNORECASE)
-        mh = re.search(r"(?<![-\w])height\s*:\s*(\d+(?:\.\d+)?)px", estilo, re.IGNORECASE)
-        if not (mw and mh):
+        fin = _cierre_balanceado(cuerpo, m.start(), "table")
+        if fin == -1:
             continue
-        ancho, alto = float(mw.group(1)), float(mh.group(1))
-        if not (500 <= ancho <= 1400 and 500 <= alto <= 2200):
-            continue
-        # Cierre balanceado del <div>
-        bajo = cuerpo.lower()
-        profundidad, i = 0, m.end()
-        while True:
-            abre = bajo.find("<div", i)
-            cierra = bajo.find("</div>", i)
-            if cierra == -1:
-                return None, None, None
-            if abre != -1 and abre < cierra:
-                profundidad += 1
-                i = abre + 4
-            elif profundidad:
-                profundidad -= 1
-                i = cierra + 6
-            else:
-                return cuerpo[m.start():cierra + 6], ancho, alto
+        tabla = cuerpo[m.start():fin]
+        alto = sum(float(h) for h in re.findall(
+            r"""<tr\b[^>]*style\s*=\s*["'][^"']*height\s*:\s*(\d+(?:\.\d+)?)px""", tabla, re.IGNORECASE))
+        return tabla, float(mw.group(1)), (alto or None)
     return None, None, None
 
 
+# Hoja carta a 96 px por pulgada
+_CARTA_ANCHO_PX, _CARTA_ALTO_PX, _MARGEN_PX = 816, 1056, 38
+
+
 def _hoja_visor_a_pdf(estilos: str, cuerpo: str):
-    """Convierte UNA página del visor a PDF: una hoja del tamaño exacto del folio, sin el marco gris."""
+    """
+    Convierte UNA página del visor a una hoja PDF: solo el folio del informe con sus propios estilos
+    (sin los del visor, que agregan el marco gris, la sombra y márgenes), centrado en hoja carta.
+    """
     estilos_cuerpo = "".join(re.findall(r"<style\b.*?</style>", cuerpo, re.IGNORECASE | re.DOTALL))
     hoja, ancho, alto = _extraer_hoja_visor(cuerpo)
     base = "<style>html,body{margin:0;padding:0;background:#fff;}</style>"
     opciones = ["wkhtmltopdf", "--encoding", "UTF-8", "--quiet"]
     if hoja:
-        contenido = (
-            '<div class="hoja-siesa" style="position:relative;overflow:hidden;'
-            f'width:{ancho:.0f}px;height:{alto - 1:.0f}px;">{hoja}</div>'
-        )
-        base += (".hoja-siesa > div{position:relative!important;left:0!important;top:0!important;"
-                 "margin:0!important;box-shadow:none!important;}").join(["<style>", "</style>"])
+        alto = alto or (_CARTA_ALTO_PX - 2 * _MARGEN_PX)
+        ancho_hoja = max(_CARTA_ANCHO_PX, ancho + 2 * _MARGEN_PX)
+        alto_hoja = max(_CARTA_ALTO_PX, alto + 2 * _MARGEN_PX)
+        izquierda = (ancho_hoja - ancho) / 2
+        contenido = (f'<div style="position:absolute;left:{izquierda:.0f}px;top:{_MARGEN_PX}px;'
+                     f'width:{ancho:.0f}px;">{hoja}</div>')
+        documento = ('<html><head><meta charset="UTF-8">' + estilos_cuerpo + base
+                     + "</head><body>" + contenido + "</body></html>")
         opciones += ["--disable-smart-shrinking", "-T", "0", "-B", "0", "-L", "0", "-R", "0",
-                     "--page-width", f"{ancho * 25.4 / 96:.2f}mm", "--page-height", f"{alto * 25.4 / 96:.2f}mm"]
+                     "--page-width", f"{ancho_hoja * 25.4 / 96:.2f}mm",
+                     "--page-height", f"{(alto_hoja - 1) * 25.4 / 96:.2f}mm"]
     else:
-        contenido = cuerpo
-    documento = ('<html><head><meta charset="UTF-8">' + estilos + estilos_cuerpo + base
-                 + "</head><body>" + contenido + "</body></html>")
+        documento = ('<html><head><meta charset="UTF-8">' + estilos + estilos_cuerpo + base
+                     + "</head><body>" + cuerpo + "</body></html>")
     tmp_html_path = tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8") as th:
