@@ -30,7 +30,10 @@ def _marca_pdf(ruta: str) -> str:
     """Productor y creador del PDF en minúsculas ('' si no se puede leer)."""
     try:
         from PyPDF2 import PdfReader
-        meta = PdfReader(ruta).metadata or {}
+        with open(ruta, "rb") as f:
+            meta = PdfReader(f).metadata or {}
+            marca = f"{meta.get('/Producer', '')} {meta.get('/Creator', '')}".lower()
+        return marca
     except Exception:
         return ""
     return f"{meta.get('/Producer', '')} {meta.get('/Creator', '')}".lower()
@@ -55,10 +58,22 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--aplicar", action="store_true", help="Regenerar de verdad (sin esto solo lista)")
         parser.add_argument("--solo-consultas", dest="solo_consultas", action="store_true")
+        parser.add_argument("--estudios", help="Lista de admisiones separadas por coma (sin revisar las demás)")
+        parser.add_argument("--dias", type=int, default=30,
+                            help="Solo PDF creados en los últimos N días (por defecto 30)")
+        parser.add_argument("--limite", type=int, default=0, help="Procesar como máximo N (0 = todos)")
 
     def handle(self, *args, **o):
-        candidatos = [a for a in ArchivoFacturacion.objects.filter(Tipo="RESULTADO", Usuario__isnull=True)
-                      .only("IdArchivo", "Admision_id", "NombreArchivo", "RutaArchivo")
+        import gc
+        from datetime import datetime, timedelta
+        consulta_base = ArchivoFacturacion.objects.filter(Tipo="RESULTADO", Usuario__isnull=True)
+        if o["estudios"]:
+            consulta_base = consulta_base.filter(
+                Admision_id__in=[int(x) for x in o["estudios"].replace(" ", "").split(",") if x])
+        else:
+            consulta_base = consulta_base.filter(
+                FechaCreacionArchivo__gte=datetime.now() - timedelta(days=o["dias"]))
+        candidatos = [a for a in consulta_base.only("IdArchivo", "Admision_id", "NombreArchivo", "RutaArchivo")
                       if a.NombreArchivo == f"{a.Admision_id}R.pdf"]
         ids = [a.Admision_id for a in candidatos]
         ufuncional = {}
@@ -97,6 +112,10 @@ class Command(BaseCommand):
             if ruta and os.path.isfile(ruta) and _es_conversion(_marca_pdf(ruta), consulta):
                 convertidos.append((a, uf))
 
+        # Primero las consultas (las historias de neurología/fisiatría son las que salen mal convertidas)
+        convertidos.sort(key=lambda x: (x[1] != UFUNCIONAL_CONSULTA, x[0].Admision_id))
+        if o["limite"]:
+            convertidos = convertidos[:o["limite"]]
         self.stdout.write(f"RESULTADOS convertidos (no originales de SIESA): {len(convertidos)}")
         for a, uf in convertidos:
             self.stdout.write(f"  {a.Admision_id}  {'consulta' if uf == UFUNCIONAL_CONSULTA else 'enfermería'}")
@@ -124,5 +143,8 @@ class Command(BaseCommand):
                 else:
                     errores += 1
                     self.stdout.write(f"  {estudio}: no se pudo regenerar, se deja como está ({exc})")
+            pdf = None
+            gc.collect()          # pdfplumber acumula memoria entre documentos
+            self.stdout.flush()
         self.stdout.write(self.style.SUCCESS(
             f"Reemplazados: {ok} | Consultas borradas para regenerar luego: {borrados} | Errores: {errores}"))
