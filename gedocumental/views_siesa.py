@@ -26,6 +26,7 @@ from datetime import datetime
 
 import subprocess
 import tempfile
+import threading
 import requests
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
@@ -652,18 +653,23 @@ def _parse_hidden_inputs(html: str) -> dict:
     return fields
 
 
-def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True, imp_hc: int = 0, imp_notas: int = 1) -> bytes:
+# Una sola generación a la vez: SIESA guarda el PDF con un nombre fijo por usuario (HCE10083.pdf)
+_LOCK_PDF_SIESA = threading.Lock()
+
+
+def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True, imp_hc: int = 0, imp_notas: int = 1,
+                          permitir_conversion: bool = True) -> bytes:
     """
     Descarga de SIESA el informe "HistoriaClinicaGeneral" de un estudio:
       - por defecto, la nota de enfermería (administración de medicamentos, ufuncional = 12);
       - con imp_hc=1, imp_notas=0, la historia clínica de la consulta (ver _fetch_pdf_consulta).
 
-    Se fuerza una sesión PHP nueva por cada estudio para evitar que SIESA
-    use el estado de la sesión anterior y devuelva el PDF de otro paciente.
+    Cada estudio usa una sesión de SIESA propia (no la compartida con los resultados de imágenes)
+    para que SIESA no mezcle el estado de otra petición y devuelva el PDF de otro paciente.
+    Con permitir_conversion=False (historias de consulta) solo se acepta el PDF original de SIESA:
+    si no se obtiene, se lanza error y el estudio se reintenta en la próxima corrida.
     """
-    global _siesa_session_cache
-    _siesa_session_cache = None          # sesión fresca → PHP session limpia en SIESA
-    session = _get_siesa_session()
+    session = _siesa_login()
     usuario_session = getattr(settings, "SIESA_USUARIO_SESSION", "")
 
     def _do_fetch_enfermeria(s: requests.Session) -> bytes:
@@ -703,15 +709,23 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True, imp_hc: int = 0,
         # Puede tardar unos segundos en escribirse; se verifica que sea de este estudio.
         url_pdf_php = (f"{SIESA_PDF_PHP_URL}?n={base64.b64encode(nombre_pdf.encode()).decode()}"
                        f"&p={base64.b64encode(SIESA_CARPETA_TEMP_PDF.encode()).decode()}")
-        for intento in range(4):
-            time.sleep(3 if intento == 0 else 4)
+        ultimo_php = "sin respuesta"
+        for espera in (3, 4, 5, 5, 6, 7):
+            time.sleep(espera)
             try:
                 r_php = s.get(url_pdf_php, timeout=60)
-            except requests.RequestException:
+            except requests.RequestException as exc:
+                ultimo_php = f"error {exc}"
                 continue
-            if r_php.status_code == 200 and r_php.content.startswith(b"%PDF") and (
-                    not verificar or _pdf_corresponde_al_estudio(r_php.content, estudio) is True):
+            if not (r_php.status_code == 200 and r_php.content.startswith(b"%PDF")):
+                ultimo_php = f"HTTP {r_php.status_code}, no es PDF ({len(r_php.content)} bytes)"
+                continue
+            if not verificar or _pdf_corresponde_al_estudio(r_php.content, estudio) is True:
                 return r_php.content
+            ultimo_php = f"PDF de otro documento ({_estudio_del_pdf(r_php.content)})"
+        if not permitir_conversion:
+            raise Exception(f"SIESA no entregó el PDF original del estudio {estudio}: Pdf.php devolvió "
+                            f"{ultimo_php}. Se reintenta en la próxima corrida.")
 
         # Paso 3a (respaldo): exportar a PDF desde el visor (el informe recién generado de ESTE estudio).
         # SIESA ya no siempre escribe el PDF en Temp: ahí queda el último que se imprimió con
@@ -760,13 +774,11 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True, imp_hc: int = 0,
                             f"(trae otro paciente; posible PDF del estudio anterior)")
         raise Exception(ultimo_error)
 
-    try:
-        return _do_fetch_enfermeria(session)
-    except Exception:
-        # (_siesa_session_cache ya está declarado global al inicio de la función)
-        _siesa_session_cache = None
-        session = _get_siesa_session()
-        return _do_fetch_enfermeria(session)
+    with _LOCK_PDF_SIESA:
+        try:
+            return _do_fetch_enfermeria(session)
+        except Exception:
+            return _do_fetch_enfermeria(_siesa_login())
 
 
 def _campos_formulario_visor(html: str):
@@ -889,9 +901,10 @@ def _firma_profesional(cedula: str):
         with connections["zeussalud"].cursor() as cursor:
             cursor.execute(
                 "SELECT TOP 1 TipoFirmaMedicoBase64, FirmaMedicoBase64 FROM sis_medi "
-                "WHERE (LTRIM(RTRIM(cedula)) = %s OR LTRIM(RTRIM(registro)) = %s) AND LEN(FirmaMedicoBase64) > 100 "
+                "WHERE (LTRIM(RTRIM(cedula)) = %s OR LTRIM(RTRIM(registro)) = %s "
+                "       OR REPLACE(LTRIM(RTRIM(registro)), '-', '') = %s) AND LEN(FirmaMedicoBase64) > 100 "
                 "ORDER BY CASE WHEN LTRIM(RTRIM(cedula)) = %s THEN 0 ELSE 1 END, codigo DESC",
-                [cedula, cedula, cedula])
+                [cedula, cedula, cedula.replace("-", ""), cedula])
             fila = cursor.fetchone()
         if fila:
             datos = re.sub(r"^data:[^,]*,", "", (fila[1] or "").strip())
@@ -955,7 +968,7 @@ def _pagina_visor_html(s: requests.Session, html: str) -> tuple:
         # Firma del profesional: la imagen va justo encima de "CC <cédula> <nombre>"; SIESA puede
         # entregarla vacía, así que se toma de Zeus (sis_medi.FirmaMedicoBase64)
         # En la historia clínica de consulta va "Atendido Por: NOMBRE / Reg. Medico: 72199429"
-        patron_prof = re.compile(r"\b(?:CC|C\.C\.|CE|Reg\.?\s*M[eé]dico)\s*:?\s*(\d{5,12})\b", re.IGNORECASE)
+        patron_prof = re.compile(r"\b(?:CC|C\.C\.|CE|Reg\.?\s*M[eé]dico)\s*:?\s*(\d[\d\-]{4,14}\d)\b", re.IGNORECASE)
         siguiente = html_lib.unescape(re.sub(r"<[^>]+>", " ", cuerpo[mi.end():mi.end() + 3000]))
         anterior = html_lib.unescape(re.sub(r"<[^>]+>", " ", cuerpo[max(0, mi.start() - 3000):mi.start()]))
         m_cc = patron_prof.search(siguiente[:400])
@@ -1265,6 +1278,21 @@ def _urls_exportacion_pdf(html: str) -> list:
     return urls
 
 
+def _estudio_del_pdf(pdf_bytes: bytes) -> str:
+    """'Estudio: 32086, impreso 2026/10/21 3:15:26 p. m.' según el texto del PDF (para diagnóstico)."""
+    import io
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            texto = pdf.pages[0].extract_text() or ""
+    except Exception:
+        return "no se pudo leer"
+    est = re.search(r"Estudio:\s*(\d+)", texto)
+    imp = re.search(r"impresi[oó]n:\s*([\d/]+\s+[\d:]+\s*[ap]?\.?\s*m?\.?)", texto, re.IGNORECASE)
+    return (f"estudio {est.group(1) if est else '?'}"
+            + (f", impreso {imp.group(1).strip()}" if imp else ""))
+
+
 def _pdf_corresponde_al_estudio(pdf_bytes: bytes, estudio: int):
     """
     True si el texto del PDF contiene el número de estudio o el documento del paciente de ese
@@ -1449,7 +1477,8 @@ TIPOS_HC_CONSULTA = {
 
 def _fetch_pdf_consulta(estudio: int, verificar: bool = True) -> bytes:
     """PDF de la historia clínica de la consulta (sin notas de enfermería)."""
-    return _fetch_pdf_enfermeria(estudio, verificar=verificar, imp_hc=1, imp_notas=0)
+    # Sin conversión del HTML del visor: en neurología viene roto desde SIESA (texto letra por letra)
+    return _fetch_pdf_enfermeria(estudio, verificar=verificar, imp_hc=1, imp_notas=0, permitir_conversion=False)
 
 
 def _tipos_hc(especialidad: str) -> tuple:
