@@ -854,6 +854,37 @@ def _quitar_tabla_que_contiene(html: str, pos: int) -> str:
             return html[:inicio] + html[cierra + len("</table>"):]
 
 
+_firmas_cache: dict = {}
+
+
+def _firma_profesional(cedula: str):
+    """(tipo MIME, base64) de la firma del profesional en ZeusSalud (sis_medi), o None."""
+    cedula = (cedula or "").strip()
+    if cedula in _firmas_cache:
+        return _firmas_cache[cedula]
+    firma = None
+    try:
+        with connections["zeussalud"].cursor() as cursor:
+            cursor.execute(
+                "SELECT TOP 1 TipoFirmaMedicoBase64, FirmaMedicoBase64 FROM sis_medi "
+                "WHERE LTRIM(RTRIM(cedula)) = %s AND LEN(FirmaMedicoBase64) > 100 "
+                "ORDER BY codigo DESC", [cedula])
+            fila = cursor.fetchone()
+        if fila:
+            datos = re.sub(r"^data:[^,]*,", "", (fila[1] or "").strip())
+            datos = re.sub(r"\s+", "", datos)
+            try:
+                tipo = _tipo_imagen(base64.b64decode(datos[:64] + "=" * (-len(datos[:64]) % 4)))
+            except Exception:
+                tipo = None
+            firma = (tipo or (fila[0] or "image/jpeg").strip(), datos)
+    except Exception:
+        firma = None
+    if firma:
+        _firmas_cache[cedula] = firma
+    return firma
+
+
 def _tipo_imagen(contenido: bytes):
     """Tipo MIME de una imagen según sus primeros bytes (None si no es imagen)."""
     if not contenido:
@@ -898,6 +929,10 @@ def _pagina_visor_html(s: requests.Session, html: str) -> tuple:
     def incrustar(mi):
         contador["n"] += 1
         etiqueta = mi.group(0)
+        # Firma del profesional: la imagen va justo encima de "CC <cédula> <nombre>"; SIESA puede
+        # entregarla vacía, así que se toma de Zeus (sis_medi.FirmaMedicoBase64)
+        siguiente = html_lib.unescape(re.sub(r"<[^>]+>", " ", cuerpo[mi.end():mi.end() + 2500]))
+        m_cc = re.search(r"\b(?:CC|C\.C\.|CE)\s*:?\s*(\d{5,12})\b", siguiente[:400], re.IGNORECASE)
         src = mi.group(1).replace("&amp;", "&")
         if src.startswith("data:"):
             return etiqueta
@@ -909,6 +944,11 @@ def _pagina_visor_html(s: requests.Session, html: str) -> tuple:
                 return etiqueta.replace(mi.group(1), f"data:{tipo};base64,{base64.b64encode(ri.content).decode()}")
         except requests.RequestException:
             pass
+        firma = _firma_profesional(m_cc.group(1)) if m_cc else None
+        if firma:
+            tipo_firma, datos_firma = firma
+            return (f'<img src="data:{tipo_firma};base64,{datos_firma}" '
+                    f'style="max-width:100%;max-height:100%;">')
         if contador["n"] == 1 and logo_b64:
             return (f'<img src="data:image/jpeg;base64,{logo_b64}" '
                     f'style="max-height:70px;max-width:130px;">')
