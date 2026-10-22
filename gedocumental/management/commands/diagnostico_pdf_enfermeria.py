@@ -102,6 +102,14 @@ class Command(BaseCommand):
             return
         self.stdout.write(f"  Claves de la respuesta: {list(datos.keys())}")
         campos = _parse_hidden_inputs(datos.get("payload", ""))
+        # Formulario completo que devuelve SIESA (acción, destino y scripts): indica a dónde lo envía
+        # el navegador cuando se pide el PDF
+        payload = datos.get("payload", "") or ""
+        self.stdout.write(f"  idForm: {datos.get('idForm')!r} | request: {str(datos.get('request'))[:300]}")
+        for mf in re.finditer(r"<form\b[^>]*>", payload, re.IGNORECASE):
+            self.stdout.write(f"  FORM: {mf.group(0)}")
+        sin_inputs = re.sub(r"<input\b[^>]*>", "", payload, flags=re.IGNORECASE)
+        self.stdout.write("  PAYLOAD (sin inputs): " + re.sub(r"\s+", " ", sin_inputs)[:1500])
         for k, v in campos.items():
             self.stdout.write(f"  {k} = {v[:150]}")
         nombre = campos.get("nombreArchivoPdf")
