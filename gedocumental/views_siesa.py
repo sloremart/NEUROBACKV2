@@ -968,8 +968,7 @@ def _pdf_desde_html_visor(s: requests.Session, html: str, campos_informe: dict =
     m_total = re.search(r"\bof\s+(\d+)\b", html_lib.unescape(texto))
     total = min(int(m_total.group(1)), 30) if m_total else 1
 
-    estilos, cuerpo = _pagina_visor_html(s, html)
-    cuerpos = [cuerpo]
+    paginas = [_pagina_visor_html(s, html)]
     actual = html
     for pagina in range(2, total + 1):
         campos, _, _ = _campos_formulario_visor(actual)
@@ -986,13 +985,82 @@ def _pdf_desde_html_visor(s: requests.Session, html: str, campos_informe: dict =
         if r.status_code != 200:
             break
         actual = r.text
-        cuerpos.append(_pagina_visor_html(s, actual)[1])
+        paginas.append(_pagina_visor_html(s, actual))
 
-    documento = (
-        '<html><head><meta charset="UTF-8">' + estilos + "</head><body>"
-        + '<div style="page-break-after:always"></div>'.join(cuerpos)
-        + "</body></html>"
-    )
+    # Cada página se convierte por separado: FastReport repite los nombres de clase (.s0, .s1…) con
+    # estilos distintos en cada página, y juntas se pisan. Luego se unen en un solo PDF.
+    pdfs = [_hoja_visor_a_pdf(estilos, cuerpo) for estilos, cuerpo in paginas]
+    pdfs = [p for p in pdfs if p]
+    if not pdfs:
+        return None
+    if len(pdfs) == 1:
+        return pdfs[0]
+    import io
+    from PyPDF2 import PdfReader, PdfWriter
+    escritor = PdfWriter()
+    for p in pdfs:
+        for hoja in PdfReader(io.BytesIO(p)).pages:
+            escritor.add_page(hoja)
+    salida = io.BytesIO()
+    escritor.write(salida)
+    return salida.getvalue()
+
+
+def _extraer_hoja_visor(cuerpo: str):
+    """
+    La hoja del informe dentro del visor: el primer <div> con ancho y alto fijos en px de tamaño de
+    página. Devuelve (html de la hoja, ancho_px, alto_px) o (None, None, None) si no se encuentra.
+    """
+    for m in re.finditer(r"<div\b[^>]*>", cuerpo, re.IGNORECASE):
+        m_estilo = re.search(r"""\bstyle\s*=\s*["']([^"']*)["']""", m.group(0), re.IGNORECASE)
+        if not m_estilo:
+            continue
+        estilo = m_estilo.group(1)
+        mw = re.search(r"(?<![-\w])width\s*:\s*(\d+(?:\.\d+)?)px", estilo, re.IGNORECASE)
+        mh = re.search(r"(?<![-\w])height\s*:\s*(\d+(?:\.\d+)?)px", estilo, re.IGNORECASE)
+        if not (mw and mh):
+            continue
+        ancho, alto = float(mw.group(1)), float(mh.group(1))
+        if not (500 <= ancho <= 1400 and 500 <= alto <= 2200):
+            continue
+        # Cierre balanceado del <div>
+        bajo = cuerpo.lower()
+        profundidad, i = 0, m.end()
+        while True:
+            abre = bajo.find("<div", i)
+            cierra = bajo.find("</div>", i)
+            if cierra == -1:
+                return None, None, None
+            if abre != -1 and abre < cierra:
+                profundidad += 1
+                i = abre + 4
+            elif profundidad:
+                profundidad -= 1
+                i = cierra + 6
+            else:
+                return cuerpo[m.start():cierra + 6], ancho, alto
+    return None, None, None
+
+
+def _hoja_visor_a_pdf(estilos: str, cuerpo: str):
+    """Convierte UNA página del visor a PDF: una hoja del tamaño exacto del folio, sin el marco gris."""
+    estilos_cuerpo = "".join(re.findall(r"<style\b.*?</style>", cuerpo, re.IGNORECASE | re.DOTALL))
+    hoja, ancho, alto = _extraer_hoja_visor(cuerpo)
+    base = "<style>html,body{margin:0;padding:0;background:#fff;}</style>"
+    opciones = ["wkhtmltopdf", "--encoding", "UTF-8", "--quiet"]
+    if hoja:
+        contenido = (
+            '<div class="hoja-siesa" style="position:relative;overflow:hidden;'
+            f'width:{ancho:.0f}px;height:{alto - 1:.0f}px;">{hoja}</div>'
+        )
+        base += (".hoja-siesa > div{position:relative!important;left:0!important;top:0!important;"
+                 "margin:0!important;box-shadow:none!important;}").join(["<style>", "</style>"])
+        opciones += ["--disable-smart-shrinking", "-T", "0", "-B", "0", "-L", "0", "-R", "0",
+                     "--page-width", f"{ancho * 25.4 / 96:.2f}mm", "--page-height", f"{alto * 25.4 / 96:.2f}mm"]
+    else:
+        contenido = cuerpo
+    documento = ('<html><head><meta charset="UTF-8">' + estilos + estilos_cuerpo + base
+                 + "</head><body>" + contenido + "</body></html>")
     tmp_html_path = tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8") as th:
@@ -1000,8 +1068,7 @@ def _pdf_desde_html_visor(s: requests.Session, html: str, campos_informe: dict =
             tmp_html_path = th.name
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tp:
             tmp_path = tp.name
-        res = subprocess.run(["wkhtmltopdf", "--encoding", "UTF-8", "--quiet", tmp_html_path, tmp_path],
-                             capture_output=True, timeout=90)
+        subprocess.run(opciones + [tmp_html_path, tmp_path], capture_output=True, timeout=90)
         # wkhtmltopdf puede terminar con código 1 por un recurso que no cargó y aun así generar el PDF
         with open(tmp_path, "rb") as f:
             datos_pdf = f.read()

@@ -184,9 +184,20 @@ class Command(BaseCommand):
 
         self.stdout.write("\nHTML DEL VISOR -> PDF (wkhtmltopdf)")
         try:
+            from gedocumental.views_siesa import _extraer_hoja_visor, _pagina_visor_html
+            estilos_p1, cuerpo_p1 = _pagina_visor_html(s, r2.text)
+            _, ancho, alto = _extraer_hoja_visor(cuerpo_p1)
+            self.stdout.write(f"  Hoja detectada en el visor: {ancho} x {alto} px | <style> en head: "
+                              f"{estilos_p1.lower().count('<style')}, en body: {cuerpo_p1.lower().count('<style')}")
+            if not ancho:
+                for md in re.finditer(r"<div[^>]*style=[^>]*>", cuerpo_p1[:20000], re.IGNORECASE):
+                    if "width" in md.group(0).lower():
+                        self.stdout.write("    div: " + md.group(0)[:200])
             pdf_h = _pdf_desde_html_visor(s, r2.text, campos)
             if pdf_h:
-                self.stdout.write(f"  PDF: {len(pdf_h)} bytes")
+                import io as _io
+                from PyPDF2 import PdfReader
+                self.stdout.write(f"  PDF: {len(pdf_h)} bytes, {len(PdfReader(_io.BytesIO(pdf_h)).pages)} páginas")
                 self.stdout.write("  Texto (inicio): " + re.sub(r"\s+", " ", _texto_pdf(pdf_h)[:400]))
                 self.stdout.write(f"  ¿Es del estudio {estudio}? {_pdf_corresponde_al_estudio(pdf_h, estudio)}")
             else:
