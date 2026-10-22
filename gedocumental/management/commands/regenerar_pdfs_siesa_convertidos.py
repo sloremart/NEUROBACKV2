@@ -57,7 +57,10 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--aplicar", action="store_true", help="Regenerar de verdad (sin esto solo lista)")
-        parser.add_argument("--solo-consultas", dest="solo_consultas", action="store_true")
+        parser.add_argument("--solo-consultas", dest="solo_consultas", action="store_true",
+                            help="(por defecto) solo historias de consulta")
+        parser.add_argument("--incluir-enfermeria", dest="incluir_enfermeria", action="store_true",
+                            help="Incluir también las notas de enfermería convertidas")
         parser.add_argument("--estudios", help="Lista de admisiones separadas por coma (sin revisar las demás)")
         parser.add_argument("--dias", type=int, default=30,
                             help="Solo PDF creados en los últimos N días (por defecto 30)")
@@ -96,7 +99,7 @@ class Command(BaseCommand):
                     [*lote, *tipos_hc])
                 con_hc.update(fila[0] for fila in cursor.fetchall())
 
-        tipos = (UFUNCIONAL_CONSULTA,) if o["solo_consultas"] else (UFUNCIONAL_CONSULTA, UFUNCIONAL_ENFERMERIA)
+        tipos = (UFUNCIONAL_CONSULTA, UFUNCIONAL_ENFERMERIA) if o["incluir_enfermeria"] else (UFUNCIONAL_CONSULTA,)
         convertidos = []
         for a in candidatos:
             uf = ufuncional.get(a.Admision_id)
@@ -131,10 +134,15 @@ class Command(BaseCommand):
                     pdf = _fetch_pdf_consulta(estudio)
                 else:
                     pdf = _fetch_pdf_enfermeria(estudio)
+                import io
+                from PyPDF2 import PdfReader
+                meta = PdfReader(io.BytesIO(pdf)).metadata or {}
+                original = "fastreport" in f"{meta.get('/Producer', '')} {meta.get('/Creator', '')}".lower()
                 ruta_relativa, _, nombre = _guardar_pdf(estudio, pdf)
                 _registrar_en_bd(estudio, nombre, ruta_relativa)
                 ok += 1
-                self.stdout.write(f"  {estudio}: reemplazado por el original")
+                self.stdout.write(f"  {estudio}: reemplazado por "
+                                  + ("el PDF original de SIESA" if original else "una nueva conversión (respaldo)"))
             except Exception as exc:
                 if uf == UFUNCIONAL_CONSULTA:
                     a.delete()   # la tarea programada lo vuelve a generar en original
