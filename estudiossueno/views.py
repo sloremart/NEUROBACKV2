@@ -7,7 +7,7 @@ from .models import RegistroEstudioSueno, ESTUDIOS_CHOICES, EQUIPOS_CHOICES
 from .serializers import RegistroEstudioSuenoSerializer
 
 # CUPS de sueño registrados en ZeusSalud
-CUPS_SUENO = ("891703", "891704", "891901")
+CUPS_SUENO = ("891402", "891703", "891704", "891901")
 
 # IDs de asunto de sueño en sis_tipo
 ASUNTOS_SUENO = (14, 15, 16)
