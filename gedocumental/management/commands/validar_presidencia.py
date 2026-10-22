@@ -113,9 +113,9 @@ class Command(BaseCommand):
                     FROM citas c
                     JOIN sis_paci sp           ON sp.autoid = c.autoid
                     JOIN citas_procedimientos cp ON cp.id_cita = c.id
-                    JOIN sis_proc proc          ON proc.codigo = cp.id_procedimiento
+                    JOIN sis_proc sp2           ON sp2.codigo = cp.id_procedimiento
                     WHERE sp.num_id = %s
-                      AND proc.cups = %s
+                      AND sp2.cups = %s
                     ORDER BY c.fecha DESC
                 """, [num_doc, cups])
                 citas = cursor.fetchall()
