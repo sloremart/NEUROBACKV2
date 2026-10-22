@@ -1106,8 +1106,8 @@ def _hoja_visor_a_pdf(estilos: str, cuerpo: str):
 
 def _recortar_al_contenido(datos_pdf: bytes) -> bytes:
     """
-    Recorta cada hoja del PDF hasta donde termina el contenido (más el margen), con mínimo el alto de
-    una hoja carta: así cada folio de SIESA queda en UNA página aunque crezca con otra fuente.
+    Deja cada hoja del PDF en tamaño carta: la recorta hasta donde termina el contenido (más el margen)
+    y, si el folio creció más que la carta (otra fuente que la de SIESA), lo reduce para que quepa.
     """
     import io
     try:
@@ -1118,7 +1118,10 @@ def _recortar_al_contenido(datos_pdf: bytes) -> bytes:
         with pdfplumber.open(io.BytesIO(datos_pdf)) as doc:
             fondos = []
             for pag in doc.pages:
-                objetos = pag.chars + pag.rects + pag.lines + pag.images + pag.curves
+                # Se ignoran los rectángulos/curvas que ocupan media hoja o más (el fondo blanco
+                # que pinta wkhtmltopdf cubre toda la página y haría creer que no hay espacio vacío)
+                objetos = pag.chars + pag.lines + pag.images + [
+                    o for o in pag.rects + pag.curves if (o["bottom"] - o["top"]) < pag.height * 0.5]
                 fondos.append(max((o["bottom"] for o in objetos), default=0))
         lector, escritor = PdfReader(io.BytesIO(datos_pdf)), PdfWriter()
         for pag, fondo in zip(lector.pages, fondos):
@@ -1128,6 +1131,17 @@ def _recortar_al_contenido(datos_pdf: bytes) -> bytes:
             for caja in (pag.mediabox, pag.cropbox):
                 caja.lower_left = (float(caja.left), arriba - nuevo)
                 caja.upper_right = (float(caja.right), arriba)
+            if nuevo > carta_pt + 1:
+                # Folio más largo que una carta: se reduce proporcionalmente para que quepa en la
+                # hoja (como "ajustar a la página" al imprimir) y se centra a lo ancho
+                ancho_original = float(pag.mediabox.width)
+                pag.scale_by(carta_pt / nuevo)
+                sobra = (ancho_original - float(pag.mediabox.width)) / 2
+                izquierda, abajo = float(pag.mediabox.left) - sobra, float(pag.mediabox.bottom)
+                derecha, tope = float(pag.mediabox.right) + sobra, float(pag.mediabox.top)
+                for caja in (pag.mediabox, pag.cropbox):
+                    caja.lower_left = (izquierda, abajo)
+                    caja.upper_right = (derecha, tope)
             escritor.add_page(pag)
         salida = io.BytesIO()
         escritor.write(salida)
