@@ -133,10 +133,10 @@ class Command(BaseCommand):
                 cita = citas_activas[0] if citas_activas else citas[0]
                 id_cita, fecha_cita, fecha_agend, estado, cantidad = cita
 
-                df.at[i, "FECHA_AGENDAMIENTO"] = fecha_agend or ""
-                df.at[i, "FECHA_CITA"]         = fecha_cita or ""
-                df.at[i, "ESTADO_CITA"]        = estado or ""
-                df.at[i, "CANTIDAD_CITA"]      = cantidad or ""
+                df.at[i, "FECHA_AGENDAMIENTO"] = str(fecha_agend) if fecha_agend else ""
+                df.at[i, "FECHA_CITA"]         = str(fecha_cita) if fecha_cita else ""
+                df.at[i, "ESTADO_CITA"]        = str(estado) if estado else ""
+                df.at[i, "CANTIDAD_CITA"]      = str(cantidad) if cantidad is not None else ""
 
                 # ── 2. Buscar factura en sis_maes (Prefijo='FES') por paciente + CUPS ──
                 cursor.execute("""
@@ -154,9 +154,9 @@ class Command(BaseCommand):
                 """, [num_doc, cups])
                 fact_row = cursor.fetchone()
                 if fact_row:
-                    df.at[i, "ADMISION_NO"]  = fact_row[0] or ""
-                    df.at[i, "FECHA_FACTURA"] = fact_row[1] or ""
-                    df.at[i, "NRO_FACTURA"]  = fact_row[2] or ""
+                    df.at[i, "ADMISION_NO"]   = str(fact_row[0]) if fact_row[0] else ""
+                    df.at[i, "FECHA_FACTURA"] = str(fact_row[1]) if fact_row[1] else ""
+                    df.at[i, "NRO_FACTURA"]   = str(fact_row[2]) if fact_row[2] else ""
 
                 if (i + 1) % 100 == 0:
                     self.stdout.write(f"  Procesados {i + 1}/{total}...")
