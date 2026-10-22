@@ -17,6 +17,7 @@ from django.core.management.base import BaseCommand
 from django.db import connections
 
 from gedocumental import views_siesa
+from gedocumental.views_siesa import PARAMS_HC_CONSULTA, _ajustar_campos_pdf
 from gedocumental.views_siesa import (SIESA_FORMULARIO_URL, SIESA_REPORT_VIEW_URL, _get_siesa_session,
                                       _fetch_pdf_enfermeria, _parse_hidden_inputs, _pdf_corresponde_al_estudio,
                                       _urls_exportacion_pdf, _campos_formulario_visor,
@@ -91,7 +92,7 @@ class Command(BaseCommand):
 
         # Paso 1: formulario
         r1 = s.post(SIESA_FORMULARIO_URL, data={
-            "estudio": estudio, "ImpHC": imp_hc, "ImpNotasEnfermeria": imp_notas, "UsuarioSession": usuario_session,
+            **(PARAMS_HC_CONSULTA if o['consulta'] else {}), "estudio": estudio, "ImpHC": imp_hc, "ImpNotasEnfermeria": imp_notas, "UsuarioSession": usuario_session,
             "pdf": 1, "generarNombreArchivo": 1, "reportName": "HistoriaClinicaGeneral",
         }, timeout=30)
         self.stdout.write(f"\nPASO 1 FormularioFastReport -> HTTP {r1.status_code}")
@@ -101,7 +102,7 @@ class Command(BaseCommand):
             self.stdout.write(f"  No es JSON: {r1.text[:500]}")
             return
         self.stdout.write(f"  Claves de la respuesta: {list(datos.keys())}")
-        campos = _parse_hidden_inputs(datos.get("payload", ""))
+        campos = _ajustar_campos_pdf(_parse_hidden_inputs(datos.get("payload", "")))
         # Formulario completo que devuelve SIESA (acción, destino y scripts): indica a dónde lo envía
         # el navegador cuando se pide el PDF
         payload = datos.get("payload", "") or ""

@@ -635,6 +635,32 @@ SIESA_EXPORT_BASE_URL = "http://192.168.1.209:8091/ZeusSalud/Reportes/FastReport
 # descarga con Pdf.php?n=<nombre en base64>&p=<carpeta en base64>. La URL /ZeusSalud/Archivos/CLIENTE/Temp/
 # apunta a otra carpeta física (ahí quedó una copia vieja del PDF).
 SIESA_PDF_PHP_URL = "http://192.168.1.209:8091/ZeusSalud/ips/App/Vistas/General/Pdf.php"
+SIESA_RUTA_CARPETA_CLIENTE = getattr(settings, "SIESA_RUTA_CARPETA_CLIENTE",
+                                     "http://192.168.1.209:8091/ZeusSalud/Archivos/Cliente/")
+
+# Lo que envía el navegador de SIESA al imprimir la historia clínica de una consulta (captura del
+# 2026-10-22): con esto el PDF sale igual al que descargan las admisionistas.
+PARAMS_HC_CONSULTA = {
+    "ImprimirLog": 0, "ImpOdontograma": 1, "ImpEvoluciones": 1, "ImprimirOrdenamiento": 1,
+    "OrdenesExternas": 0, "ImpNotasPacienteBitacora": 0, "ImpGraficas": 1, "ImpFormatos": 1,
+    "ImpRegistroAdministracion": 1, "ImpNovedades": 0, "ImpRecomendaciones": 0, "ImpDescripcionesQX": 0,
+    "ImpSignosVitales": 0, "ImprimirEpicrisisSinHC": 0, "ImpSolIncapacidades": 1,
+}
+
+
+def _ajustar_campos_pdf(form_fields: dict) -> dict:
+    """
+    Con la sesión del sistema SIESA devuelve rutapdf="Temp/" (relativa) y RutaCarpeta vacía, y entonces
+    guarda el PDF en otra carpeta del servidor: Pdf.php nunca lo encuentra. El navegador recibe la ruta
+    absoluta de la carpeta Temp de NeuroZeusSalud; se usa esa.
+    """
+    campos = dict(form_fields)
+    rutapdf = (campos.get("rutapdf") or "").strip()
+    if not re.match(r"^[A-Za-z]:\\", rutapdf):
+        campos["rutapdf"] = SIESA_CARPETA_TEMP_PDF
+    if not (campos.get("RutaCarpeta") or "").strip():
+        campos["RutaCarpeta"] = SIESA_RUTA_CARPETA_CLIENTE
+    return campos
 SIESA_CARPETA_TEMP_PDF = getattr(settings, "SIESA_CARPETA_TEMP_PDF",
                                  "C:\\inetpub\\NeuroZeusSalud\\ZeusSalud/Archivos/Cliente/Temp/")
 
@@ -658,7 +684,7 @@ _LOCK_PDF_SIESA = threading.Lock()
 
 
 def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True, imp_hc: int = 0, imp_notas: int = 1,
-                          permitir_conversion: bool = True) -> bytes:
+                          permitir_conversion: bool = True, params_extra: dict = None) -> bytes:
     """
     Descarga de SIESA el informe "HistoriaClinicaGeneral" de un estudio:
       - por defecto, la nota de enfermería (administración de medicamentos, ufuncional = 12);
@@ -680,6 +706,7 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True, imp_hc: int = 0,
             SIESA_FORMULARIO_URL,
             data={
                 "estudio":              estudio,
+                **(params_extra or {}),
                 "ImpHC":                imp_hc,
                 "ImpNotasEnfermeria":   imp_notas,
                 "UsuarioSession":       usuario_session,
@@ -691,7 +718,7 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True, imp_hc: int = 0,
         )
         r1.raise_for_status()
         payload_html = r1.json().get("payload", "")
-        form_fields  = _parse_hidden_inputs(payload_html)
+        form_fields  = _ajustar_campos_pdf(_parse_hidden_inputs(payload_html))
 
         if not form_fields:
             raise Exception("No se obtuvieron campos del formulario FastReport")
@@ -1505,7 +1532,8 @@ TIPOS_HC_CONSULTA = {
 def _fetch_pdf_consulta(estudio: int, verificar: bool = True) -> bytes:
     """PDF de la historia clínica de la consulta (sin notas de enfermería)."""
     # Sin conversión del HTML del visor: en neurología viene roto desde SIESA (texto letra por letra)
-    return _fetch_pdf_enfermeria(estudio, verificar=verificar, imp_hc=1, imp_notas=0, permitir_conversion=False)
+    return _fetch_pdf_enfermeria(estudio, verificar=verificar, imp_hc=1, imp_notas=0, permitir_conversion=False,
+                                 params_extra=PARAMS_HC_CONSULTA)
 
 
 def _tipos_hc(especialidad: str) -> tuple:
