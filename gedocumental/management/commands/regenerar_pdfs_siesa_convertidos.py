@@ -20,22 +20,33 @@ from django.core.management.base import BaseCommand
 from django.db import connections
 
 from gedocumental.models import ArchivoFacturacion
-from gedocumental.views_siesa import _fetch_pdf_consulta, _fetch_pdf_enfermeria, _guardar_pdf, _registrar_en_bd
+from gedocumental.views_siesa import (_fetch_pdf_consulta, _fetch_pdf_enfermeria, _guardar_pdf, _registrar_en_bd,
+                                      _tipos_hc)
 
 UFUNCIONAL_CONSULTA, UFUNCIONAL_ENFERMERIA = 1, 12
 
 
-def _es_conversion(ruta: str):
-    """True si el PDF lo armó el sistema (no es el original de FastReport/SIESA); None si no se puede leer."""
+def _marca_pdf(ruta: str) -> str:
+    """Productor y creador del PDF en minúsculas ('' si no se puede leer)."""
     try:
         from PyPDF2 import PdfReader
         meta = PdfReader(ruta).metadata or {}
     except Exception:
-        return None
-    marca = f"{meta.get('/Producer', '')} {meta.get('/Creator', '')}".lower()
-    if "fastreport" in marca:
+        return ""
+    return f"{meta.get('/Producer', '')} {meta.get('/Creator', '')}".lower()
+
+
+def _es_conversion(marca: str, consulta: bool) -> bool:
+    """
+    Historias de consulta: solo las que pasaron por la conversión del visor, que siempre termina con
+    PyPDF2 (recorte a carta). Los resultados de imágenes de SIESA usan wkhtmltopdf pero nunca PyPDF2:
+    no se tocan. Notas de enfermería: cualquier PDF armado por el sistema (PyPDF2 o wkhtmltopdf).
+    """
+    if not marca or "fastreport" in marca:
         return False
-    return any(x in marca for x in ("pypdf2", "pypdf", "wkhtmltopdf", "qt "))
+    if consulta:
+        return "pypdf" in marca
+    return any(x in marca for x in ("pypdf", "wkhtmltopdf", "qt "))
 
 
 class Command(BaseCommand):
@@ -58,6 +69,17 @@ class Command(BaseCommand):
                     f"SELECT con_estudio, ufuncional FROM sis_maes WHERE con_estudio IN ({', '.join(['%s'] * len(lote))})",
                     lote)
                 ufuncional.update({fila[0]: fila[1] for fila in cursor.fetchall()})
+            # Consultas: solo las que tienen historia de neurología o fisiatría (las que genera el sistema)
+            tipos_hc = _tipos_hc("todas")
+            ids_consulta = [i for i in ids if ufuncional.get(i) == UFUNCIONAL_CONSULTA]
+            con_hc = set()
+            for i in range(0, len(ids_consulta), 500):
+                lote = ids_consulta[i:i + 500]
+                cursor.execute(
+                    f"SELECT DISTINCT con_estudio FROM hcingres WHERE con_estudio IN ({', '.join(['%s'] * len(lote))}) "
+                    f"AND LTRIM(RTRIM(tipo_histo)) IN ({', '.join(['%s'] * len(tipos_hc))})",
+                    [*lote, *tipos_hc])
+                con_hc.update(fila[0] for fila in cursor.fetchall())
 
         tipos = (UFUNCIONAL_CONSULTA,) if o["solo_consultas"] else (UFUNCIONAL_CONSULTA, UFUNCIONAL_ENFERMERIA)
         convertidos = []
@@ -65,11 +87,14 @@ class Command(BaseCommand):
             uf = ufuncional.get(a.Admision_id)
             if uf not in tipos:
                 continue
+            consulta = uf == UFUNCIONAL_CONSULTA
+            if consulta and a.Admision_id not in con_hc:
+                continue
             try:
                 ruta = a.RutaArchivo.path if a.RutaArchivo else ""
             except Exception:
                 ruta = os.path.join(settings.MEDIA_ROOT, str(a.RutaArchivo))
-            if ruta and os.path.isfile(ruta) and _es_conversion(ruta):
+            if ruta and os.path.isfile(ruta) and _es_conversion(_marca_pdf(ruta), consulta):
                 convertidos.append((a, uf))
 
         self.stdout.write(f"RESULTADOS convertidos (no originales de SIESA): {len(convertidos)}")
