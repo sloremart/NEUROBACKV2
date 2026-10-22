@@ -22,7 +22,7 @@ import os
 import re
 import shutil
 import stat
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import subprocess
 import tempfile
@@ -702,6 +702,7 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True, imp_hc: int = 0,
                             + ("historia clínica" if imp_hc else "nota de enfermería"))
 
         # Paso 2: POST a c_informe_view.aspx — genera el informe en el visor de FastReport
+        pedido_en = datetime.now()
         r2 = s.post(SIESA_REPORT_VIEW_URL, data=form_fields, timeout=60)
         r2.raise_for_status()
 
@@ -719,6 +720,11 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True, imp_hc: int = 0,
                 continue
             if not (r_php.status_code == 200 and r_php.content.startswith(b"%PDF")):
                 ultimo_php = f"HTTP {r_php.status_code}, no es PDF ({len(r_php.content)} bytes)"
+                continue
+            impreso = _fecha_impresion_pdf(r_php.content)
+            if impreso is not None and impreso < pedido_en - timedelta(minutes=2):
+                # PDF viejo (aunque sea del mismo estudio): SIESA no escribió uno nuevo
+                ultimo_php = f"un PDF anterior ({_estudio_del_pdf(r_php.content)})"
                 continue
             if not verificar or _pdf_corresponde_al_estudio(r_php.content, estudio) is True:
                 return r_php.content
@@ -1276,6 +1282,27 @@ def _urls_exportacion_pdf(html: str) -> list:
         agregar(f"{SIESA_EXPORT_BASE_URL}FastReport.Export.axd?ExportPDF={rid}")
         agregar(f"{SIESA_EXPORT_BASE_URL}FastReport.Export.axd?previewobject={rid}&export_pdf=1")
     return urls
+
+
+def _fecha_impresion_pdf(pdf_bytes: bytes):
+    """Fecha y hora de impresión que trae el PDF de SIESA ('2026/10/21 9:25:04 p. m.'), o None."""
+    import io
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            texto = pdf.pages[0].extract_text() or ""
+    except Exception:
+        return None
+    m = re.search(r"(\d{4})/(\d{1,2})/\s*(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})\s*([ap])\.?\s*m", texto,
+                  re.IGNORECASE)
+    if not m:
+        return None
+    anio, mes, dia, hora, minuto, segundo, ampm = m.groups()
+    hora = int(hora) % 12 + (12 if ampm.lower() == "p" else 0)
+    try:
+        return datetime(int(anio), int(mes), int(dia), hora, int(minuto), int(segundo))
+    except ValueError:
+        return None
 
 
 def _estudio_del_pdf(pdf_bytes: bytes) -> str:
