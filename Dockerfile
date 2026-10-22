@@ -20,6 +20,14 @@ RUN apt-get update && apt-get install -y smbclient curl gnupg2 \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Fuentes para los PDF de SIESA (wkhtmltopdf): Arial del proyecto + Liberation (métrica de Arial/Times)
+# y alias de Tahoma/Verdana → Arial (ver fontconfig-siesa.conf)
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-liberation fontconfig \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+COPY fonts/ /usr/share/fonts/truetype/neurodx/
+COPY fontconfig-siesa.conf /etc/fonts/local.conf
+RUN fc-cache -f
+
 # Copiar el resto del código
 COPY . .
 

@@ -860,7 +860,7 @@ _firmas_cache: dict = {}
 
 
 def _firma_profesional(cedula: str):
-    """(tipo MIME, base64) de la firma del profesional en ZeusSalud (sis_medi), o None."""
+    """(tipo MIME, base64) de la firma del profesional en ZeusSalud (sis_medi), por cédula o registro, o None."""
     cedula = (cedula or "").strip()
     if cedula in _firmas_cache:
         return _firmas_cache[cedula]
@@ -869,8 +869,9 @@ def _firma_profesional(cedula: str):
         with connections["zeussalud"].cursor() as cursor:
             cursor.execute(
                 "SELECT TOP 1 TipoFirmaMedicoBase64, FirmaMedicoBase64 FROM sis_medi "
-                "WHERE LTRIM(RTRIM(cedula)) = %s AND LEN(FirmaMedicoBase64) > 100 "
-                "ORDER BY codigo DESC", [cedula])
+                "WHERE (LTRIM(RTRIM(cedula)) = %s OR LTRIM(RTRIM(registro)) = %s) AND LEN(FirmaMedicoBase64) > 100 "
+                "ORDER BY CASE WHEN LTRIM(RTRIM(cedula)) = %s THEN 0 ELSE 1 END, codigo DESC",
+                [cedula, cedula, cedula])
             fila = cursor.fetchone()
         if fila:
             datos = re.sub(r"^data:[^,]*,", "", (fila[1] or "").strip())
@@ -933,8 +934,14 @@ def _pagina_visor_html(s: requests.Session, html: str) -> tuple:
         etiqueta = mi.group(0)
         # Firma del profesional: la imagen va justo encima de "CC <cédula> <nombre>"; SIESA puede
         # entregarla vacía, así que se toma de Zeus (sis_medi.FirmaMedicoBase64)
-        siguiente = html_lib.unescape(re.sub(r"<[^>]+>", " ", cuerpo[mi.end():mi.end() + 2500]))
-        m_cc = re.search(r"\b(?:CC|C\.C\.|CE)\s*:?\s*(\d{5,12})\b", siguiente[:400], re.IGNORECASE)
+        # En la historia clínica de consulta va "Atendido Por: NOMBRE / Reg. Medico: 72199429"
+        patron_prof = re.compile(r"\b(?:CC|C\.C\.|CE|Reg\.?\s*M[eé]dico)\s*:?\s*(\d{5,12})\b", re.IGNORECASE)
+        siguiente = html_lib.unescape(re.sub(r"<[^>]+>", " ", cuerpo[mi.end():mi.end() + 3000]))
+        anterior = html_lib.unescape(re.sub(r"<[^>]+>", " ", cuerpo[max(0, mi.start() - 3000):mi.start()]))
+        m_cc = patron_prof.search(siguiente[:400])
+        if not m_cc:
+            previos = list(patron_prof.finditer(anterior[-300:]))
+            m_cc = previos[-1] if previos else None
         src = mi.group(1).replace("&amp;", "&")
         if src.startswith("data:"):
             return etiqueta
@@ -946,7 +953,8 @@ def _pagina_visor_html(s: requests.Session, html: str) -> tuple:
                 return etiqueta.replace(mi.group(1), f"data:{tipo};base64,{base64.b64encode(ri.content).decode()}")
         except requests.RequestException:
             pass
-        firma = _firma_profesional(m_cc.group(1)) if m_cc else None
+        # La primera imagen de la hoja es el logo, nunca una firma
+        firma = _firma_profesional(m_cc.group(1)) if (m_cc and contador["n"] > 1) else None
         if firma:
             tipo_firma, datos_firma = firma
             return (f'<img src="data:{tipo_firma};base64,{datos_firma}" '
