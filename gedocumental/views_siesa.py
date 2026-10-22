@@ -630,6 +630,12 @@ def generar_pdfs_siesa_lote(request):
 SIESA_FORMULARIO_URL  = "http://192.168.1.209:8091/ZeusSalud/ips/App/controlador/General/FormularioFastReport.php"
 SIESA_REPORT_VIEW_URL = "http://192.168.1.209:8091/ZeusSalud/Reportes/FastReport/Pages/c_informe_view.aspx"
 SIESA_EXPORT_BASE_URL = "http://192.168.1.209:8091/ZeusSalud/Reportes/FastReport/Pages/"
+# SIESA guarda el PDF del informe en la carpeta Temp de la instalación NeuroZeusSalud y el navegador lo
+# descarga con Pdf.php?n=<nombre en base64>&p=<carpeta en base64>. La URL /ZeusSalud/Archivos/CLIENTE/Temp/
+# apunta a otra carpeta física (ahí quedó una copia vieja del PDF).
+SIESA_PDF_PHP_URL = "http://192.168.1.209:8091/ZeusSalud/ips/App/Vistas/General/Pdf.php"
+SIESA_CARPETA_TEMP_PDF = getattr(settings, "SIESA_CARPETA_TEMP_PDF",
+                                 "C:\\inetpub\\NeuroZeusSalud\\ZeusSalud/Archivos/Cliente/Temp/")
 
 
 def _parse_hidden_inputs(html: str) -> dict:
@@ -693,7 +699,21 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True, imp_hc: int = 0,
         r2 = s.post(SIESA_REPORT_VIEW_URL, data=form_fields, timeout=60)
         r2.raise_for_status()
 
-        # Paso 3a: exportar a PDF desde el visor (el informe recién generado de ESTE estudio).
+        # Paso 3: el PDF original que genera SIESA, descargado por Pdf.php (igual que el navegador).
+        # Puede tardar unos segundos en escribirse; se verifica que sea de este estudio.
+        url_pdf_php = (f"{SIESA_PDF_PHP_URL}?n={base64.b64encode(nombre_pdf.encode()).decode()}"
+                       f"&p={base64.b64encode(SIESA_CARPETA_TEMP_PDF.encode()).decode()}")
+        for intento in range(4):
+            time.sleep(3 if intento == 0 else 4)
+            try:
+                r_php = s.get(url_pdf_php, timeout=60)
+            except requests.RequestException:
+                continue
+            if r_php.status_code == 200 and r_php.content.startswith(b"%PDF") and (
+                    not verificar or _pdf_corresponde_al_estudio(r_php.content, estudio) is True):
+                return r_php.content
+
+        # Paso 3a (respaldo): exportar a PDF desde el visor (el informe recién generado de ESTE estudio).
         # SIESA ya no siempre escribe el PDF en Temp: ahí queda el último que se imprimió con
         # ese usuario (puede ser otro paciente).
         pdf_visor = _exportar_pdf_visor(s, r2.text, form_fields)

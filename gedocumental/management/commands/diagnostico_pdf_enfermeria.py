@@ -122,6 +122,27 @@ class Command(BaseCommand):
         self.stdout.write(f"\nPASO 2 c_informe_view -> HTTP {r2.status_code}, {len(r2.content)} bytes")
         self.stdout.write("  Texto de la respuesta: " + _texto_html(r2.text)[:800])
 
+        # PDF original de SIESA por Pdf.php (como el navegador)
+        import base64
+        from gedocumental.views_siesa import SIESA_CARPETA_TEMP_PDF, SIESA_PDF_PHP_URL
+        url_php = (f"{SIESA_PDF_PHP_URL}?n={base64.b64encode(nombre.encode()).decode()}"
+                   f"&p={base64.b64encode(SIESA_CARPETA_TEMP_PDF.encode()).decode()}")
+        self.stdout.write(f"\nPDF.PHP {url_php}")
+        for intento in range(3):
+            time.sleep(4)
+            rp = s.get(url_php, timeout=60)
+            es_pdf = rp.content.startswith(b"%PDF")
+            self.stdout.write(f"  intento {intento + 1}: HTTP {rp.status_code}, {len(rp.content)} bytes, PDF: {es_pdf}, "
+                              f"Last-Modified: {rp.headers.get('Last-Modified')}")
+            if es_pdf:
+                from io import BytesIO
+                from PyPDF2 import PdfReader
+                self.stdout.write(f"    páginas: {len(PdfReader(BytesIO(rp.content)).pages)} | texto: "
+                                  + re.sub(r"\s+", " ", _texto_pdf(rp.content)[:300]))
+                self.stdout.write(f"    ¿Es del estudio {estudio}? {_pdf_corresponde_al_estudio(rp.content, estudio)}")
+                break
+            self.stdout.write(f"    inicio: {rp.content[:200]!r}")
+
         # Fragmentos del visor relacionados con exportar (para ver el formato real de SIESA)
         html = r2.text.replace("&amp;", "&")
         self.stdout.write("\nFragmentos del visor con 'export' / 'frx' / '.axd':")
