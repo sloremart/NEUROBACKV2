@@ -190,9 +190,18 @@ class Command(BaseCommand):
             self.stdout.write(f"  Hoja detectada en el visor: {ancho} x {alto} px | <style> en head: "
                               f"{estilos_p1.lower().count('<style')}, en body: {cuerpo_p1.lower().count('<style')}")
             if not ancho:
-                for md in re.finditer(r"<div[^>]*style=[^>]*>", cuerpo_p1[:20000], re.IGNORECASE):
-                    if "width" in md.group(0).lower():
-                        self.stdout.write("    div: " + md.group(0)[:200])
+                for nombre_e, bloque in (("head", estilos_p1), ("body", cuerpo_p1)):
+                    for me in re.finditer(r"<style\b[^>]*>(.*?)</style>", bloque, re.IGNORECASE | re.DOTALL):
+                        reglas = re.sub(r"\s+", " ", me.group(1))
+                        self.stdout.write(f"    <style> del {nombre_e} ({len(reglas)} car.): {reglas[:700]}")
+                        for mr in re.finditer(r"[^{}]{0,80}\{[^}]*(?:width|height)[^}]*\}", reglas):
+                            self.stdout.write(f"      regla con tamaño: {mr.group(0).strip()[:200]}")
+                self.stdout.write("    Estructura (primeras etiquetas del cuerpo):")
+                sin_estilo = re.sub(r"<style\b.*?</style>", "", cuerpo_p1, flags=re.IGNORECASE | re.DOTALL)
+                for n_tag, mt in enumerate(re.finditer(r"<(?!/)[a-zA-Z][^>]*>", sin_estilo)):
+                    if n_tag >= 45:
+                        break
+                    self.stdout.write("      " + re.sub(r"\s+", " ", mt.group(0))[:180])
             pdf_h = _pdf_desde_html_visor(s, r2.text, campos)
             if pdf_h:
                 import io as _io
