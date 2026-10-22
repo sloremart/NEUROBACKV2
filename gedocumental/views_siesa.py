@@ -976,6 +976,7 @@ def _pdf_desde_html_visor(s: requests.Session, html: str, campos_informe: dict =
     m_total = re.search(r"\bof\s+(\d+)\b", html_lib.unescape(texto))
     total = min(int(m_total.group(1)), 30) if m_total else 1
 
+    _guardar_html_diagnostico("visor_p1.html", html)
     paginas = [_pagina_visor_html(s, html)]
     actual = html
     for pagina in range(2, total + 1):
@@ -993,6 +994,7 @@ def _pdf_desde_html_visor(s: requests.Session, html: str, campos_informe: dict =
         if r.status_code != 200:
             break
         actual = r.text
+        _guardar_html_diagnostico(f"visor_p{pagina}.html", actual)
         paginas.append(_pagina_visor_html(s, actual))
 
     # Cada página se convierte por separado: FastReport repite los nombres de clase (.s0, .s1…) con
@@ -1012,6 +1014,24 @@ def _pdf_desde_html_visor(s: requests.Session, html: str, campos_informe: dict =
     salida = io.BytesIO()
     escritor.write(salida)
     return salida.getvalue()
+
+
+# Carpeta donde el diagnóstico guarda los HTML del visor (None = no guardar)
+_CARPETA_HTML_DIAGNOSTICO = None
+
+
+def _guardar_html_diagnostico(nombre: str, contenido: str, numerar: bool = False):
+    if not _CARPETA_HTML_DIAGNOSTICO:
+        return
+    try:
+        os.makedirs(_CARPETA_HTML_DIAGNOSTICO, exist_ok=True)
+        if numerar:
+            n = len([f for f in os.listdir(_CARPETA_HTML_DIAGNOSTICO) if f.startswith(nombre[:-5])]) + 1
+            nombre = f"{nombre[:-5]}_{n}.html"
+        with open(os.path.join(_CARPETA_HTML_DIAGNOSTICO, nombre), "w", encoding="utf-8") as f:
+            f.write(contenido)
+    except OSError:
+        pass
 
 
 def _cierre_balanceado(html: str, inicio: int, etiqueta: str) -> int:
@@ -1084,6 +1104,7 @@ def _hoja_visor_a_pdf(estilos: str, cuerpo: str):
     else:
         documento = ('<html><head><meta charset="UTF-8">' + estilos + estilos_cuerpo + base
                      + "</head><body>" + cuerpo + "</body></html>")
+    _guardar_html_diagnostico("hoja.html", documento, numerar=True)
     tmp_html_path = tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8") as th:

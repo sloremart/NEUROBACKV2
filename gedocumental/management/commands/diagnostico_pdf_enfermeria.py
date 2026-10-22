@@ -44,6 +44,8 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('estudio', type=int)
+        parser.add_argument('--guardar-html', dest='guardar_html', action='store_true',
+                            help='Guarda el HTML del visor y de cada hoja en MEDIA_ROOT/diagnostico_siesa/<estudio>/')
         parser.add_argument('--consulta', action='store_true',
                             help='Historia clínica de consulta (ImpHC=1) en vez de nota de enfermería')
 
@@ -64,6 +66,13 @@ class Command(BaseCommand):
     def handle(self, *args, **o):
         estudio = o['estudio']
         imp_hc, imp_notas = (1, 0) if o['consulta'] else (0, 1)
+        if o['guardar_html']:
+            import os
+            import shutil
+            carpeta = os.path.join(settings.MEDIA_ROOT, 'diagnostico_siesa', str(estudio))
+            shutil.rmtree(carpeta, ignore_errors=True)
+            views_siesa._CARPETA_HTML_DIAGNOSTICO = carpeta
+            self.stdout.write(f"Se guardarán los HTML en {carpeta}")
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute(
                 "SELECT sp.num_id, sp.primer_nom, sp.segundo_nom, sp.primer_ape, sp.segundo_ape "
