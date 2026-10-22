@@ -1067,11 +1067,32 @@ def _extraer_hoja_visor(cuerpo: str):
         fin = _cierre_balanceado(cuerpo, m.start(), "table")
         if fin == -1:
             continue
-        tabla = cuerpo[m.start():fin]
+        tabla = _normalizar_tabla_fastreport(cuerpo[m.start():fin])
         alto = sum(float(h) for h in re.findall(
             r"""<tr\b[^>]*style\s*=\s*["'][^"']*height\s*:\s*(\d+(?:\.\d+)?)px""", tabla, re.IGNORECASE))
         return tabla, float(mw.group(1)), (alto or None)
     return None, None, None
+
+
+def _normalizar_tabla_fastreport(tabla: str) -> str:
+    """
+    FastReport escribe los anchos como width="4px;" y define las columnas con una primera fila de
+    <td/> vacíos. Chrome lo tolera, pero el motor de wkhtmltopdf ignora esos anchos y reparte las
+    columnas a su manera: en las historias de neurología (examen físico en dos columnas) una columna
+    queda de pocos px y el texto sale letra por letra ("C A R D I O..."). Se dejan los anchos como
+    números y se agrega un <colgroup> con el ancho exacto de cada columna.
+    """
+    tabla = re.sub(r"""\bwidth\s*=\s*["']\s*(\d+(?:\.\d+)?)\s*px\s*;?\s*["']""", r'width="\1"', tabla,
+                   flags=re.IGNORECASE)
+    m_fila = re.search(r"<tr\b[^>]*>(.*?)</tr>", tabla, re.IGNORECASE | re.DOTALL)
+    if not m_fila:
+        return tabla
+    anchos = re.findall(r"""<td\b[^>]*\bwidth="(\d+(?:\.\d+)?)"[^>]*>""", m_fila.group(1), re.IGNORECASE)
+    if len(anchos) < 2:
+        return tabla
+    colgroup = "<colgroup>" + "".join(f'<col width="{a}" style="width:{a}px">' for a in anchos) + "</colgroup>"
+    fin_apertura = tabla.find(">") + 1
+    return tabla[:fin_apertura] + colgroup + tabla[fin_apertura:]
 
 
 # Hoja carta a 96 px por pulgada
