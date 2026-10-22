@@ -854,6 +854,22 @@ def _quitar_tabla_que_contiene(html: str, pos: int) -> str:
             return html[:inicio] + html[cierra + len("</table>"):]
 
 
+def _tipo_imagen(contenido: bytes):
+    """Tipo MIME de una imagen según sus primeros bytes (None si no es imagen)."""
+    if not contenido:
+        return None
+    firmas = ((b"\x89PNG", "image/png"), (b"\xff\xd8", "image/jpeg"), (b"GIF8", "image/gif"),
+              (b"BM", "image/bmp"), (b"II*\x00", "image/tiff"), (b"MM\x00*", "image/tiff"))
+    for inicio, tipo in firmas:
+        if contenido.startswith(inicio):
+            return tipo
+    if contenido[:4] == b"RIFF" and contenido[8:12] == b"WEBP":
+        return "image/webp"
+    if contenido.lstrip()[:5].lower() in (b"<svg ", b"<?xml"):
+        return "image/svg+xml"
+    return None
+
+
 def _pagina_visor_html(s: requests.Session, html: str) -> tuple:
     """(estilos del <head>, cuerpo de la página sin barra ni scripts, con imágenes incrustadas)."""
     from urllib.parse import urljoin
@@ -887,8 +903,9 @@ def _pagina_visor_html(s: requests.Session, html: str) -> tuple:
             return etiqueta
         try:
             ri = s.get(urljoin(SIESA_REPORT_VIEW_URL, src), timeout=30)
-            tipo = (ri.headers.get("Content-Type") or "").split(";")[0].lower()
-            if ri.status_code == 200 and ri.content and tipo.startswith("image/"):
+            # SIESA puede responder sin Content-Type: el tipo se deduce del contenido
+            tipo = _tipo_imagen(ri.content) if ri.status_code == 200 else None
+            if tipo:
                 return etiqueta.replace(mi.group(1), f"data:{tipo};base64,{base64.b64encode(ri.content).decode()}")
         except requests.RequestException:
             pass

@@ -20,7 +20,7 @@ from gedocumental import views_siesa
 from gedocumental.views_siesa import (SIESA_FORMULARIO_URL, SIESA_REPORT_VIEW_URL, _get_siesa_session,
                                       _fetch_pdf_enfermeria, _parse_hidden_inputs, _pdf_corresponde_al_estudio,
                                       _urls_exportacion_pdf, _campos_formulario_visor,
-                                      _urls_descarga_exportacion, _pdf_desde_html_visor)
+                                      _urls_descarga_exportacion, _pdf_desde_html_visor, _tipo_imagen)
 
 URL_TEMP = "http://192.168.1.209:8091/ZeusSalud/Archivos/CLIENTE/Temp/"
 
@@ -163,6 +163,21 @@ class Command(BaseCommand):
                     self.stdout.write(f"    ¿Es del estudio {estudio}? {_pdf_corresponde_al_estudio(rd.content, estudio)}")
                 elif rd.content:
                     self.stdout.write(f"    Contenido: {rd.content[:300]!r}")
+
+        self.stdout.write("\nIMÁGENES DEL VISOR")
+        from urllib.parse import urljoin
+        for mi in re.finditer(r"""<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>""", r2.text, re.IGNORECASE):
+            src = mi.group(1).replace("&amp;", "&")
+            if "WebResource.axd" in src:
+                continue   # iconos de la barra del visor
+            try:
+                ri = s.get(urljoin(SIESA_REPORT_VIEW_URL, src), timeout=30)
+                self.stdout.write(f"  {src[:90]} -> HTTP {ri.status_code}, {len(ri.content)} bytes, "
+                                  f"Content-Type: {ri.headers.get('Content-Type')}, inicio: {ri.content[:8]!r}, "
+                                  f"tipo detectado: {_tipo_imagen(ri.content)}")
+            except Exception as exc:
+                self.stdout.write(f"  {src[:90]} -> error {exc}")
+            self.stdout.write(f"    etiqueta: {mi.group(0)[:200]}")
 
         self.stdout.write("\nHTML DEL VISOR -> PDF (wkhtmltopdf)")
         try:
