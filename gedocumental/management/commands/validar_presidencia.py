@@ -10,12 +10,13 @@ O ejecutar directamente en el servidor (fuera del contenedor, si manage.py es ac
   python manage.py validar_presidencia --excel /ruta/archivo.xlsx
 
 Salida: Excel con columnas agregadas:
-  FECHA_CITA    - fecha de la cita en ZeusSalud (vacío si no tiene)
-  ESTADO_CITA   - estado (AT=atendida, SE=sin estado, CA=cancelada...)
-  CANTIDAD_CITA - cantidad en pxcita
-  FECHA_FACTURA - fecha de la factura asociada
-  ADMISION_NO   - número de admisión
-  SIN_CITA      - TRUE si no se encontró ninguna cita
+  FECHA_SOLICITUD_CITA - c.FechaSolicitud: cuando se solicitó/agendó la cita en ZeusSalud
+  FECHA_CITA           - c.FeCita: fecha real de la cita (cuando se va a atender)
+  ESTADO_CITA          - estado (AT=atendida, SE=sin estado, CA=cancelada...)
+  CANTIDAD_CITA        - cantidad en pxcita
+  FECHA_FACTURA        - FechaFact de la factura asociada (cuando se generó)
+  ADMISION_NO          - número de admisión
+  SIN_CITA             - TRUE si no se encontró ninguna cita
 
 También crea una hoja "SIN_CITA" con solo los pacientes sin cita.
 """
@@ -70,12 +71,13 @@ class Command(BaseCommand):
         self.stdout.write(f"  {total} filas encontradas")
 
         # Columnas de resultado
-        df["FECHA_CITA"]    = ""
-        df["ESTADO_CITA"]   = ""
-        df["CANTIDAD_CITA"] = ""
-        df["FECHA_FACTURA"] = ""
-        df["ADMISION_NO"]   = ""
-        df["SIN_CITA"]      = False
+        df["FECHA_SOLICITUD_CITA"] = ""   # c.FechaSolicitud — cuando se agendó
+        df["FECHA_CITA"]           = ""   # c.FeCita         — fecha de la cita
+        df["ESTADO_CITA"]          = ""
+        df["CANTIDAD_CITA"]        = ""
+        df["FECHA_FACTURA"]        = ""   # facturas.FechaFact
+        df["ADMISION_NO"]          = ""
+        df["SIN_CITA"]             = False
 
         sin_cita_count = 0
 
@@ -94,10 +96,11 @@ class Command(BaseCommand):
                     SELECT
                         c.IdCita,
                         c.AdmisionNo,
-                        CONVERT(varchar(10), c.FeCita, 120)  AS FeCita,
-                        LTRIM(RTRIM(ISNULL(c.estado, 'SE'))) AS Estado,
+                        CONVERT(varchar(10), c.FeCita, 120)          AS FeCita,
+                        LTRIM(RTRIM(ISNULL(c.estado, 'SE')))         AS Estado,
                         p.CUPS,
-                        p.Cantidad
+                        p.Cantidad,
+                        CONVERT(varchar(19), c.FechaSolicitud, 120)  AS FechaSolicitud
                     FROM citas c
                     INNER JOIN pxcita p ON c.IdCita = p.IdCita
                     WHERE c.NumeroPaciente = %s
@@ -116,7 +119,7 @@ class Command(BaseCommand):
                     (c for c in citas if (c[3] or "").strip().upper() in ("AT", "PR")),
                     citas[0]
                 )
-                id_cita, admision_no, fe_cita, estado, _, cantidad = cita
+                id_cita, admision_no, fe_cita, estado, _, cantidad, fecha_solicitud = cita
 
                 # Fecha factura asociada
                 fecha_fact = ""
@@ -132,11 +135,12 @@ class Command(BaseCommand):
                     ff_row = cursor.fetchone()
                     fecha_fact = ff_row[0] if ff_row else ""
 
-                df.at[i, "FECHA_CITA"]    = fe_cita or ""
-                df.at[i, "ESTADO_CITA"]   = estado or ""
-                df.at[i, "CANTIDAD_CITA"] = cantidad or ""
-                df.at[i, "FECHA_FACTURA"] = fecha_fact
-                df.at[i, "ADMISION_NO"]   = admision_no or ""
+                df.at[i, "FECHA_SOLICITUD_CITA"] = fecha_solicitud or ""
+                df.at[i, "FECHA_CITA"]           = fe_cita or ""
+                df.at[i, "ESTADO_CITA"]          = estado or ""
+                df.at[i, "CANTIDAD_CITA"]        = cantidad or ""
+                df.at[i, "FECHA_FACTURA"]        = fecha_fact
+                df.at[i, "ADMISION_NO"]          = admision_no or ""
 
                 if (i + 1) % 100 == 0:
                     self.stdout.write(f"  Procesados {i + 1}/{total}...")
