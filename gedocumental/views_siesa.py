@@ -1076,9 +1076,11 @@ def _hoja_visor_a_pdf(estilos: str, cuerpo: str):
                      f'width:{ancho:.0f}px;">{hoja}</div>')
         documento = ('<html><head><meta charset="UTF-8">' + estilos_cuerpo + base
                      + "</head><body>" + contenido + "</body></html>")
+        # El alto declarado por las filas es el de SIESA (Tahoma); con otra fuente el folio puede
+        # crecer. Se usa una hoja con espacio de sobra y luego se recorta al contenido real.
         opciones += ["--disable-smart-shrinking", "-T", "0", "-B", "0", "-L", "0", "-R", "0",
                      "--page-width", f"{ancho_hoja * 25.4 / 96:.2f}mm",
-                     "--page-height", f"{(alto_hoja - 1) * 25.4 / 96:.2f}mm"]
+                     "--page-height", f"{alto_hoja * 2 * 25.4 / 96:.2f}mm"]
     else:
         documento = ('<html><head><meta charset="UTF-8">' + estilos + estilos_cuerpo + base
                      + "</head><body>" + cuerpo + "</body></html>")
@@ -1093,11 +1095,47 @@ def _hoja_visor_a_pdf(estilos: str, cuerpo: str):
         # wkhtmltopdf puede terminar con código 1 por un recurso que no cargó y aun así generar el PDF
         with open(tmp_path, "rb") as f:
             datos_pdf = f.read()
-        return datos_pdf if datos_pdf.startswith(b"%PDF") else None
+        if not datos_pdf.startswith(b"%PDF"):
+            return None
+        return _recortar_al_contenido(datos_pdf) if hoja else datos_pdf
     finally:
         for p in (tmp_html_path, tmp_path):
             if p and os.path.exists(p):
                 os.remove(p)
+
+
+def _recortar_al_contenido(datos_pdf: bytes) -> bytes:
+    """
+    Recorta cada hoja del PDF hasta donde termina el contenido (más el margen), con mínimo el alto de
+    una hoja carta: así cada folio de SIESA queda en UNA página aunque crezca con otra fuente.
+    """
+    import io
+    try:
+        import pdfplumber
+        from PyPDF2 import PdfReader, PdfWriter
+        margen_pt = _MARGEN_PX * 72 / 96
+        carta_pt = _CARTA_ALTO_PX * 72 / 96
+        with pdfplumber.open(io.BytesIO(datos_pdf)) as doc:
+            fondos = []
+            for pag in doc.pages:
+                objetos = pag.chars + pag.rects + pag.lines + pag.images + pag.curves
+                fondos.append(max((o["bottom"] for o in objetos), default=0))
+        lector, escritor = PdfReader(io.BytesIO(datos_pdf)), PdfWriter()
+        for pag, fondo in zip(lector.pages, fondos):
+            alto = float(pag.mediabox.height)
+            nuevo = min(alto, max(carta_pt, fondo + margen_pt))
+            arriba = float(pag.mediabox.top)
+            for caja in (pag.mediabox, pag.cropbox):
+                caja.lower_left = (float(caja.left), arriba - nuevo)
+                caja.upper_right = (float(caja.right), arriba)
+            escritor.add_page(pag)
+        salida = io.BytesIO()
+        escritor.write(salida)
+        return salida.getvalue()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("No se pudo recortar el PDF de SIESA; se deja sin recortar")
+        return datos_pdf
 
 
 def _urls_descarga_exportacion(r) -> list:
