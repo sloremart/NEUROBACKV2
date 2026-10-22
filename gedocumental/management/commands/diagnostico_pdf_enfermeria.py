@@ -44,6 +44,8 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('estudio', type=int)
+        parser.add_argument('--consulta', action='store_true',
+                            help='Historia clínica de consulta (ImpHC=1) en vez de nota de enfermería')
 
     def _descargar(self, s, nombre, estudio):
         url = URL_TEMP + nombre
@@ -61,6 +63,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **o):
         estudio = o['estudio']
+        imp_hc, imp_notas = (1, 0) if o['consulta'] else (0, 1)
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute(
                 "SELECT sp.num_id, sp.primer_nom, sp.segundo_nom, sp.primer_ape, sp.segundo_ape "
@@ -79,7 +82,7 @@ class Command(BaseCommand):
 
         # Paso 1: formulario
         r1 = s.post(SIESA_FORMULARIO_URL, data={
-            "estudio": estudio, "ImpHC": 0, "ImpNotasEnfermeria": 1, "UsuarioSession": usuario_session,
+            "estudio": estudio, "ImpHC": imp_hc, "ImpNotasEnfermeria": imp_notas, "UsuarioSession": usuario_session,
             "pdf": 1, "generarNombreArchivo": 1, "reportName": "HistoriaClinicaGeneral",
         }, timeout=30)
         self.stdout.write(f"\nPASO 1 FormularioFastReport -> HTTP {r1.status_code}")
@@ -224,7 +227,7 @@ class Command(BaseCommand):
 
         self.stdout.write("\nRESULTADO con la función del sistema (_fetch_pdf_enfermeria, con verificación):")
         try:
-            pdf = _fetch_pdf_enfermeria(estudio)
+            pdf = _fetch_pdf_enfermeria(estudio, imp_hc=imp_hc, imp_notas=imp_notas)
             self.stdout.write(f"  OK, {len(pdf)} bytes, del estudio: {_pdf_corresponde_al_estudio(pdf, estudio)}")
         except Exception as exc:
             self.stdout.write(f"  Falla: {exc}")

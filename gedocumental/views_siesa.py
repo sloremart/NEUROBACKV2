@@ -646,10 +646,11 @@ def _parse_hidden_inputs(html: str) -> dict:
     return fields
 
 
-def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True) -> bytes:
+def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True, imp_hc: int = 0, imp_notas: int = 1) -> bytes:
     """
-    Descarga el PDF de nota de enfermería de SIESA para un estudio
-    de administración de medicamentos (ufuncional = 12).
+    Descarga de SIESA el informe "HistoriaClinicaGeneral" de un estudio:
+      - por defecto, la nota de enfermería (administración de medicamentos, ufuncional = 12);
+      - con imp_hc=1, imp_notas=0, la historia clínica de la consulta (ver _fetch_pdf_consulta).
 
     Se fuerza una sesión PHP nueva por cada estudio para evitar que SIESA
     use el estado de la sesión anterior y devuelva el PDF de otro paciente.
@@ -667,8 +668,8 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True) -> bytes:
             SIESA_FORMULARIO_URL,
             data={
                 "estudio":              estudio,
-                "ImpHC":                0,
-                "ImpNotasEnfermeria":   1,
+                "ImpHC":                imp_hc,
+                "ImpNotasEnfermeria":   imp_notas,
                 "UsuarioSession":       usuario_session,
                 "pdf":                  1,
                 "generarNombreArchivo": 1,
@@ -685,7 +686,8 @@ def _fetch_pdf_enfermeria(estudio: int, verificar: bool = True) -> bytes:
 
         nombre_pdf = form_fields.get("nombreArchivoPdf")
         if not nombre_pdf:
-            raise Exception("SIESA no devolvió el nombre del archivo PDF — el estudio puede no tener nota de enfermería")
+            raise Exception("SIESA no devolvió el nombre del archivo PDF — el estudio puede no tener "
+                            + ("historia clínica" if imp_hc else "nota de enfermería"))
 
         # Paso 2: POST a c_informe_view.aspx — genera el informe en el visor de FastReport
         r2 = s.post(SIESA_REPORT_VIEW_URL, data=form_fields, timeout=60)
@@ -1220,3 +1222,138 @@ def generar_pdfs_enfermeria_lote(request):
         },
         status=200,
     )
+
+
+# ---------------------------------------------------------------------------
+# Historias clínicas de CONSULTA (neurología y fisiatría) — ufuncional = 1
+# ---------------------------------------------------------------------------
+#
+# Mismo informe de SIESA que la nota de enfermería ("HistoriaClinicaGeneral") pero con
+# ImpHC=1. Se guarda como RESULTADO ({estudio}R.pdf) solo si la admisión no tiene RESULTADO:
+# nunca reemplaza un RESULTADO subido por una persona.
+#
+# Endpoints:
+#   GET /api/v2/gedocumental/generar-pdf-consulta/?estudio=21058[&force=1]
+#   GET /api/v2/gedocumental/generar-pdfs-consultas/?fecha_inicio=YYYY-MM-DD&fecha_fin=YYYY-MM-DD
+#       [&especialidad=neurologia|fisiatria|todas][&force=1]
+# ---------------------------------------------------------------------------
+
+# hcingres.tipo_histo → especialidad
+TIPOS_HC_CONSULTA = {
+    "neurologia": ("01", "13", "06", "08"),   # historia/control neurología y neuropediatría
+    "fisiatria":  ("21", "11"),               # historia/control medicina física y rehabilitación
+}
+
+
+def _fetch_pdf_consulta(estudio: int, verificar: bool = True) -> bytes:
+    """PDF de la historia clínica de la consulta (sin notas de enfermería)."""
+    return _fetch_pdf_enfermeria(estudio, verificar=verificar, imp_hc=1, imp_notas=0)
+
+
+def _tipos_hc(especialidad: str) -> tuple:
+    especialidad = (especialidad or "todas").strip().lower()
+    if especialidad in TIPOS_HC_CONSULTA:
+        return TIPOS_HC_CONSULTA[especialidad]
+    return tuple(t for tipos in TIPOS_HC_CONSULTA.values() for t in tipos)
+
+
+def _estudios_consulta_por_fecha(fecha_inicio: str, fecha_fin: str, especialidad: str = "todas") -> list:
+    """
+    con_estudio de las consultas (ufuncional = 1, SEDE 01) del rango de fechas con historia
+    clínica CERRADA (hcingres.estado = 'C') del tipo de la especialidad pedida.
+    """
+    tipos = _tipos_hc(especialidad)
+    marcadores = ", ".join(["%s"] * len(tipos))
+    with connections["zeussalud"].cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT DISTINCT sm.con_estudio
+            FROM sis_maes sm
+            JOIN hcingres h ON h.con_estudio = sm.con_estudio
+            WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
+              AND sm.id_sede = 2
+              AND sm.estado = 'A'
+              AND sm.ufuncional = 1
+              AND h.estado = 'C'
+              AND LTRIM(RTRIM(h.tipo_histo)) IN ({marcadores})
+            ORDER BY sm.con_estudio
+            """,
+            [fecha_inicio, fecha_fin, *tipos],
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+
+def _puede_generar_resultado(estudio: int, force: bool):
+    """
+    (True, "") si se puede guardar el RESULTADO generado por el sistema; si no, (False, motivo).
+    Sin force: solo si la admisión no tiene RESULTADO. Con force: además puede reemplazar el que
+    generó el sistema ({estudio}R.pdf sin usuario), nunca uno subido por una persona.
+    """
+    existentes = ArchivoFacturacion.objects.filter(Admision_id=estudio, Tipo="RESULTADO")
+    if not existentes.exists():
+        return True, ""
+    if not force:
+        return False, "ya tiene RESULTADO"
+    if existentes.exclude(NombreArchivo=f"{estudio}R.pdf", Usuario__isnull=True).exists():
+        return False, "tiene RESULTADO subido por un usuario"
+    return True, ""
+
+
+@api_view(["GET"])
+def generar_pdf_consulta(request):
+    """Genera (o regenera con force=1) la historia clínica de UNA consulta como RESULTADO."""
+    try:
+        estudio = int(request.GET.get("estudio", "").strip())
+    except ValueError:
+        return JsonResponse({"success": False, "detail": "El parámetro 'estudio' debe ser numérico."}, status=400)
+    force = request.GET.get("force", "0") == "1"
+
+    puede, motivo = _puede_generar_resultado(estudio, force)
+    if not puede:
+        return JsonResponse({"success": True, "detail": f"Estudio {estudio}: {motivo}; no se generó.",
+                             "regenerado": False}, status=200)
+    try:
+        pdf_bytes = _fetch_pdf_consulta(estudio)
+    except Exception as e:
+        return JsonResponse({"success": False, "detail": f"Error al obtener el PDF de SIESA: {e}"}, status=502)
+
+    ruta_relativa, _, nombre = _guardar_pdf(estudio, pdf_bytes)
+    _registrar_en_bd(estudio, nombre, ruta_relativa)
+    return JsonResponse({"success": True, "detail": f"Historia clínica del estudio {estudio} generada.",
+                         "archivo": nombre, "ruta": ruta_relativa, "regenerado": force}, status=201)
+
+
+@api_view(["GET"])
+def generar_pdfs_consultas_lote(request):
+    """Genera en lote las historias clínicas de consultas de neurología y/o fisiatría."""
+    fecha_inicio = request.GET.get("fecha_inicio")
+    fecha_fin    = request.GET.get("fecha_fin")
+    especialidad = request.GET.get("especialidad", "todas")
+    force        = request.GET.get("force", "0") == "1"
+    if not fecha_inicio or not fecha_fin:
+        return JsonResponse({"success": False, "detail": "Se requieren 'fecha_inicio' y 'fecha_fin'."}, status=400)
+
+    try:
+        estudios = _estudios_consulta_por_fecha(fecha_inicio, fecha_fin, especialidad)
+    except Exception as e:
+        return JsonResponse({"success": False, "detail": f"Error al consultar Zeus: {e}"}, status=500)
+
+    resultados = {"generados": [], "omitidos": [], "errores": []}
+    for con_estudio in estudios:
+        puede, motivo = _puede_generar_resultado(con_estudio, force)
+        if not puede:
+            resultados["omitidos"].append({"estudio": con_estudio, "motivo": motivo})
+            continue
+        try:
+            pdf_bytes = _fetch_pdf_consulta(con_estudio)
+            ruta_relativa, _, nombre = _guardar_pdf(con_estudio, pdf_bytes)
+            _registrar_en_bd(con_estudio, nombre, ruta_relativa)
+            resultados["generados"].append(con_estudio)
+        except Exception as e:
+            resultados["errores"].append({"estudio": con_estudio, "error": str(e)})
+
+    return JsonResponse({
+        "success": True, "especialidad": especialidad, "total": len(estudios),
+        "generados": len(resultados["generados"]), "omitidos": len(resultados["omitidos"]),
+        "errores": len(resultados["errores"]), "detalle": resultados,
+    }, status=200)
