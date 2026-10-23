@@ -29,6 +29,11 @@ class Command(BaseCommand):
         parser.add_argument('--forzar', action='store_true', help="Revisar aunque ya tenga revisión IA")
         parser.add_argument('--solo-hallazgos', action='store_true',
                             help="Revisar de nuevo solo los archivos con un hallazgo IA pendiente (no los que están OK)")
+        parser.add_argument('--tipo', help="Solo este tipo de documento (COMPROBANTE, ORDEN, AUTORIZACION...)")
+        parser.add_argument('--motivo', help="Solo hallazgos cuya descripción contenga este texto (ej. firma)")
+        parser.add_argument('--con-firma', dest='con_firma', action='store_true',
+                            help="Solo comprobantes en los que el sistema detecta la firma (revisión local, sin costo)")
+        parser.add_argument('--listar', action='store_true', help="Solo listar lo que se revisaría (no llama a OpenAI)")
 
     def handle(self, *args, **o):
         if not (o['admision'] or o['desde'] or o['solo_hallazgos']):
@@ -41,13 +46,34 @@ class Command(BaseCommand):
             archivos = archivos.filter(FechaCreacionArchivo__date__gte=o['desde'])
         if o['hasta']:
             archivos = archivos.filter(FechaCreacionArchivo__date__lte=o['hasta'])
+        if o['tipo']:
+            archivos = archivos.filter(Tipo=o['tipo'].upper())
         if o['solo_hallazgos']:
             con_hallazgo = (RevisionIA.objects.filter(Resuelta=False, IdArchivo__isnull=False)
-                            .exclude(TipoHallazgo='OK').values('IdArchivo'))
-            archivos = archivos.filter(IdArchivo__in=con_hallazgo)
+                            .exclude(TipoHallazgo='OK'))
+            if o['motivo']:
+                con_hallazgo = con_hallazgo.filter(Descripcion__icontains=o['motivo'])
+            archivos = archivos.filter(IdArchivo__in=con_hallazgo.values('IdArchivo'))
         elif not o['forzar']:
             archivos = archivos.filter(RevisionesIA__isnull=True)
         archivos = list(archivos.order_by('Admision_id', 'IdArchivo')[:o['limite']])
+        if o['con_firma']:
+            from gedocumental.services.ai_revision import _detectar_firma_pdf
+            con_firma = []
+            for a in archivos:
+                try:
+                    ruta = a.RutaArchivo.path
+                except Exception:
+                    continue
+                if _detectar_firma_pdf(ruta):
+                    con_firma.append(a)
+            self.stdout.write(f"Con firma detectada por el sistema: {len(con_firma)} de {len(archivos)}")
+            archivos = con_firma
+        if o['listar']:
+            self.stdout.write(f"Se revisarían {len(archivos)} archivos (no se llamó a OpenAI):")
+            for a in archivos:
+                self.stdout.write(f"  {a.Admision_id} {a.Tipo} {a.NombreArchivo}")
+            return
 
         self.stdout.write(f"Archivos a revisar: {len(archivos)}")
         contextos = {}
