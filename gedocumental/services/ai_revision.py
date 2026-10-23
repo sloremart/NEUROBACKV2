@@ -430,6 +430,13 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(ajustes)
         resultado["ajuste_sistema"] = list(ajustes)
 
+    # Firma confirmada por el sistema: el hallazgo de "ausencia de firma" se descarta aunque la IA insista
+    if (_es_comprobante(tipo_documento) and firma_detectada and resultado["tipo"] != "OK"
+            and "firma" in (resultado.get("descripcion") or "").lower()):
+        if resultado.get("paciente_coincide") != "NO":
+            logger.info("Comprobante con firma detectada por el sistema: se descarta '%s'", resultado.get("descripcion"))
+            resultado.update(tipo="OK", descripcion="Documento correcto", firma_paciente="SI", ajuste_firma=True)
+
     # RESULTADOS: si el paciente coincide, un hallazgo solo se mantiene si hay una DIFERENCIA CLARA
     # (otro tipo de estudio, otra región/lateralidad/contraste en imágenes, otra especialidad).
     # Falta del código CUPS, redacción distinta o detalle insuficiente NO son hallazgo.
@@ -788,7 +795,7 @@ def _detectar_firma_pdf(ruta_absoluta: str) -> bool | None:
         import pdfplumber
         with pdfplumber.open(ruta_absoluta) as pdf:
             vistas = 0
-            for pagina in pdf.pages[:2]:
+            for pagina in pdf.pages[:3]:
                 for img in pagina.images:
                     ancho, alto = img['x1'] - img['x0'], img['bottom'] - img['top']
                     # Una página escaneada completa no es una firma
@@ -801,6 +808,15 @@ def _detectar_firma_pdf(ruta_absoluta: str) -> bool | None:
                     pixeles = list(gris.getdata())
                     oscuros = sum(1 for v in pixeles if v < 128)
                     if pixeles and oscuros / len(pixeles) > 0.004:
+                        return True
+                # Firma dibujada como trazos (vectores) cerca del rótulo "Firma del paciente"
+                rotulos = [w for w in pagina.extract_words() if w['text'].lower().startswith('firma')]
+                for w in rotulos:
+                    trazos = [c for c in (pagina.curves or [])
+                              if w['top'] - 120 <= c['top'] <= w['bottom'] + 120
+                              and (c['x1'] - c['x0']) < pagina.width * 0.6
+                              and len(c.get('pts') or []) >= 4]
+                    if trazos:
                         return True
             return False if vistas else None
     except Exception as exc:
