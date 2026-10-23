@@ -134,6 +134,9 @@ aunque la primera ya haya fallado:
   "firma_paciente": "SI | NO | NO_APLICA   (solo COMPROBANTE; en otros documentos NO_APLICA)",
   "estudio_documento": {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
   "estudio_admision":  {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
+  "recaudo": {"requiere_pago": "SI | NO | NO_INDICA", "tipo_cobro": "CUOTA_MODERADORA | COPAGO | NO_INDICA",
+              "valor": "<pesos o ''>", "porcentaje": "<% o ''>", "categoria": "A | B | C | Z | NO_INDICA",
+              "tipo_afiliado": "COTIZANTE | BENEFICIARIO | NO_INDICA", "exoneracion": "SI | NO | NO_INDICA"},
   "tipo": "<uno de los tipos de arriba>",
   "descripcion": "<máximo 220 caracteres, concreta, citando el dato del documento y el esperado, incluyendo todos los problemas encontrados; o 'Documento correcto' si es OK>"
 }
@@ -150,7 +153,18 @@ que más se le parece. Usa SOLO estos valores (en mayúsculas):
   C (contraste):   CON | SIN | NO_ESPECIFICA   ("simple" = SIN)
   E (especialidad, solo si M = CONSULTA): nombre corto de la especialidad, ej. MEDICINA_FISICA_REHABILITACION,
                  NEUROLOGIA, NEUROCIRUGIA, PSIQUIATRIA; si no es consulta, NO_APLICA
-Si el documento no trae procedimiento (comprobante, factura…), usa NO_APLICA en ambos."""
+Si el documento no trae procedimiento (comprobante, factura…), usa NO_APLICA en ambos.
+"recaudo" = condiciones de pago SOLO si el documento es una AUTORIZACION o el validador de derechos de la EPS
+(en cualquier otro documento, todo NO_INDICA y ''). Transcribe lo que dice el documento, sin calcular:
+  requiere_pago: NO si dice "no requiere pago", "exento", o el recaudo/valor a pagar es 0 y el porcentaje de
+                 copago es 0; SI si indica un valor o porcentaje mayor a 0; si no dice nada, NO_INDICA.
+  tipo_cobro: lo que diga "condiciones de pago y recaudo" o similar (cuota moderadora o copago).
+  valor: el valor en pesos a recaudar (solo dígitos); porcentaje: el porcentaje de copago (ej. 11.5).
+  categoria: categoría o rango salarial (A, B, C) o nivel (Z para subsidiado nivel Z).
+  tipo_afiliado: si el usuario es cotizante o beneficiario.
+  exoneracion: SI solo si alguna alerta o marca médica dice "EXONERACION PRESTACION"; alertas como NORMAL,
+               "usuario con peticiones recurrentes" o "usuario tutela" NO exoneran (NO); sin alertas, NO_INDICA.
+No uses el tipo RECAUDO: lo recaudado lo verifica el sistema contra SIESA."""
 
 
 def _reparar_texto(texto) -> str:
@@ -354,7 +368,7 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             {"role": "user",   "content": contenido},
         ],
         response_format={"type": "json_object"},
-        max_tokens=500,
+        max_tokens=700,
         temperature=0,
     )
 
@@ -364,6 +378,10 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     tipo = resultado.get("tipo", "").upper().strip()
     if tipo not in TIPOS_OBSERVACION:
         tipo = "INFORMACION"
+    if tipo == "RECAUDO":
+        # La IA no sabe qué se cobró en SIESA: el recaudo lo decide verificar_recaudo
+        tipo = "OK"
+        resultado["descripcion"] = "Documento correcto"
     resultado["tipo"] = tipo
     _ajustar_lateralidad_admision(resultado, datos_admision)
 
@@ -1145,7 +1163,27 @@ def analizar_documento(ruta_absoluta: str, tipo_documento: str, datos_admision: 
     firma = _detectar_firma_pdf(ruta_absoluta) if _es_comprobante(tipo_documento) else None
     resultado = _llamar_openai(texto, imagenes, tipo_documento, datos_admision, firma_detectada=firma)
     resultado["modo"] = ("mixto" if texto else "imagen") if imagenes else "texto"
+    if (tipo_documento or '').upper() == 'AUTORIZACION':
+        _agregar_hallazgo_recaudo(resultado, datos_admision)
     return resultado
+
+
+def _agregar_hallazgo_recaudo(resultado: dict, datos_admision: dict) -> None:
+    """Compara las condiciones de pago de la autorización con lo recaudado en SIESA (sin otra llamada a la IA)."""
+    from gedocumental.services.recaudo import verificar_recaudo
+    try:
+        hallazgo = verificar_recaudo(resultado.get("recaudo"), datos_admision.get("consecutivo"))
+    except Exception as exc:
+        logger.warning("No se pudo verificar el recaudo de %s: %s", datos_admision.get("consecutivo"), exc)
+        return
+    if not hallazgo:
+        return
+    tipo, descripcion = hallazgo
+    resultado["hallazgo_recaudo"] = descripcion
+    if resultado["tipo"] == "OK":
+        resultado.update(tipo=tipo, descripcion=descripcion)
+    else:
+        resultado["descripcion"] = f"{resultado.get('descripcion', '')} | {descripcion}"
 
 
 def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
