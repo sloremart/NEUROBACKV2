@@ -127,7 +127,7 @@ aunque la primera ya haya fallado:
 {
   "paciente_documento": "<nombre e identificación tal como aparecen en el documento, o 'no aparece'>",
   "nombre_documento": "<solo el nombre completo del paciente TRANSCRITO LETRA POR LETRA tal como está escrito en el documento, sin corregir ortografía ni completarlo con el de la admisión, o ''>",
-  "identificacion_documento": "<solo el número de documento del paciente, sin tipo, o ''>",
+  "identificacion_documento": "<solo el número de documento del paciente (el que va junto a IDENTIFICACIÓN, CC, TI, RC, CE, documento), sin tipo ni separadores, o ''. NUNCA el número de fórmula, folio, factura, autorización, orden o código de barras>",
   "paciente_coincide": "SI | NO | NO_APARECE",
   "procedimientos_documento": "<CUPS/procedimientos que trae el documento, o 'no aplica'>",
   "procedimientos_coinciden": "SI | NO | NO_APLICA",
@@ -696,7 +696,7 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
     doc = [t for t in _tokens_nombre(resultado.get('nombre_documento') or resultado.get('paciente_documento'))
            if t not in _NO_SON_NOMBRE]
     id_adm = re.sub(r'\D', '', datos_admision.get('identificacion') or '')
-    id_doc = re.sub(r'\D', '', str(resultado.get('identificacion_documento') or ''))
+    id_doc = _id_documento(resultado, id_adm)
     numeros_texto = set(re.findall(r'\d{5,}', re.sub(r'[.,](?=\d{3})', '', texto or '')))
     mismo_id = bool(id_adm) and (id_doc == id_adm or id_adm in numeros_texto)
     if id_adm and id_doc and len(id_doc) >= 5 and id_doc != id_adm and id_adm not in numeros_texto:
@@ -752,6 +752,19 @@ def _solo_motivo_paciente(descripcion) -> bool:
     return bool(sobre_paciente and not otros)
 
 
+def _id_documento(resultado: dict, id_adm: str) -> str:
+    """
+    Número de documento que leyó la IA, solo dígitos. Más de 12 dígitos no es una cédula, TI ni registro
+    civil (máximo 11): es un número de fórmula, orden o código de barras tomado por error → se ignora
+    (salvo que la admisión también tenga un número así de largo, ej. PEP).
+    """
+    import re
+    id_doc = re.sub(r'\D', '', str(resultado.get('identificacion_documento') or ''))
+    if len(id_doc) > 12 and len(id_adm) <= 12:
+        return ''
+    return id_doc
+
+
 def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
     """
     True si el documento es del paciente de la admisión aunque la IA diga que no, por
@@ -762,7 +775,7 @@ def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
     import re
 
     id_adm = re.sub(r'\D', '', datos_admision.get('identificacion') or '')
-    id_doc = re.sub(r'\D', '', str(resultado.get('identificacion_documento') or ''))
+    id_doc = _id_documento(resultado, id_adm)
     if id_adm and id_doc and len(id_doc) >= 5 and id_doc != id_adm:
         return False  # número distinto: es otra persona aunque el nombre se parezca
 
