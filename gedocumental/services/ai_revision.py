@@ -443,6 +443,9 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     if ((tipo_documento or '').upper() == 'RESULTADO' and resultado["tipo"] != "OK"
             and resultado.get("paciente_coincide") != "NO"
             and (not _diferencia_clara(resultado.get("estudio_documento"), resultado.get("estudio_admision"))
+                 # Historia clínica de la MISMA especialidad de la consulta: los estudios que menciona
+                 # (PSG, resonancias...) son antecedentes, no lo realizado
+                 or _consulta_documentada(texto, datos_admision)
                  or (_imagen_documentada(texto, datos_admision)
                      and not _lateralidad_opuesta(resultado.get("estudio_documento"),
                                                   resultado.get("estudio_admision"))))):
