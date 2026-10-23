@@ -31,6 +31,7 @@ import requests
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from django.db import connections
+from django.views.decorators.http import require_GET
 from rest_framework.decorators import api_view
 
 from gedocumental.models import ArchivoFacturacion
@@ -1534,6 +1535,53 @@ def _fetch_pdf_consulta(estudio: int, verificar: bool = True) -> bytes:
     # Sin conversión del HTML del visor: en neurología viene roto desde SIESA (texto letra por letra)
     return _fetch_pdf_enfermeria(estudio, verificar=verificar, imp_hc=1, imp_notas=0, permitir_conversion=False,
                                  params_extra=PARAMS_HC_CONSULTA)
+
+
+# Parámetros capturados del navegador al imprimir una orden desde inicial.php (2026-10-23)
+PARAMS_ORDEN_MEDICA = {
+    "ImpProcedimientos":       "1",
+    "ImpConsultaEspecializada": "1",
+    "OrdenesExternas":         "1",
+    "CodGrupo":                "1",
+}
+
+
+def _fetch_pdf_orden(estudio: int, numero_orden: int) -> bytes:
+    """
+    Descarga desde SIESA el PDF de una orden médica (procedimientos de diagnóstico).
+    No guarda en disco; devuelve los bytes para streaming inmediato.
+    Parámetros capturados del visor inicial.php → FormularioFastReport.php.
+    """
+    return _fetch_pdf_enfermeria(
+        estudio,
+        imp_hc=0,
+        imp_notas=0,
+        params_extra={**PARAMS_ORDEN_MEDICA, "numero": str(numero_orden)},
+    )
+
+
+@require_GET
+def ver_pdf_orden(request):
+    """
+    Descarga en streaming el PDF de una orden médica desde SIESA.
+    No almacena nada; abre el PDF directamente en el navegador.
+
+    GET /api/v2/gedocumental/ver-pdf-orden/?estudio=20135&numero=5298
+    """
+    try:
+        estudio      = int(request.GET.get("estudio", "").strip())
+        numero_orden = int(request.GET.get("numero", "").strip())
+    except (ValueError, AttributeError):
+        return JsonResponse({"error": "Parámetros 'estudio' y 'numero' deben ser numéricos."}, status=400)
+
+    try:
+        pdf_bytes = _fetch_pdf_orden(estudio, numero_orden)
+    except Exception as e:
+        return JsonResponse({"error": f"No se pudo obtener el PDF de SIESA: {e}"}, status=502)
+
+    response = HttpResponse(pdf_bytes, content_type="application/pdf")
+    response["Content-Disposition"] = f'inline; filename="Orden_{estudio}_{numero_orden}.pdf"'
+    return response
 
 
 def _tipos_hc(especialidad: str) -> tuple:

@@ -2,7 +2,7 @@ import os
 import json
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from django.db import connections
 from django.http import JsonResponse
@@ -35,11 +35,35 @@ def detectar_eps_bot(nombre_entidad: str) -> str | None:
 
 @require_GET
 def demanda_inducida_view(request):
+    # Fechas como date (no texto): SQL Server no depende del formato de fecha de la sesión (dmy/mdy)
+    try:
+        fecha_desde = date.fromisoformat(request.GET.get("fecha_desde", "").strip() or "0001-01-01")
+        fecha_hasta = date.fromisoformat(request.GET.get("fecha_hasta", "").strip() or "0001-01-01")
+    except ValueError:
+        return JsonResponse({"error": "Las fechas deben tener el formato AAAA-MM-DD."}, status=400)
+    fecha_desde = None if fecha_desde == date.min else fecha_desde
+    fecha_hasta = None if fecha_hasta == date.min else fecha_hasta + timedelta(days=1)
+
     try:
         with connections['zeussalud'].cursor() as cursor:
-            cursor.execute("""
+            if fecha_desde and fecha_hasta:
+                filtro_fecha = "AND o.fecha >= %s AND o.fecha < %s"
+                params = [fecha_desde, fecha_hasta]
+            elif fecha_desde:
+                filtro_fecha = "AND o.fecha >= %s"
+                params = [fecha_desde]
+            elif fecha_hasta:
+                filtro_fecha = "AND o.fecha < %s"
+                params = [fecha_hasta]
+            else:
+                filtro_fecha = "AND o.fecha >= DATEADD(day,-30,GETDATE())"
+                params = []
+
+            cursor.execute(f"""
                 SELECT
                     CAST(o.numero AS VARCHAR) + '-' + CAST(i.codigo AS VARCHAR) AS IdUnico,
+                    CAST(o.numero AS VARCHAR)                                    AS NroOrden,
+                    CAST(m.con_estudio AS VARCHAR)                               AS NroAdmision,
                     CONVERT(varchar, o.fecha, 23) + ' ' + ISNULL(o.hora, '00:00')       AS FechaRegistro,
                     ISNULL(p.primer_nom,'') + ' ' + ISNULL(p.segundo_nom,'') + ' ' +
                         ISNULL(p.primer_ape,'') + ' ' + ISNULL(p.segundo_ape,'')        AS NombresPaciente,
@@ -64,8 +88,8 @@ def demanda_inducida_view(request):
                         AND LTRIM(RTRIM(s.cod_proc)) = LTRIM(RTRIM(i.codigo))
                         AND s.A = 1
                   )
-                  AND o.fecha >= DATEADD(day, -30, GETDATE())
-            """)
+                  {filtro_fecha}
+            """, params)
             columns = [col[0] for col in cursor.description]
             rows = cursor.fetchall()
 
@@ -76,12 +100,14 @@ def demanda_inducida_view(request):
             eps_bot = detectar_eps_bot(entidad)
             data.append({
                 "Id":         record["IdUnico"],
+                "NroOrden":   record["NroOrden"],
+                "NroAdmision": record["NroAdmision"],
                 "Fecha":      (record["FechaRegistro"] or "").strip(),
                 "Paciente":   (record["NombresPaciente"] or "").strip(),
                 "Documento":  record["NumeroDocumento"],
                 "Telefono":   record["TelefonosContacto"],
                 "Entidad":    entidad,
-                "EpsBot":     eps_bot,          # código bot o null
+                "EpsBot":     eps_bot,
                 "Cups":       record["Cups"],
                 "Orden":      record["DetalleOrden"],
                 "Observacion": record["ObservacionItem"],
