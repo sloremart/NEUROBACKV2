@@ -1580,7 +1580,7 @@ def ver_pdf_orden(request):
         return JsonResponse({"error": f"No se pudo obtener el PDF de SIESA: {e}"}, status=502)
 
     response = HttpResponse(pdf_bytes, content_type="application/pdf")
-    response["Content-Disposition"] = f'inline; filename="Orden_{estudio}_{numero_orden}.pdf"'
+    response["Content-Disposition"] = f'attachment; filename="Orden_{estudio}_{numero_orden}.pdf"'
     return response
 
 
