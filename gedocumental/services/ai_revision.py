@@ -1280,6 +1280,8 @@ def _registrar_revision(archivo_obj, resultado: dict) -> None:
             TipoHallazgo=resultado["tipo"],
             Descripcion=resultado.get("descripcion", ""),
             Modo=resultado.get("modo", ""),
+            DatosRecaudo=(json.dumps(resultado.get("recaudo"), ensure_ascii=False)
+                          if resultado.get("hallazgo_recaudo") else ''),
             # Un OK no deja nada pendiente
             Resuelta=resultado["tipo"] == "OK",
         )
@@ -1319,6 +1321,41 @@ def revisar_en_segundo_plano(archivo_ids, consecutivo) -> bool:
     # Se lanza cuando el archivo ya está confirmado en la BD
     transaction.on_commit(lambda: threading.Thread(target=_trabajo, daemon=True).start())
     return True
+
+
+def reverificar_recaudo_con_zeus() -> int:
+    """
+    Hallazgos de recaudo pendientes: vuelve a comparar con SIESA lo que la IA leyó de la autorización
+    (sin llamar a la IA). Si ya cuadra (se corrigió el cobro o el tipo de afiliado en Zeus):
+      - hallazgo solo de recaudo → se cierra como CORREGIDO;
+      - hallazgo con otros motivos → se quita la parte del recaudo de la descripción.
+    """
+    from django.utils import timezone
+    from gedocumental.models import RevisionIA
+    from gedocumental.services.recaudo import verificar_recaudo
+
+    cerrados = 0
+    for h in RevisionIA.objects.filter(Resuelta=False).exclude(DatosRecaudo=''):
+        try:
+            nuevo = verificar_recaudo(json.loads(h.DatosRecaudo), h.AdmisionId)
+        except Exception as exc:
+            logger.warning("No se pudo reverificar el recaudo del hallazgo %s: %s", h.IdRevision, exc)
+            continue
+        if nuevo:
+            continue
+        partes = (h.Descripcion or '').split(' | ')
+        if h.TipoHallazgo in ('RECAUDO', 'INFORMACION') and len(partes) == 1:
+            h.Resuelta = True
+            h.Resolucion = 'CORREGIDO'
+            h.FechaResolucion = timezone.now()
+            h.save(update_fields=['Resuelta', 'Resolucion', 'FechaResolucion'])
+        else:
+            h.Descripcion = partes[0]
+            h.DatosRecaudo = ''
+            h.save(update_fields=['Descripcion', 'DatosRecaudo'])
+        cerrados += 1
+        logger.info("Hallazgo %s: el recaudo ya cuadra con SIESA", h.IdRevision)
+    return cerrados
 
 
 def reverificar_hallazgos_con_zeus() -> int:

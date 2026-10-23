@@ -196,6 +196,9 @@ class RevisionIA(models.Model):
     TipoHallazgo = models.CharField(max_length=20, db_index=True)  # OK, INFORMACION, AUTORIZACION...
     Descripcion = models.TextField(blank=True, default='')
     Modo = models.CharField(max_length=10, blank=True, default='')  # texto | imagen | mixto
+    # Condiciones de pago que leyó la IA de la autorización (JSON): permiten volver a comparar el
+    # recaudo con SIESA sin otra llamada a la IA y cerrar el hallazgo cuando se corrige el cobro
+    DatosRecaudo = models.TextField(blank=True, default='')
 
     Resuelta = models.BooleanField(default=False, db_index=True)
     Resolucion = models.CharField(max_length=20, choices=RESOLUCIONES, null=True, blank=True)
