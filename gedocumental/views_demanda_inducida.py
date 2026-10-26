@@ -10,7 +10,8 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 
-RPA_HUB_URL = os.getenv("RPA_HUB_URL", "http://localhost:5055")
+RPA_HUB_URL       = os.getenv("RPA_HUB_URL", "http://localhost:5050")
+DEMANDA_WEB_URL   = os.getenv("DEMANDA_WEB_URL", "http://192.168.1.211:5050")
 
 # Mapa: fragmentos del nombre de entidad → código bot RPA
 EPS_MAPA = {
@@ -82,11 +83,18 @@ def demanda_inducida_view(request):
                 JOIN sis_empre e ON c.empresa        = e.codigo
                 LEFT JOIN sis_medi med ON o.cod_med  = med.codigo
                 WHERE c.codigo NOT IN (5, 6)
-                  AND EXISTS (
-                      SELECT 1 FROM servicios s
-                      WHERE s.contrato = c.codigo
-                        AND LTRIM(RTRIM(s.cod_proc)) = LTRIM(RTRIM(i.codigo))
-                        AND s.A = 1
+                  AND (
+                      UPPER(e.nombre) LIKE '%SANITAS%'
+                      OR UPPER(e.nombre) LIKE '%COLSANITAS%'
+                      OR UPPER(e.nombre) LIKE '%CAPITAL SALUD%'
+                      OR UPPER(e.nombre) LIKE '%CAPITALSALUD%'
+                      OR UPPER(e.nombre) LIKE '%FOMAG%'
+                      OR UPPER(e.nombre) LIKE '%FIDUPREVISORA%'
+                      OR UPPER(e.nombre) LIKE '%MAGISTERIO%'
+                      OR UPPER(e.nombre) LIKE '%LA PREVISORA%'
+                      OR UPPER(e.nombre) LIKE '%FIDEICOMISO%'
+                      OR UPPER(e.nombre) LIKE '%SALUD TOTAL%'
+                      OR UPPER(e.nombre) LIKE '%SALUDTOTAL%'
                   )
                   {filtro_fecha}
             """, params)
@@ -143,7 +151,13 @@ def demanda_inducida_view(request):
                         item["ValEpsAutorizacion"] = aut.num_autorizacion or ""
                         item["ValEpsVigencia"]     = aut.fecha_vigencia or ""
                         item["ValEpsMensaje"]      = aut.mensaje or ""
-                        item["ValEpsArchivos"]     = (aut.datos_completos or {}).get("archivos", [])
+                        archivos_raw = (aut.datos_completos or {}).get("archivos", [])
+                        # Rutas relativas /api/descarga_fomag/ y /api/adjunto_orden/ viven en Flask
+                        for arch in archivos_raw:
+                            url = arch.get("url_descarga", "")
+                            if url.startswith("/api/"):
+                                arch["url_descarga"] = DEMANDA_WEB_URL + url
+                        item["ValEpsArchivos"] = archivos_raw
         except Exception:
             pass  # Si falla el enriquecimiento, devolver datos sin validación
 
