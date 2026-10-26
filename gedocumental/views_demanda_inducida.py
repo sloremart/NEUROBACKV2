@@ -99,21 +99,53 @@ def demanda_inducida_view(request):
             entidad = record["Entidad"] or ""
             eps_bot = detectar_eps_bot(entidad)
             data.append({
-                "Id":         record["IdUnico"],
-                "NroOrden":   record["NroOrden"],
+                "Id":          record["IdUnico"],
+                "NroOrden":    record["NroOrden"],
                 "NroAdmision": record["NroAdmision"],
-                "Fecha":      (record["FechaRegistro"] or "").strip(),
-                "Paciente":   (record["NombresPaciente"] or "").strip(),
-                "Documento":  record["NumeroDocumento"],
-                "Telefono":   record["TelefonosContacto"],
-                "Entidad":    entidad,
-                "EpsBot":     eps_bot,
-                "Cups":       record["Cups"],
-                "Orden":      record["DetalleOrden"],
+                "Fecha":       (record["FechaRegistro"] or "").strip(),
+                "Paciente":    (record["NombresPaciente"] or "").strip(),
+                "Documento":   record["NumeroDocumento"],
+                "Telefono":    record["TelefonosContacto"],
+                "Entidad":     entidad,
+                "EpsBot":      eps_bot,
+                "Cups":        record["Cups"],
+                "Orden":       record["DetalleOrden"],
                 "Observacion": record["ObservacionItem"],
-                "Medico":     (record["Medico"] or "").strip(),
-                "Estado":     "PENDIENTE",
+                "Medico":      (record["Medico"] or "").strip(),
+                "Estado":      "PENDIENTE",
+                # Campos de validación RPA — se enriquecen abajo
+                "ValEpsEstado":       "",
+                "ValEpsAutorizacion": "",
+                "ValEpsVigencia":     "",
+                "ValEpsMensaje":      "",
+                "ValEpsArchivos":     [],
             })
+
+        # Enriquecer con resultados de autorizaciones ya consultadas por los bots
+        try:
+            from gedocumental.models import AutorizacionRPA
+            eps_doc_set = {
+                (item["EpsBot"], str(item["Documento"] or "").replace(" ", ""))
+                for item in data if item["EpsBot"]
+            }
+            if eps_doc_set:
+                eps_list = list({p[0] for p in eps_doc_set})
+                doc_list = list({p[1] for p in eps_doc_set})
+                auths = AutorizacionRPA.objects.filter(eps__in=eps_list, doc_num__in=doc_list)
+                aut_map = {(a.eps, a.doc_num): a for a in auths}
+                for item in data:
+                    if not item["EpsBot"]:
+                        continue
+                    key = (item["EpsBot"], str(item["Documento"] or "").replace(" ", ""))
+                    aut = aut_map.get(key)
+                    if aut:
+                        item["ValEpsEstado"]       = aut.status or ""
+                        item["ValEpsAutorizacion"] = aut.num_autorizacion or ""
+                        item["ValEpsVigencia"]     = aut.fecha_vigencia or ""
+                        item["ValEpsMensaje"]      = aut.mensaje or ""
+                        item["ValEpsArchivos"]     = (aut.datos_completos or {}).get("archivos", [])
+        except Exception:
+            pass  # Si falla el enriquecimiento, devolver datos sin validación
 
         return JsonResponse({"data": data})
 
