@@ -243,7 +243,7 @@ def _vigencia_expirada(fecha_vigencia_str: str) -> bool:
         fecha_str = fecha_str.replace(es, en)
     for fmt in formatos:
         try:
-            fecha = datetime.strptime(fecha_str, fmt.lower())
+            fecha = datetime.strptime(fecha_str, fmt)
             return fecha.date() < datetime.now().date()
         except ValueError:
             continue
