@@ -176,11 +176,10 @@ def demanda_inducida_view(request):
                         # Filtrar solo el PDF que corresponde al CUPS de esta fila
                         cups_fila = str(item.get("Cups", "")).strip().split("-")[0]
                         if cups_fila:
-                            filtrados = [
+                            item["ValEpsArchivos"] = [
                                 a for a in archivos_raw
                                 if f"CUPS_{cups_fila}" in a.get("url_descarga", "")
                             ]
-                            item["ValEpsArchivos"] = filtrados if filtrados else archivos_raw
                         else:
                             item["ValEpsArchivos"] = archivos_raw
         except Exception:
