@@ -310,6 +310,17 @@ def consultar_autorizacion_view(request):
                 },
             )
 
+        # 4. Inyectar ValEpsArchivos con URLs absolutas en la respuesta
+        datos_resp = resultado.get("data") if isinstance(resultado, dict) else resultado
+        if isinstance(datos_resp, dict):
+            dc = datos_resp
+            archivos_raw = list(dc.get("archivos") or dc.get("archivos_descargados") or [])
+            for arch in archivos_raw:
+                url = arch.get("url_descarga", "")
+                if url.startswith("/api/"):
+                    arch["url_descarga"] = DEMANDA_WEB_URL + url
+            datos_resp["ValEpsArchivos"] = archivos_raw
+
         return JsonResponse(resultado)
 
     except urllib.error.URLError as e:
