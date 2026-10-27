@@ -69,6 +69,9 @@ def hallazgos_ia(request):
             revisados=Count('IdRevision'),
             con_hallazgo=Count('IdRevision', filter=~Q(TipoHallazgo='OK')),
             pendientes=Count('IdRevision', filter=~Q(TipoHallazgo='OK') & Q(Resuelta=False)),
+            # Validaciones incorrectas de la IA que el sistema cerró solo, y correcciones hechas en Zeus
+            descartados=Count('IdRevision', filter=Q(Resolucion='DESCARTADO')),
+            corregidos=Count('IdRevision', filter=Q(Resolucion='CORREGIDO') & ~Q(TipoHallazgo='OK')),
         )
 
         hallazgos = revisiones.exclude(TipoHallazgo='OK')
@@ -116,6 +119,7 @@ def hallazgos_ia(request):
                 'Resuelta':        h.Resuelta,
                 'Resolucion':      h.Resolucion,
                 'FechaResolucion': h.FechaResolucion.isoformat() if h.FechaResolucion else None,
+                'NotaResolucion':  h.NotaResolucion,
                 'HorasAbierto':    horas_abierto,
             })
 

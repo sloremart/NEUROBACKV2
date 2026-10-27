@@ -26,9 +26,9 @@ from django.db.models import Max, Min
 
 from gedocumental.models import ArchivoFacturacion, RevisionIA
 from gedocumental.services.ai_revision import (
-    TIPOS_SIN_REVISION_IA, obtener_contexto_admision, reverificar_hallazgos_con_zeus, reverificar_recaudo_con_zeus,
-    revisar_archivo,
+    TIPOS_SIN_REVISION_IA, obtener_contexto_admision, reverificar_recaudo_con_zeus, revisar_archivo,
 )
+from gedocumental.services.reverificacion import reverificar_hallazgos_sin_ia
 
 TIPO = 'RESULTADO'
 
@@ -44,9 +44,10 @@ class Command(BaseCommand):
         parser.add_argument('--solo-faltantes', action='store_true')
 
     def handle(self, *args, **o):
-        # 0. Hallazgos de nombre/documento que ya se corrigieron en ZeusSalud (sin IA)
-        cerrados = reverificar_hallazgos_con_zeus()
-        self.stdout.write(f"Hallazgos de nombre/documento corregidos en Zeus: {cerrados}")
+        # 0. Hallazgos que ya no aplican: corregidos en ZeusSalud o mal leídos por la IA (sin IA)
+        r = reverificar_hallazgos_sin_ia()['resumen']
+        self.stdout.write(f"Hallazgos cerrados sin IA: corregidos {r['CORREGIDO']}, descartados {r['DESCARTADO']} "
+                          f"(PDF releídos {r['pdf_leidos']}, escaneados que requieren IA {r['requieren_ia']})")
         self.stdout.write(f"Hallazgos de recaudo corregidos en SIESA: {reverificar_recaudo_con_zeus()}")
         if not o['solo_faltantes']:
             self._revisar_resultados(o['dias'], o['limite'])

@@ -183,6 +183,7 @@ class RevisionIA(models.Model):
         ('CORREGIDO', 'Corregido (nueva revisión OK)'),
         ('REEMPLAZADO', 'Reemplazado por una nueva revisión'),
         ('ARCHIVO_ELIMINADO', 'Archivo eliminado'),
+        ('DESCARTADO', 'Descartado por el sistema (la IA leyó mal el documento)'),
     ]
 
     IdRevision = models.AutoField(primary_key=True)
@@ -203,6 +204,10 @@ class RevisionIA(models.Model):
     Resuelta = models.BooleanField(default=False, db_index=True)
     Resolucion = models.CharField(max_length=20, choices=RESOLUCIONES, null=True, blank=True)
     FechaResolucion = models.DateTimeField(null=True, blank=True)
+    # Por qué el sistema lo cerró sin IA (seguimiento de correcciones y de validaciones incorrectas)
+    NotaResolucion = models.TextField(blank=True, default='')
+    # Última vez que el sistema volvió a leer el PDF del hallazgo (sin IA); evita releerlo en cada cron
+    FechaReverificacion = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'revision_ia'

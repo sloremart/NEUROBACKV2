@@ -1,3 +1,329 @@
-from django.test import TestCase
+"""
+Tests sin base de datos (SimpleTestCase): reglas de reverificación de hallazgos sin IA y del recaudo.
+  python manage.py test gedocumental
+"""
 
-# Create your tests here.
+import os
+import tempfile
+from datetime import timedelta
+from types import SimpleNamespace
+from unittest import mock
+
+from django.test import SimpleTestCase
+from django.utils import timezone
+
+from gedocumental.services import recaudo, reverificacion
+from gedocumental.services.reverificacion import (
+    CORREGIDO, DESCARTADO, evaluar_hallazgo, necesita_pdf, numeros_en_texto, reverificar_hallazgos_sin_ia,
+    texto_pdf,
+)
+
+ADMISION = {
+    'consecutivo': 33534,
+    'identificacion': 'RC 1121978991',
+    'paciente': 'JUAN ALEXIS BEJARANO PEÑA',
+    'cups': ['881302 - ECOGRAFÍA DE ABDOMEN TOTAL (cant. 1)'],
+}
+DOC_MAL = ("Número de documento incorrecto: documento 'RC 1121979781', admisión 'RC 1121978991' "
+           "(paciente JUAN ALEXIS BEJARANO PEÑA).")
+NOMBRE_MAL = "Nombre del usuario incorrecto: documento 'JUAN ALEXIS BEJARAN PEÑA', admisión 'JUAN ALEXIS BEJARANO PEÑA'."
+TEXTO_ORDEN = ("ORDEN MEDICA\nPaciente: JUAN ALEXIS BEJARANO PEÑA  RC 1121978991\n"
+               "881302 ECOGRAFIA DE ABDOMEN TOTAL  Cantidad 1\nNRO FORMULA 202610230001234567")
+
+
+def _pdf(paginas):
+    """PDF digital con un texto por página ('' = página sin texto, como un escaneo)."""
+    from reportlab.pdfgen import canvas
+    f = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+    f.close()
+    c = canvas.Canvas(f.name)
+    for texto in paginas:
+        y = 800
+        for linea in texto.split('\n'):
+            c.drawString(40, y, linea)
+            y -= 16
+        c.showPage()
+    c.save()
+    return f.name
+
+
+class NumerosEnTextoTests(SimpleTestCase):
+    def test_quita_separadores_de_miles(self):
+        self.assertIn('1121978991', numeros_en_texto('CC 1.121.978.991'))
+        self.assertIn('1121978991', numeros_en_texto('CC 1,121,978,991'))
+
+    def test_no_une_numeros_separados_por_espacio(self):
+        nums = numeros_en_texto('RC 1121978991 123')
+        self.assertIn('1121978991', nums)
+        self.assertNotIn('1121978991123', nums)
+
+    def test_numero_pegado_a_letras(self):
+        self.assertIn('1121978991', numeros_en_texto('RC1121978991'))
+
+
+class TextoPdfTests(SimpleTestCase):
+    def tearDown(self):
+        for ruta in getattr(self, 'rutas', []):
+            os.unlink(ruta)
+
+    def _crear(self, paginas):
+        ruta = _pdf(paginas)
+        self.rutas = getattr(self, 'rutas', []) + [ruta]
+        return ruta
+
+    def test_pdf_digital_completo(self):
+        texto, completo = texto_pdf(self._crear([TEXTO_ORDEN]))
+        self.assertTrue(completo)
+        self.assertIn('1121978991', texto)
+
+    def test_pagina_sin_texto_no_es_completo(self):
+        _, completo = texto_pdf(self._crear([TEXTO_ORDEN, '']))
+        self.assertFalse(completo)
+
+    def test_imagen_o_inexistente(self):
+        self.assertEqual(texto_pdf('C:/no/existe.pdf'), ('', False))
+        self.assertEqual(texto_pdf('foto.jpg'), ('', False))
+        self.assertEqual(texto_pdf(''), ('', False))
+
+
+class DocumentoIncorrectoTests(SimpleTestCase):
+    def test_corregido_en_zeus(self):
+        datos = dict(ADMISION, identificacion='RC 1121979781')
+        self.assertEqual(evaluar_hallazgo('ORDEN', DOC_MAL, datos)[0], CORREGIDO)
+
+    def test_sin_cambios_en_zeus_y_sin_pdf_sigue_abierto(self):
+        self.assertIsNone(evaluar_hallazgo('ORDEN', DOC_MAL, ADMISION))
+
+    def test_ia_leyo_mal_el_pdf_digital(self):
+        r = evaluar_hallazgo('ORDEN', DOC_MAL, ADMISION, texto=TEXTO_ORDEN)
+        self.assertEqual(r[0], DESCARTADO)
+        self.assertIn('1121978991', r[1])
+
+    def test_pdf_tiene_tambien_el_numero_errado(self):
+        texto = TEXTO_ORDEN + '\nAcudiente RC 1121979781'
+        self.assertIsNone(evaluar_hallazgo('ORDEN', DOC_MAL, ADMISION, texto=texto))
+
+    def test_pdf_sin_el_numero_de_la_admision(self):
+        texto = TEXTO_ORDEN.replace('1121978991', '1121979781')
+        self.assertIsNone(evaluar_hallazgo('ORDEN', DOC_MAL, ADMISION, texto=texto))
+
+
+class NombreIncorrectoTests(SimpleTestCase):
+    def test_corregido_en_zeus(self):
+        datos = dict(ADMISION, paciente='JUAN ALEXIS BEJARAN PEÑA')
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', NOMBRE_MAL, datos)[0], CORREGIDO)
+
+    def test_ia_leyo_mal_el_nombre(self):
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', NOMBRE_MAL, ADMISION, texto=TEXTO_ORDEN)[0], DESCARTADO)
+
+    def test_el_documento_si_tiene_el_nombre_mal_escrito(self):
+        texto = TEXTO_ORDEN + '\nAfiliado: JUAN ALEXIS BEJARAN PEÑA'
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', NOMBRE_MAL, ADMISION, texto=texto))
+
+
+class PacienteNoCorrespondeTests(SimpleTestCase):
+    OTRO = "Paciente no corresponde: documento 'MARIA LOPEZ GOMEZ', admisión 'JUAN ALEXIS BEJARANO PEÑA'."
+    SIN_DATOS = ("Paciente no corresponde: el documento no contiene el nombre ni el documento de identidad del "
+                 "paciente de la admisión (JUAN ALEXIS BEJARANO PEÑA, RC 1121978991).")
+
+    def test_ia_leyo_mal_y_el_pdf_tiene_nombre_y_documento(self):
+        self.assertEqual(evaluar_hallazgo('RESULTADO', self.OTRO, ADMISION, texto=TEXTO_ORDEN)[0], DESCARTADO)
+
+    def test_pdf_con_la_otra_persona_sigue_abierto(self):
+        texto = TEXTO_ORDEN + '\nMARIA LOPEZ GOMEZ'
+        self.assertIsNone(evaluar_hallazgo('RESULTADO', self.OTRO, ADMISION, texto=texto))
+
+    def test_solo_el_nombre_no_alcanza(self):
+        texto = TEXTO_ORDEN.replace('1121978991', '')
+        self.assertIsNone(evaluar_hallazgo('RESULTADO', self.OTRO, ADMISION, texto=texto))
+
+    def test_admision_corregida_al_paciente_del_archivo(self):
+        datos = dict(ADMISION, paciente='MARIA LOPEZ GOMEZ', identificacion='CC 52000111')
+        self.assertEqual(evaluar_hallazgo('RESULTADO', self.OTRO, datos)[0], CORREGIDO)
+
+    def test_sin_datos_corregido_cuando_el_pdf_ya_coincide(self):
+        self.assertEqual(evaluar_hallazgo('RESULTADO', self.SIN_DATOS, ADMISION, texto=TEXTO_ORDEN)[0], CORREGIDO)
+        self.assertIsNone(evaluar_hallazgo('RESULTADO', self.SIN_DATOS, ADMISION, texto='OTRO TEXTO ' * 10))
+
+
+class FirmaComprobanteTests(SimpleTestCase):
+    DESC = "Ausencia de firma del paciente en el comprobante."
+
+    def test_firma_detectada(self):
+        self.assertEqual(evaluar_hallazgo('COMPROBANTE', self.DESC, ADMISION, firma=True)[0], DESCARTADO)
+
+    def test_firma_no_detectada(self):
+        self.assertIsNone(evaluar_hallazgo('COMPROBANTE', self.DESC, ADMISION, firma=False))
+        self.assertIsNone(evaluar_hallazgo('COMPROBANTE', self.DESC, ADMISION, firma=None))
+
+    def test_otro_motivo_ademas_de_la_firma(self):
+        desc = "Ausencia de firma y nombre del paciente incorrecto."
+        self.assertIsNone(evaluar_hallazgo('COMPROBANTE', desc, ADMISION, firma=True))
+
+    def test_solo_comprobantes(self):
+        self.assertIsNone(evaluar_hallazgo('ORDEN', self.DESC, ADMISION, firma=True))
+
+
+class ProcedimientoTests(SimpleTestCase):
+    CONSULTA = dict(ADMISION, cups=['890274 - CONSULTA DE PRIMERA VEZ POR ESPECIALISTA EN NEUROLOGÍA (cant. 1)'])
+    HC = ("HISTORIA CLINICA - CONTROL NEUROLOGIA\nMOTIVO DE CONSULTA: control\n"
+          "Antecedentes: POLISOMNOGRAFIA 2025 con apnea moderada")
+    DESC = "El estudio del documento (polisomnografía) no corresponde al procedimiento de la admisión."
+
+    def test_resultado_consulta_documentada(self):
+        self.assertEqual(evaluar_hallazgo('RESULTADO', self.DESC, self.CONSULTA, texto=self.HC)[0], DESCARTADO)
+
+    def test_mismo_codigo_cups(self):
+        desc = "No se especifica el procedimiento en la orden."
+        self.assertEqual(evaluar_hallazgo('ORDEN', desc, ADMISION, texto=TEXTO_ORDEN)[0], DESCARTADO)
+
+    def test_lateralidad_no_se_descarta(self):
+        desc = "El procedimiento de la orden es de rodilla derecha y la admisión izquierda."
+        self.assertIsNone(evaluar_hallazgo('ORDEN', desc, ADMISION, texto=TEXTO_ORDEN))
+        self.assertFalse(necesita_pdf('ORDEN', desc))
+
+    def test_sin_texto_no_decide(self):
+        self.assertIsNone(evaluar_hallazgo('RESULTADO', self.DESC, self.CONSULTA))
+
+    def test_otro_codigo_cups(self):
+        desc = "No se especifica el procedimiento en la orden."
+        texto = TEXTO_ORDEN.replace('881302', '883101')
+        self.assertIsNone(evaluar_hallazgo('ORDEN', desc, ADMISION, texto=texto))
+
+
+class VariosMotivosTests(SimpleTestCase):
+    def test_hallazgo_con_recaudo_no_se_cierra_por_una_parte(self):
+        desc = DOC_MAL + " | No se recaudó; debía cobrarse cuota moderadora de $5.000"
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, ADMISION, texto=TEXTO_ORDEN))
+
+    def test_descripcion_vacia_u_otro_motivo(self):
+        self.assertIsNone(evaluar_hallazgo('ORDEN', '', ADMISION, texto=TEXTO_ORDEN))
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', 'Autorización vencida', ADMISION, texto=TEXTO_ORDEN))
+        self.assertFalse(necesita_pdf('AUTORIZACION', 'Autorización vencida'))
+
+
+def _hallazgo(id_, descripcion, tipo='ORDEN', reverificado=None, archivo=1):
+    return SimpleNamespace(IdRevision=id_, AdmisionId=33534, TipoDocumento=tipo, Descripcion=descripcion,
+                           IdArchivo_id=archivo, FechaReverificacion=reverificado, Resuelta=False,
+                           Resolucion=None, FechaResolucion=None, NotaResolucion='', save=mock.Mock())
+
+
+class ReverificarHallazgosTests(SimpleTestCase):
+    def _correr(self, hallazgos, texto=(TEXTO_ORDEN, True), datos=ADMISION, **kw):
+        with mock.patch.object(reverificacion, '_pendientes', return_value=hallazgos), \
+                mock.patch.object(reverificacion, 'obtener_contexto_admision', return_value=datos), \
+                mock.patch.object(reverificacion, '_ruta', return_value='orden.pdf'), \
+                mock.patch.object(reverificacion, 'texto_pdf', return_value=texto) as leer:
+            return reverificar_hallazgos_sin_ia(**kw), leer
+
+    def test_descarta_y_guarda_la_nota(self):
+        h = _hallazgo(1, DOC_MAL)
+        r, _ = self._correr([h])
+        self.assertEqual(r['resumen'][DESCARTADO], 1)
+        self.assertTrue(h.Resuelta)
+        self.assertEqual(h.Resolucion, DESCARTADO)
+        self.assertIn('1121978991', h.NotaResolucion)
+        self.assertIsNotNone(h.FechaReverificacion)
+        campos = h.save.call_args.kwargs['update_fields']
+        self.assertIn('NotaResolucion', campos)
+        self.assertIn('FechaReverificacion', campos)
+
+    def test_listar_no_guarda(self):
+        h = _hallazgo(1, DOC_MAL)
+        r, _ = self._correr([h], aplicar=False)
+        self.assertEqual(r['resumen'][DESCARTADO], 1)
+        self.assertFalse(h.Resuelta)
+        h.save.assert_not_called()
+
+    def test_corregido_en_zeus_no_abre_el_pdf(self):
+        h = _hallazgo(1, DOC_MAL)
+        r, leer = self._correr([h], datos=dict(ADMISION, identificacion='RC 1121979781'))
+        self.assertEqual(r['resumen'][CORREGIDO], 1)
+        leer.assert_not_called()
+
+    def test_escaneado_queda_en_requieren_ia(self):
+        h = _hallazgo(1, DOC_MAL)
+        with mock.patch.object(reverificacion.os.path, 'exists', return_value=True):
+            r, _ = self._correr([h], texto=('', False))
+        self.assertEqual(r['resumen']['requieren_ia'], 1)
+        self.assertEqual(r['resumen']['sin_archivo'], 0)
+        self.assertFalse(h.Resuelta)
+        self.assertEqual(h.save.call_args.kwargs['update_fields'], ['FechaReverificacion'])
+
+    def test_archivo_no_encontrado(self):
+        h = _hallazgo(1, DOC_MAL)
+        r, _ = self._correr([h], texto=('', False))
+        self.assertEqual(r['resumen']['sin_archivo'], 1)
+        self.assertEqual(r['resumen']['requieren_ia'], 0)
+
+    def test_pdf_con_paginas_escaneadas_no_descarta(self):
+        h = _hallazgo(1, DOC_MAL)
+        r, _ = self._correr([h], texto=(TEXTO_ORDEN, False))
+        self.assertEqual(r['resumen'][DESCARTADO], 0)
+        self.assertFalse(h.Resuelta)
+
+    def test_no_relee_antes_de_24_horas(self):
+        h = _hallazgo(1, DOC_MAL, reverificado=timezone.now() - timedelta(hours=2))
+        r, leer = self._correr([h])
+        leer.assert_not_called()
+        self.assertFalse(h.Resuelta)
+        r, leer = self._correr([h], forzar_pdf=True)
+        leer.assert_called_once()
+        self.assertTrue(h.Resuelta)
+
+    def test_tope_de_tiempo(self):
+        h = _hallazgo(1, DOC_MAL)
+        r, leer = self._correr([h], max_segundos_pdf=0)
+        leer.assert_not_called()
+        self.assertFalse(h.Resuelta)
+
+    def test_zeus_sin_respuesta_no_decide(self):
+        h = _hallazgo(1, DOC_MAL)
+        r, leer = self._correr([h], datos={'consecutivo': 33534})
+        self.assertFalse(h.Resuelta)
+        leer.assert_not_called()
+
+    def test_hallazgo_que_no_usa_pdf(self):
+        h = _hallazgo(1, 'Autorización vencida', tipo='AUTORIZACION')
+        r, leer = self._correr([h])
+        leer.assert_not_called()
+        h.save.assert_not_called()
+
+
+class RecaudoTests(SimpleTestCase):
+    def _zeus(self, **kw):
+        base = {'empresa': 'EPS005', 'regimen': 1, 'contrato': 'SANITAS MRC', 'afiliado_zeus': 'BENEFICIARIO',
+                'servicios': [('ECOGRAFIA', 100000.0)], 'valor_servicios': 100000.0, 'consultas': [False],
+                'cuota_moderadora': 0.0, 'copago': 0.0}
+        base.update(kw)
+        return base
+
+    def _verificar(self, doc, **zeus):
+        with mock.patch.object(recaudo, 'datos_recaudo_zeus', return_value=self._zeus(**zeus)):
+            return recaudo.verificar_recaudo(doc, 33419)
+
+    def test_copago_correcto_beneficiario(self):
+        self.assertIsNone(self._verificar({'requiere_pago': 'SI', 'categoria': 'B'}, copago=17300.0))
+
+    def test_copago_cuando_era_cuota_moderadora(self):
+        r = self._verificar({'requiere_pago': 'SI', 'categoria': 'A'}, afiliado_zeus='COTIZANTE', copago=11500.0)
+        self.assertEqual(r[0], 'RECAUDO')
+        self.assertIn('Tipo de cobro incorrecto', r[1])
+
+    def test_no_se_recaudo(self):
+        r = self._verificar({'requiere_pago': 'SI', 'categoria': 'A'}, consultas=[True])
+        self.assertIn('No se recaudó', r[1])
+
+    def test_exoneracion(self):
+        r = self._verificar({'exoneracion': 'SI'}, cuota_moderadora=5000.0)
+        self.assertIn('exoneración', r[1])
+        self.assertIsNone(self._verificar({'exoneracion': 'SI'}))
+
+    def test_documento_sin_datos_de_pago(self):
+        self.assertIsNone(self._verificar({'requiere_pago': 'NO_INDICA'}))
+
+    def test_valores_en_texto(self):
+        self.assertEqual(recaudo._numero('20.100'), 20100)
+        self.assertEqual(recaudo._numero('$ 5,000'), 5000)
+        self.assertEqual(recaudo._numero('11.5'), 11.5)
+        self.assertIsNone(recaudo._numero('NO_INDICA'))
