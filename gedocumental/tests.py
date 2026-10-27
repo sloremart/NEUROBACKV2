@@ -14,8 +14,8 @@ from django.utils import timezone
 
 from gedocumental.services import recaudo, reverificacion
 from gedocumental.services.reverificacion import (
-    CORREGIDO, DESCARTADO, evaluar_hallazgo, necesita_pdf, numeros_en_texto, reverificar_hallazgos_sin_ia,
-    texto_pdf,
+    CORREGIDO, DESCARTADO, evaluar_hallazgo, lectura_autorizacion, necesita_pdf, numeros_en_texto,
+    reverificar_hallazgos_sin_ia, texto_pdf,
 )
 
 ADMISION = {
@@ -191,6 +191,125 @@ class ProcedimientoTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('ORDEN', desc, ADMISION, texto=texto))
 
 
+class DocumentoDeTercerosTests(SimpleTestCase):
+    """Caso 33600: la orden del hospital dice 'MORENO RIDRIGUEZZ'; la autorización y Zeus, RODRIGUEZ."""
+    ADM = dict(ADMISION, paciente='EITHAN MATTEO MORENO RODRIGUEZ', identificacion='RC 1234796155')
+    NOMBRE = ("Nombre del usuario incorrecto: documento 'EITHAN MATTEO MORENO RIDRIGUEZ', "
+              "admisión 'EITHAN MATTEO MORENO RODRIGUEZ'.")
+    AUT_COMO_ZEUS = {'nombre': 'EITHAN MATTEO MORENO RODRIGUEZ', 'documento': '1234796155'}
+
+    def test_orden_mal_escrita_y_autorizacion_como_zeus(self):
+        r = evaluar_hallazgo('ORDEN', self.NOMBRE, self.ADM, autorizacion=self.AUT_COMO_ZEUS)
+        self.assertEqual(r[0], DESCARTADO)
+        self.assertIn('tercero', r[1])
+
+    def test_autorizacion_con_otra_lectura_tampoco_respalda_la_orden(self):
+        aut = {'nombre': 'EITHAN MATTEO MORENO RODRIGEZ', 'documento': None}
+        self.assertEqual(evaluar_hallazgo('ORDEN', self.NOMBRE, self.ADM, autorizacion=aut)[0], DESCARTADO)
+
+    def test_autorizacion_igual_a_la_orden_el_error_es_de_zeus(self):
+        # 32953: orden y autorización dicen BORRERO, Zeus BORERRO
+        adm = dict(ADMISION, paciente='YERZON FERNEY BORERRO SANABRIA')
+        desc = ("Nombre del usuario incorrecto: documento 'YERZON FERNEY BORRERO SANABRIA', "
+                "admisión 'YERZON FERNEY BORERRO SANABRIA'.")
+        aut = {'nombre': 'YERZON FERNEY BORRERO SANABRIA', 'documento': None}
+        self.assertIsNone(evaluar_hallazgo('ORDEN', desc, adm, autorizacion=aut))
+
+    def test_sin_autorizacion_revisada_no_decide(self):
+        self.assertIsNone(evaluar_hallazgo('ORDEN', self.NOMBRE, self.ADM, autorizacion=None))
+
+    def test_otra_persona_no_es_error_de_escritura(self):
+        desc = "Nombre del usuario incorrecto: documento 'MAIRA JIMENEZ', admisión 'EITHAN MATTEO MORENO RODRIGUEZ'."
+        self.assertIsNone(evaluar_hallazgo('ORDEN', desc, self.ADM, autorizacion=self.AUT_COMO_ZEUS))
+
+    def test_la_autorizacion_misma_no_se_descarta_asi(self):
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.NOMBRE, self.ADM, autorizacion=self.AUT_COMO_ZEUS))
+
+    def test_numero_mal_escrito_en_la_orden(self):
+        # 33534 / 32870: un dígito cambiado o de menos; la autorización coincide con Zeus
+        aut = {'nombre': ADMISION['paciente'], 'documento': '1121978991'}
+        self.assertEqual(evaluar_hallazgo('ORDEN', DOC_MAL, ADMISION, autorizacion=aut)[0], DESCARTADO)
+        desc = "Número de documento incorrecto: documento '4217991', admisión 'CC 40217991' (paciente X)."
+        adm = dict(ADMISION, identificacion='CC 40217991')
+        aut = {'nombre': ADMISION['paciente'], 'documento': '40217991'}
+        self.assertEqual(evaluar_hallazgo('ORDEN', desc, adm, autorizacion=aut)[0], DESCARTADO)
+
+    def test_numero_igual_en_orden_y_autorizacion_se_mantiene(self):
+        aut = {'nombre': ADMISION['paciente'], 'documento': '1121979781'}
+        self.assertIsNone(evaluar_hallazgo('ORDEN', DOC_MAL, ADMISION, autorizacion=aut))
+
+    def test_numero_totalmente_distinto_se_mantiene(self):
+        desc = "Número de documento incorrecto: documento '52000111', admisión 'RC 1121978991' (paciente X)."
+        aut = {'nombre': ADMISION['paciente'], 'documento': '1121978991'}
+        self.assertIsNone(evaluar_hallazgo('ORDEN', desc, ADMISION, autorizacion=aut))
+
+
+class LecturaAutorizacionTests(SimpleTestCase):
+    def _leer(self, revision):
+        qs = mock.MagicMock()
+        qs.filter.return_value.order_by.return_value.first.return_value = revision
+        with mock.patch('gedocumental.models.RevisionIA.objects', qs):
+            return lectura_autorizacion(33600, ADMISION)
+
+    def test_sin_autorizacion(self):
+        self.assertIsNone(self._leer(None))
+
+    def test_autorizacion_ok_coincide_con_zeus(self):
+        r = self._leer(SimpleNamespace(Resuelta=True, TipoHallazgo='OK', Descripcion='Documento correcto'))
+        self.assertEqual(r, {'nombre': ADMISION['paciente'], 'documento': '1121978991'})
+
+    def test_autorizacion_con_otro_motivo_coincide_con_zeus(self):
+        r = self._leer(SimpleNamespace(Resuelta=False, TipoHallazgo='AUTORIZACION', Descripcion='Vencida'))
+        self.assertEqual(r['documento'], '1121978991')
+
+    def test_autorizacion_con_nombre_distinto(self):
+        r = self._leer(SimpleNamespace(Resuelta=False, TipoHallazgo='INFORMACION', Descripcion=NOMBRE_MAL))
+        self.assertEqual(r, {'nombre': 'JUAN ALEXIS BEJARAN PEÑA', 'documento': None})
+
+    def test_autorizacion_con_numero_distinto(self):
+        r = self._leer(SimpleNamespace(Resuelta=False, TipoHallazgo='INFORMACION', Descripcion=DOC_MAL))
+        self.assertEqual(r['documento'], '1121979781')
+
+    def test_autorizacion_de_otro_paciente(self):
+        d = "Paciente no corresponde: documento 'MARIA LOPEZ', admisión 'X'."
+        self.assertIsNone(self._leer(SimpleNamespace(Resuelta=False, TipoHallazgo='INFORMACION', Descripcion=d)))
+
+
+class NombrePegadoYHistoriaClinicaTests(SimpleTestCase):
+    """Caso 33587: la HC dice 'ALVAREZRODRIGUEZ PEDRO NEL'; Zeus 'PEDRO NEL ALVAREZ RODRIGUEZ'."""
+    ADM = dict(ADMISION, paciente='PEDRO NEL ALVAREZ RODRIGUEZ', identificacion='CC 17317246')
+
+    def test_nombre_pegado_es_el_mismo_paciente(self):
+        from gedocumental.services.ai_revision import _mismo_paciente, _nombre_casi_igual, _tokens_nombre
+        self.assertTrue(_mismo_paciente({'nombre_documento': 'ALVAREZRODRIGUEZ PEDRO NEL'}, self.ADM))
+        self.assertTrue(_nombre_casi_igual(_tokens_nombre('ALVAREZRODRIGUEZ PEDRO NEL'),
+                                           _tokens_nombre(self.ADM['paciente'])))
+        self.assertTrue(_mismo_paciente({'nombre_documento': 'PEDRO NEL ALVAREZRODRIGUEZ'}, self.ADM))
+
+    def test_pegado_con_otro_apellido_no_es_el_mismo(self):
+        from gedocumental.services.ai_revision import _mismo_paciente
+        self.assertFalse(_mismo_paciente({'nombre_documento': 'ALVAREZGOMEZ PEDRO NEL'}, self.ADM))
+
+    def test_hallazgo_de_nombre_pegado_se_cierra(self):
+        desc = ("Nombre del usuario incorrecto: documento 'ALVAREZRODRIGUEZ PEDRO NEL', "
+                "admisión 'PEDRO NEL ALVAREZ RODRIGUEZ'.")
+        self.assertEqual(evaluar_hallazgo('ORDEN', desc, self.ADM)[0], CORREGIDO)
+
+    def test_historia_clinica_nombre_mal_escrito_no_es_hallazgo(self):
+        desc = ("Nombre del usuario incorrecto: documento 'PEDRO NEL ALVARES RODRIGUEZ', "
+                "admisión 'PEDRO NEL ALVAREZ RODRIGUEZ'.")
+        for tipo in ('HCLINICA', 'HCNEURO', 'ADICIONALES'):
+            self.assertEqual(evaluar_hallazgo(tipo, desc, self.ADM)[0], DESCARTADO)
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, self.ADM))
+
+    def test_historia_clinica_numero_mal_escrito_no_es_hallazgo(self):
+        self.assertEqual(evaluar_hallazgo('HCLINICA', DOC_MAL, ADMISION)[0], DESCARTADO)
+
+    def test_historia_clinica_de_otra_persona_sigue(self):
+        desc = "Paciente no corresponde: documento 'MARIA LOPEZ GOMEZ', admisión 'PEDRO NEL ALVAREZ RODRIGUEZ'."
+        self.assertIsNone(evaluar_hallazgo('HCLINICA', desc, self.ADM))
+
+
 class VariosMotivosTests(SimpleTestCase):
     def test_hallazgo_con_recaudo_no_se_cierra_por_una_parte(self):
         desc = DOC_MAL + " | No se recaudó; debía cobrarse cuota moderadora de $5.000"
@@ -212,7 +331,7 @@ class ReverificarHallazgosTests(SimpleTestCase):
     def _correr(self, hallazgos, texto=(TEXTO_ORDEN, True), datos=ADMISION, **kw):
         with mock.patch.object(reverificacion, '_pendientes', return_value=hallazgos), \
                 mock.patch.object(reverificacion, 'obtener_contexto_admision', return_value=datos), \
-                mock.patch.object(reverificacion, '_ruta', return_value='orden.pdf'), \
+                mock.patch.object(reverificacion, '_ruta', return_value='orden.pdf'),                 mock.patch.object(reverificacion, 'lectura_autorizacion', return_value=kw.pop('aut', None)), \
                 mock.patch.object(reverificacion, 'texto_pdf', return_value=texto) as leer:
             return reverificar_hallazgos_sin_ia(**kw), leer
 
@@ -281,6 +400,13 @@ class ReverificarHallazgosTests(SimpleTestCase):
         h = _hallazgo(1, DOC_MAL)
         r, leer = self._correr([h], datos={'consecutivo': 33534})
         self.assertFalse(h.Resuelta)
+        leer.assert_not_called()
+
+    def test_orden_de_tercero_se_descarta_sin_abrir_el_pdf(self):
+        h = _hallazgo(1, DOC_MAL)
+        r, leer = self._correr([h], aut={'nombre': ADMISION['paciente'], 'documento': '1121978991'})
+        self.assertEqual(r['resumen'][DESCARTADO], 1)
+        self.assertIn('tercero', h.NotaResolucion)
         leer.assert_not_called()
 
     def test_hallazgo_que_no_usa_pdf(self):

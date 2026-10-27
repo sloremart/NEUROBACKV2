@@ -485,9 +485,11 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
 
     if resultado.get("paciente_coincide") == "NO":
         clase = _clasificar_paciente(resultado, texto, datos_admision)
-        # En el RESULTADO (lo genera el equipo/software del estudio) una letra o un dígito distinto en el
-        # nombre o el documento no es error del resultado: solo importa que no sea OTRA persona.
-        if (tipo_documento or '').upper() == 'RESULTADO' and clase in ("nombre_mal_escrito", "documento_incorrecto"):
+        # En el RESULTADO (lo genera el equipo/software del estudio) y en la historia clínica o los soportes
+        # (los escribe otra institución) una letra o un dígito distinto en el nombre o el documento no es
+        # error que corrija facturación: solo importa que no sea OTRA persona.
+        if (((tipo_documento or '').upper() == 'RESULTADO' or (tipo_documento or '').upper() in TIPOS_SOLO_PACIENTE)
+                and clase in ("nombre_mal_escrito", "documento_incorrecto")):
             clase = "misma_persona"
         if clase == "misma_persona":
             resultado["paciente_coincide"] = "SI"
@@ -739,9 +741,25 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
     return "otra_persona"
 
 
+def _separar_pegadas(doc: list, adm: list) -> list:
+    """
+    Apellidos o nombres escritos pegados en el documento ('alvarezrodriguez') se separan en las dos palabras
+    de la admisión ('alvarez', 'rodriguez'): es una diferencia de formato, no de ortografía.
+    """
+    salida = []
+    for palabra in doc:
+        partes = None
+        if _buscar_palabra(palabra, adm) is None:
+            partes = next(((adm[i], adm[j]) for i in range(len(adm)) for j in range(len(adm))
+                           if i != j and adm[i] + adm[j] == palabra), None)
+        salida.extend(partes or [palabra])
+    return salida
+
+
 def _nombre_casi_igual(doc: list, adm: list) -> bool:
     """Cada palabra del documento se parece (≥ 0.8) a una distinta de la admisión (URAN / HURAN)."""
     from difflib import SequenceMatcher
+    doc = _separar_pegadas(doc, adm)
     disponibles = list(adm)
     if len(doc) < 2:
         return False
@@ -803,6 +821,7 @@ def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
     if not doc:
         # Sin nombre legible: solo el número de documento decide
         return bool(id_adm and id_doc == id_adm)
+    doc = _separar_pegadas(doc, adm)
     if len(doc) < 2 or not adm:
         return False
     disponibles = list(adm)
