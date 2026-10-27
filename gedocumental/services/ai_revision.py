@@ -579,9 +579,11 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             and resultado.get("paciente_coincide") != "NO"
             and _solo_motivo_cantidad(resultado.get("descripcion"))):
         zeus = _cantidades_zeus(datos_admision)
-        anotada = str(resultado.get("cantidad_anotada") or '').strip()
-        if ((zeus and len(set(zeus)) == 1 and anotada.isdigit() and int(anotada) == zeus[0])
+        import re
+        anotada = re.findall(r'\d+', str(resultado.get("cantidad_anotada") or ''))   # "2", "CANTIDAD 2"...
+        if ((zeus and len(set(zeus)) == 1 and len(set(anotada)) == 1 and int(anotada[0]) == zeus[0])
                 or _cantidad_anotada(texto, zeus)
+                or _cantidades_iguales(resultado.get("descripcion"), datos_admision)
                 or _orden_con_mas_cantidad(tipo_documento, resultado.get("descripcion"))):
             logger.info("%s: la cantidad anotada coincide con Zeus, se descarta '%s'",
                         tipo_documento, resultado.get("descripcion"))
@@ -1122,6 +1124,23 @@ def _orden_con_mas_cantidad(tipo_documento, descripcion) -> bool:
         return False
     numeros = [int(n) for n in re.findall(r'(?<!\d)(?<!\d[.,])(\d{1,3})(?!\d)(?![.,]\d)', str(descripcion))]
     return len(numeros) == 2 and numeros[0] > numeros[1]
+
+
+def _cantidades_iguales(descripcion, datos_admision: dict) -> bool:
+    """
+    La IA marca hallazgo de cantidad pero su propia descripción dice que son iguales ("Cantidad autorizada en
+    el documento es 2, mientras que la admisión es 2. Documento correcto") y Zeus tiene esa cantidad.
+    Un "Procedimiento no coincide: documento 'X', admisión 'X'" con X idéntico tampoco es motivo.
+    """
+    import re
+    import unicodedata
+    d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    d = re.sub(r"procedimiento no coincide: documento '([^']*)', admision '\1'\.?", ' ', d)
+    if not _solo_motivo_cantidad(d) or re.search(r'procedimiento|no coincide con el', d):
+        return False
+    numeros = [int(n) for n in re.findall(r'(?<!\d)(?<!\d[.,])(\d{1,3})(?!\d)(?![.,]\d)', d)]
+    zeus = _cantidades_zeus(datos_admision)
+    return len(numeros) >= 2 and len(set(numeros)) == 1 and numeros[0] in zeus
 
 
 def _cantidades_zeus(datos_admision: dict) -> list:

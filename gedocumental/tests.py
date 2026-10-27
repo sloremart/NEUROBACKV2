@@ -223,6 +223,28 @@ class CantidadAnotadaTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, ADMISION, texto=self.TEXTO))
 
 
+class CantidadesIgualesTests(SimpleTestCase):
+    """Revisión con la clave nueva: la IA lee 'CANTIDAD 2' pero deja el tipo AUTORIZACION."""
+    ADM = dict(ADMISION, cups=['882317 - DOPPLER (cant. 2)'])
+
+    def test_descripcion_dice_que_son_iguales(self):
+        for desc in ("Cantidad autorizada en el documento es 2, mientras que la admisión es 2. Documento correcto.",
+                     "Cantidad autorizada en el documento es 2, se esperaba 2 según admisión. Documento correcto.",
+                     "Procedimiento no coincide: documento '891530 POTENCIALES EVOCADOS SOMATOSENSORIALES', "
+                     "admisión '891530 POTENCIALES EVOCADOS SOMATOSENSORIALES'. Cantidad autorizada es 2, se esperaba 2."):
+            self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, self.ADM)[0], DESCARTADO, desc)
+
+    def test_distintas_o_con_otro_motivo_se_mantiene(self):
+        for desc in ("Cantidad autorizada es 1, se esperaba 2 para el procedimiento 882317. Documento incorrecto.",
+                     "Cantidad autorizada no coincide: documento 'CANTIDAD 2', admisión 'cantidad 2 y 1'.",
+                     "Cantidad autorizada en el documento es 2, pero la admisión requiere 2. Procedimiento "
+                     "autorizado no coincide con el de la admisión."):
+            self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, self.ADM), desc)
+        # Zeus con otra cantidad: no se confía en la descripción
+        desc = "Cantidad autorizada en el documento es 2, mientras que la admisión es 2."
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, dict(ADMISION, cups=['882317 - DOPPLER (cant. 1)'])))
+
+
 class OrdenConMasCantidadTests(SimpleTestCase):
     def test_orden_que_pide_mas_sesiones(self):
         for desc in ("Procedimiento en documento: '992990 - INYECCIÓN O INFUSIÓN DE OTRA SUSTANCIA TERAPÉUTICA' "
@@ -260,6 +282,7 @@ class CantidadAnotadaIATests(SimpleTestCase):
 
     def test_anotacion_igual_a_zeus_queda_ok(self):
         self.assertEqual(self._revisar('2')['tipo'], 'OK')
+        self.assertEqual(self._revisar('CANTIDAD 2')['tipo'], 'OK')
 
     def test_sin_anotacion_o_distinta_se_mantiene(self):
         self.assertEqual(self._revisar('')['tipo'], 'AUTORIZACION')

@@ -33,7 +33,7 @@ from gedocumental.services.ai_revision import (
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE,
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _cantidades_esperadas, _cantidad_anotada,
-    _orden_con_mas_cantidad,
+    _orden_con_mas_cantidad, _cantidades_iguales,
     _tokens_nombre, _NO_SON_NOMBRE,
     obtener_contexto_admision,
 )
@@ -361,6 +361,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     if texto and _cantidad_anotada(texto, _cantidades_esperadas(d)):
         return DESCARTADO, (f"El PDF tiene la anotación 'CANTIDAD {_cantidades_esperadas(d)[0]}' que coincide "
                             "con la admisión; prevalece sobre la columna de la tabla.")
+
+    if _cantidades_iguales(d, datos_admision):
+        return DESCARTADO, ("La IA leyó en el documento la misma cantidad de la admisión (coincide con Zeus); "
+                            "la marcó como hallazgo por error.")
 
     if _orden_con_mas_cantidad(tipo, d):
         return DESCARTADO, ("La orden pide más cantidad de la que factura la admisión (varias sesiones); "
