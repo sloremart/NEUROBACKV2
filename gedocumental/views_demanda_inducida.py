@@ -84,17 +84,17 @@ def demanda_inducida_view(request):
                 LEFT JOIN sis_medi med ON o.cod_med  = med.codigo
                 WHERE c.codigo NOT IN (5, 6)
                   AND (
-                      UPPER(e.nombre) LIKE '%SANITAS%'
-                      OR UPPER(e.nombre) LIKE '%COLSANITAS%'
-                      OR UPPER(e.nombre) LIKE '%CAPITAL SALUD%'
-                      OR UPPER(e.nombre) LIKE '%CAPITALSALUD%'
-                      OR UPPER(e.nombre) LIKE '%FOMAG%'
-                      OR UPPER(e.nombre) LIKE '%FIDUPREVISORA%'
-                      OR UPPER(e.nombre) LIKE '%MAGISTERIO%'
-                      OR UPPER(e.nombre) LIKE '%LA PREVISORA%'
-                      OR UPPER(e.nombre) LIKE '%FIDEICOMISO%'
-                      OR UPPER(e.nombre) LIKE '%SALUD TOTAL%'
-                      OR UPPER(e.nombre) LIKE '%SALUDTOTAL%'
+                      UPPER(e.nombre) LIKE '%%SANITAS%%'
+                      OR UPPER(e.nombre) LIKE '%%COLSANITAS%%'
+                      OR UPPER(e.nombre) LIKE '%%CAPITAL SALUD%%'
+                      OR UPPER(e.nombre) LIKE '%%CAPITALSALUD%%'
+                      OR UPPER(e.nombre) LIKE '%%FOMAG%%'
+                      OR UPPER(e.nombre) LIKE '%%FIDUPREVISORA%%'
+                      OR UPPER(e.nombre) LIKE '%%MAGISTERIO%%'
+                      OR UPPER(e.nombre) LIKE '%%LA PREVISORA%%'
+                      OR UPPER(e.nombre) LIKE '%%FIDEICOMISO%%'
+                      OR UPPER(e.nombre) LIKE '%%SALUD TOTAL%%'
+                      OR UPPER(e.nombre) LIKE '%%SALUDTOTAL%%'
                   )
                   {filtro_fecha}
             """, params)
