@@ -10,8 +10,8 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 
-RPA_HUB_URL       = os.getenv("RPA_HUB_URL", "http://localhost:5050")
-DEMANDA_WEB_URL   = os.getenv("DEMANDA_WEB_URL", "http://192.168.1.211:5050")
+RPA_HUB_URL     = os.getenv("RPA_HUB_URL", "http://localhost:5055")
+DEMANDA_WEB_URL = os.getenv("DEMANDA_WEB_URL", "http://192.168.1.211:5050")
 
 # Mapa: fragmentos del nombre de entidad → código bot RPA
 EPS_MAPA = {

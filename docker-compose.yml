@@ -11,7 +11,8 @@ services:
         required: false
     environment:
       - REVISAR_CON_IA=False
-      - RPA_HUB_URL=http://rpa_bots_api:5055
+      - RPA_HUB_URL=http://192.168.1.211:5050
+      - DEMANDA_WEB_URL=http://192.168.1.211:5050
 
     volumes:
       - /media/disco1/examenes:/media/disco1/examenes
