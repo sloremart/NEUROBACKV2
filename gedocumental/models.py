@@ -225,9 +225,9 @@ class AutorizacionRPA(models.Model):
     eps          = models.CharField(max_length=50)
     doc_num      = models.CharField(max_length=30)
     status       = models.CharField(max_length=30)   # AUTORIZADO | SIN_VOLANTE | SIN_CONTRATO | ERROR
-    num_autorizacion = models.CharField(max_length=120, blank=True, null=True)
+    num_autorizacion = models.CharField(max_length=200, blank=True, null=True)
     fecha_vigencia   = models.CharField(max_length=60, blank=True, null=True)
-    servicio         = models.CharField(max_length=300, blank=True, null=True)
+    servicio         = models.TextField(blank=True, null=True)
     cups             = models.CharField(max_length=20, blank=True, null=True)
     mensaje          = models.TextField(blank=True, null=True)
     datos_completos  = models.JSONField(default=dict)   # resultado completo del bot
