@@ -31,7 +31,7 @@ from datetime import timedelta
 from gedocumental.services.ai_revision import (
     MAX_PAGINAS_LEER, MIN_CARACTERES_TEXTO, TIPOS_SIN_REVISION_IA, _buscar_palabra, _codigos_cups,
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _mismo_codigo_cups, _mismo_paciente,
-    _nombre_casi_igual, _separar_pegadas, TIPOS_SOLO_PACIENTE,
+    _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE,
     _procedimiento_documentado, _solo_motivo_procedimiento, _tokens_nombre, _NO_SON_NOMBRE,
     obtener_contexto_admision,
 )
@@ -197,6 +197,30 @@ def necesita_pdf(tipo_documento: str, descripcion: str) -> bool:
 
 # ── Reglas ───────────────────────────────────────────────────────────────────
 
+def _mismo_largo(leido: str, tokens_zeus: list) -> bool:
+    """
+    El documento tiene tantas palabras como el nombre de Zeus. Si le faltan (MAIRA JIMENEZ frente a
+    YOJEIDIS MARIA JIMENEZ MARTINEZ) o le sobran (Zeus sin el segundo apellido), el nombre está incompleto
+    en uno de los dos: no es un error de lectura y el hallazgo se mantiene.
+    """
+    return len(_separar_pegadas(_tokens_doc(leido), tokens_zeus)) == len(tokens_zeus)
+
+
+def _una_diferencia_en_orden(palabras: list, tokens_zeus: list) -> bool:
+    """
+    Las palabras coinciden con las de Zeus en el mismo orden (nombres primero o apellidos primero) salvo
+    UNA: SANTANA BEATRIZ / SANTANA BENITO sí; GOMEZ HILDA MARIA / HILDA GOMEZ BAREÑO no.
+    """
+    n = len(tokens_zeus)
+    if len(palabras) != n:
+        return False
+    for k in range(n):
+        rotado = tokens_zeus[k:] + tokens_zeus[:k]
+        if sum(1 for a, b in zip(palabras, rotado) if not _misma_palabra(a, b)) == 1:
+            return True
+    return False
+
+
 def _variante_confirmada(palabra: str, tokens_zeus: list, otras: list) -> bool:
     """
     True si otros documentos respaldan la palabra que difiere de Zeus: uno la escribe igual, o dos o más
@@ -274,7 +298,8 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
                                f"diferencia solo de formato).")
         if tipo in TIPOS_SOLO_PACIENTE:
             return _solo_paciente(leido)
-        if tipo in TIPOS_DE_TERCEROS and autorizacion and _nombre_casi_igual(_tokens_doc(leido), tokens_adm):
+        if (tipo in TIPOS_DE_TERCEROS and autorizacion and _mismo_largo(leido, tokens_adm)
+                and _nombre_casi_igual(_tokens_doc(leido), tokens_adm)):
             distintas = [t for t in _separar_pegadas(_tokens_doc(leido), tokens_adm)
                          if not _buscar_palabra(t, tokens_adm)]
             aut_como_zeus = _mismo_paciente({'nombre_documento': autorizacion.get('nombre') or '',
@@ -295,8 +320,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
                                                  datos_admision)]
             # Casi igual letra por letra (RODRIGEZ / RODRIGUEZ), o una sola palabra distinta y al menos dos
             # iguales (SANTANA BEATRIZ / SANTANA BENITO) cuando otro documento confirma el nombre de Zeus
-            una_palabra = len(distintas) == 1 and len(palabras) - 1 >= 2 and confirman_zeus
-            if nadie_repite and (_nombre_casi_igual(_tokens_doc(leido), tokens_adm) or una_palabra):
+            una_palabra = (len(distintas) == 1 and len(palabras) - 1 >= 2 and confirman_zeus
+                           and _una_diferencia_en_orden(palabras, tokens_adm))
+            if (nadie_repite and _mismo_largo(leido, tokens_adm)
+                    and (_nombre_casi_igual(_tokens_doc(leido), tokens_adm) or una_palabra)):
                 return DESCARTADO, (f"Ningún otro documento de la admisión escribe el nombre como '{leido}' "
                                     f"({_resumen_lecturas(conocidas, 'nombre')}); ZeusSalud: "
                                     f"{datos_admision.get('paciente')}. Error de lectura del escaneo o de "

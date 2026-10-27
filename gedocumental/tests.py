@@ -419,6 +419,36 @@ class LecturasDeOtrosDocumentosTests(SimpleTestCase):
                  self._otra('HCLINICA', '21242426', self.ADM['paciente'])]
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.AUT, self.ADM, otras=otras))
 
+    def test_nombre_incompleto_en_el_documento_se_mantiene(self):
+        # 33391: la orden solo dice 'MAIRA JIMENEZ'
+        adm = dict(ADMISION, paciente='YOJEIDIS MARIA JIMENEZ MARTINEZ')
+        desc = "Nombre del usuario incorrecto: documento 'MAIRA JIMENEZ', admisión 'YOJEIDIS MARIA JIMENEZ MARTINEZ'."
+        otras = [self._otra('COMPROBANTE', None, adm['paciente'])]
+        self.assertIsNone(evaluar_hallazgo('ORDEN', desc, adm, otras=otras))
+        aut = {'nombre': adm['paciente'], 'documento': None}
+        self.assertIsNone(evaluar_hallazgo('ORDEN', desc, adm, autorizacion=aut, otras=otras))
+
+    def test_palabra_distinta_fuera_de_orden_se_mantiene(self):
+        # 33081: 'GOMEZ HILDA MARIA' frente a Zeus 'HILDA GOMEZ BAREÑO'
+        adm = dict(ADMISION, paciente='HILDA GOMEZ BAREÑO')
+        desc = "Nombre del usuario incorrecto: documento 'GOMEZ HILDA MARIA', admisión 'HILDA GOMEZ BAREÑO'."
+        otras = [self._otra('COMPROBANTE', None, adm['paciente'])]
+        self.assertIsNone(evaluar_hallazgo('ORDEN', desc, adm, otras=otras))
+
+    def test_zeus_con_el_nombre_incompleto_se_mantiene(self):
+        # 33059: el documento trae un apellido que Zeus no tiene
+        adm = dict(ADMISION, paciente='ANGEL MARIA AVILA')
+        desc = "Nombre del usuario incorrecto: documento 'Ángel María Ávila Rivera', admisión 'ANGEL MARIA AVILA'."
+        otras = [self._otra('COMPROBANTE', None, adm['paciente'])]
+        self.assertIsNone(evaluar_hallazgo('ORDEN', desc, adm, otras=otras))
+
+    def test_apellidos_primero_con_una_palabra_mal_leida(self):
+        adm = dict(ADMISION, paciente='MARIA EDELMIRA SANTANA BENITO')
+        desc = ("Nombre del usuario incorrecto: documento 'SANTANA BEATRIZ MARIA EDELMIRA', "
+                "admisión 'MARIA EDELMIRA SANTANA BENITO'.")
+        otras = [self._otra('ORDEN', None, adm['paciente'])]
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras)[0], DESCARTADO)
+
     def test_lecturas_admision_ultima_revision_de_cada_archivo(self):
         revisiones = [
             SimpleNamespace(IdArchivo_id=1, TipoDocumento='AUTORIZACION', TipoHallazgo='INFORMACION',
