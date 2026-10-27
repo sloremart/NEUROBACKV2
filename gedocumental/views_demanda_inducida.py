@@ -274,8 +274,14 @@ def consultar_autorizacion_view(request):
             # Solo devolver si no es ERROR y la vigencia no ha expirado
             if registro.status not in ("ERROR", "ERROR_CREDENCIALES") and \
                not _vigencia_expirada(registro.fecha_vigencia):
-                datos = registro.datos_completos or {}
+                datos = dict(registro.datos_completos or {})
                 datos["_from_db"] = True
+                archivos_db = list(datos.get("archivos") or datos.get("archivos_descargados") or [])
+                for arch in archivos_db:
+                    url = arch.get("url_descarga", "")
+                    if url.startswith("/api/"):
+                        arch["url_descarga"] = DEMANDA_WEB_URL + url
+                datos["ValEpsArchivos"] = archivos_db
                 return JsonResponse({"success": True, "data": datos})
             # Si venció o fue error → re-consultar (continúa abajo)
         except AutorizacionRPA.DoesNotExist:
