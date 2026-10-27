@@ -39,6 +39,7 @@ from gedocumental.services.ai_revision import (
 logger = logging.getLogger(__name__)
 
 CORREGIDO, DESCARTADO = 'CORREGIDO', 'DESCARTADO'
+ACEPTADO = 'ACEPTADO'   # cerrado a mano: el documento sí tiene el error (comando aceptar_hallazgo)
 REVERIFICAR_PDF_CADA_HORAS = 24
 MAX_SEGUNDOS_PDF = 120          # tope de lectura de PDFs por ejecución
 MAX_SEGUNDOS_POR_PDF = 20
@@ -151,7 +152,7 @@ def _lectura_de_revision(r, datos_admision: dict) -> dict | None:
     if r.TipoHallazgo != 'OK' and re.search(r'Paciente en documento|paciente no coincide', d, re.IGNORECASE):
         return None   # formato antiguo de "otra persona": no dice qué número/nombre leyó
     if (r.TipoHallazgo == 'OK'
-            or (r.Resuelta and getattr(r, 'Resolucion', None) not in (DESCARTADO, CORREGIDO))
+            or (r.Resuelta and getattr(r, 'Resolucion', None) not in (DESCARTADO, CORREGIDO, ACEPTADO))
             or (getattr(r, 'Resolucion', None) == DESCARTADO
                 and (getattr(r, 'NotaResolucion', '') or '').startswith('El PDF'))
             or not re.search(r'Nombre del usuario incorrecto|Número de documento incorrecto|Paciente no corresponde',

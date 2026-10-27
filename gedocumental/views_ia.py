@@ -72,6 +72,7 @@ def hallazgos_ia(request):
             # Validaciones incorrectas de la IA que el sistema cerró solo, y correcciones hechas en Zeus
             descartados=Count('IdRevision', filter=Q(Resolucion='DESCARTADO')),
             corregidos=Count('IdRevision', filter=Q(Resolucion='CORREGIDO') & ~Q(TipoHallazgo='OK')),
+            aceptados=Count('IdRevision', filter=Q(Resolucion='ACEPTADO')),
         )
 
         hallazgos = revisiones.exclude(TipoHallazgo='OK')

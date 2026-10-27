@@ -390,11 +390,15 @@ def archivos_por_admision(request, numero_admision):
         revision_ia = {}
         for r in RevisionIA.objects.filter(IdArchivo__in=archivos).order_by('IdRevision'):
             # Un hallazgo cerrado como CORREGIDO (ej. el nombre se corrigió en Zeus) o DESCARTADO (la IA
-            # leyó mal y el sistema lo comprobó en el PDF) se muestra como OK
-            corregido = r.Resuelta and r.Resolucion in ('CORREGIDO', 'DESCARTADO') and r.TipoHallazgo != 'OK'
+            # leyó mal y el sistema lo comprobó en el PDF) se muestra como OK; también uno ACEPTADO a mano
+            corregido = r.Resuelta and r.Resolucion in ('CORREGIDO', 'DESCARTADO', 'ACEPTADO') and r.TipoHallazgo != 'OK'
+            if r.Resolucion == 'ACEPTADO':
+                texto_ok = f"Hallazgo aceptado: {r.NotaResolucion}" if r.NotaResolucion else "Hallazgo aceptado"
+            else:
+                texto_ok = "Hallazgo corregido"
             revision_ia[r.IdArchivo_id] = {
                 "tipo": "OK" if corregido else r.TipoHallazgo,
-                "descripcion": "Hallazgo corregido" if corregido else r.Descripcion,
+                "descripcion": texto_ok if corregido else r.Descripcion,
                 "resuelta": r.Resuelta,
             }
 

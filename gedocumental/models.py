@@ -184,6 +184,7 @@ class RevisionIA(models.Model):
         ('REEMPLAZADO', 'Reemplazado por una nueva revisión'),
         ('ARCHIVO_ELIMINADO', 'Archivo eliminado'),
         ('DESCARTADO', 'Descartado por el sistema (la IA leyó mal el documento)'),
+        ('ACEPTADO', 'Aceptado manualmente (el documento tiene el error y se acepta así)'),
     ]
 
     IdRevision = models.AutoField(primary_key=True)

@@ -191,6 +191,16 @@ class ProcedimientoTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('ORDEN', desc, ADMISION, texto=texto))
 
 
+class HallazgoAceptadoTests(SimpleTestCase):
+    def test_aceptado_conserva_lo_que_leyo_la_ia(self):
+        # 33391: orden con 'MAIRA JIMENEZ' aceptada a mano; el documento sigue teniendo ese nombre
+        adm = dict(ADMISION, paciente='YOJEIDIS MARIA JIMENEZ MARTINEZ')
+        r = SimpleNamespace(TipoHallazgo='INFORMACION', Resuelta=True, Resolucion='ACEPTADO', NotaResolucion='x',
+                            Descripcion="Nombre del usuario incorrecto: documento 'MAIRA JIMENEZ', "
+                                        "admisión 'YOJEIDIS MARIA JIMENEZ MARTINEZ'.")
+        self.assertEqual(reverificacion._lectura_de_revision(r, adm)['nombre'], 'MAIRA JIMENEZ')
+
+
 class ProcedimientoAdicionalTests(SimpleTestCase):
     """Caso orden 759574: trae TAC de tórax (el de la admisión) y además un ecocardiograma."""
     ADM = dict(ADMISION, cups=['879301 - TOMOGRAFÍA COMPUTADA DE TÓRAX (cant. 1)'])
