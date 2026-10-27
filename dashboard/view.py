@@ -2840,13 +2840,15 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             ''', base_params)
             filtros_contratos = [r[0] for r in cursor.fetchall() if r[0]]
 
-            # 8. KPI: cantidad de servicios prestados (líneas sis_deta) y pacientes únicos
+            # 8. KPI: cantidad de servicios prestados (líneas sis_deta) y pacientes únicos.
+            # sis_maes.autoid es el id del PACIENTE (sis_paci.autoid); el detalle de la admisión se une
+            # por sis_deta.estudio = sis_maes.con_estudio
             cursor.execute(f'''
                 SELECT
-                    COUNT(sd.autoid)                     AS cantidad_servicios,
-                    COUNT(DISTINCT sm.nro_documento)     AS total_pacientes
+                    COUNT(*)                             AS cantidad_servicios,
+                    COUNT(DISTINCT sm.autoid)            AS total_pacientes
                 FROM sis_maes sm
-                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN contratos c    ON c.codigo    = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
                 WHERE {base_where}{extra_clause}
