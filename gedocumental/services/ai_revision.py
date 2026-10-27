@@ -103,6 +103,9 @@ VERIFICACIONES OBLIGATORIAS (en este orden):
    Ante la duda razonable de que sea el mismo estudio, considéralo coincidente (procedimientos_coinciden = SI).
 3. Solo si 1 y 2 están bien, revisa el resto según la tabla de convenciones (fechas, vigencia, cantidades,
    firmas, legibilidad, datos incompletos).
+   CANTIDADES: si la autorización trae, además de la tabla, una anotación u observación de cantidad (ej.
+   "CANTIDAD 2" al pie de la autorización, impresa o a mano), ESA es la cantidad autorizada y prevalece
+   sobre la columna "Cantidad" de la tabla.
 Si hay varios problemas, el tipo es el del primero según este orden, y en la descripción menciona también los demás de forma breve.
 No marques como error que el documento no traiga un dato que normalmente no lleva ese tipo de documento.
 

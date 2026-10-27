@@ -201,6 +201,28 @@ class HallazgoAceptadoTests(SimpleTestCase):
         self.assertEqual(reverificacion._lectura_de_revision(r, adm)['nombre'], 'MAIRA JIMENEZ')
 
 
+class CantidadAnotadaTests(SimpleTestCase):
+    """Caso 33486: tabla con cantidad 1, pero al pie de cada autorización 'CANTIDAD 2' (Zeus: 2 y 2)."""
+    DESC = ("Cantidad autorizada para RADIOGRAFÍA DE CADERA es 1, se esperaba 2; para RADIOGRAFÍA DE PIE es 1, "
+            "se esperaba 2.")
+    PAGINA = ("AUTORIZACION DE SERVICIOS\nServicios Autorizados Cantidad\n{cups} 1\n"
+              "NO REQUIERE PAGO\nVALIDO HASTA 20261214\nCANTIDAD 2\n")
+    TEXTO = PAGINA.format(cups='873411 RADIOGRAFIA DE CADERA') + PAGINA.format(cups='873333 RADIOGRAFIA DE PIE')
+
+    def test_anotacion_de_cantidad_en_cada_pagina(self):
+        self.assertTrue(necesita_pdf('AUTORIZACION', self.DESC))
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, ADMISION, texto=self.TEXTO)[0], DESCARTADO)
+
+    def test_anotacion_solo_en_una_pagina_se_mantiene(self):
+        texto = self.PAGINA.format(cups='873411') + "AUTORIZACION 873333 RADIOGRAFIA DE PIE 1\n"
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, ADMISION, texto=texto))
+
+    def test_sin_texto_o_con_otro_motivo_se_mantiene(self):
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, ADMISION))
+        desc = self.DESC + " Autorización vencida."
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, ADMISION, texto=self.TEXTO))
+
+
 class ContrasteTests(SimpleTestCase):
     """Caso 33457: orden de RM de abdomen y pelvis con contraste; los CUPS no dicen simple ni contrastado."""
     ADM = dict(ADMISION, cups=['883401 - RESONANCIA MAGNÉTICA DE ABDOMEN (cant. 1)',

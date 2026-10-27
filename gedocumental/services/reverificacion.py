@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 from datetime import timedelta
 
 from gedocumental.services.ai_revision import (
@@ -193,7 +194,30 @@ def necesita_pdf(tipo_documento: str, descripcion: str) -> bool:
         return True
     if _es_comprobante(tipo_documento) and _solo_motivo_firma(d):
         return True
+    if _cantidades_esperadas(d):
+        return True
     return _solo_motivo_procedimiento(d) and not _menciona_lateralidad(d)
+
+
+def _cantidades_esperadas(descripcion: str) -> list:
+    """
+    Cantidades de la admisión en un hallazgo cuyo único motivo es la cantidad ("Cantidad autorizada para
+    RADIOGRAFÍA DE CADERA es 1, se esperaba 2; ..."); [] si el hallazgo trae otro motivo.
+    """
+    d = unicodedata.normalize('NFKD', descripcion or '').encode('ascii', 'ignore').decode().lower()
+    if 'cantidad' not in d or re.search(r'vencid|vigencia|nombre|identificacion|firma|legib|no cubre|'
+                                        r'no incluye|no corresponde|numero de autorizacion|sin numero', d):
+        return []
+    return [int(n) for n in re.findall(r'se esperaba(?:n)?\s+(\d+)', d)]
+
+
+def _cantidad_anotada(texto: str, esperadas: list) -> bool:
+    """True si el PDF trae "CANTIDAD N" (anotación al pie) con la cantidad esperada para cada procedimiento."""
+    if not esperadas or len(set(esperadas)) != 1:
+        return False
+    n = esperadas[0]
+    anotadas = re.findall(rf'\bCANTIDAD\s*[:=]?\s*{n}\b', unicodedata.normalize('NFKD', texto or '').upper())
+    return len(anotadas) >= len(esperadas)
 
 
 # ── Reglas ───────────────────────────────────────────────────────────────────
@@ -352,6 +376,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
 
     if _es_comprobante(tipo) and firma is True and _solo_motivo_firma(d):
         return DESCARTADO, "El sistema detecta la firma del paciente en el PDF."
+
+    if texto and _cantidad_anotada(texto, _cantidades_esperadas(d)):
+        return DESCARTADO, (f"El PDF tiene la anotación 'CANTIDAD {_cantidades_esperadas(d)[0]}' que coincide "
+                            "con la admisión; prevalece sobre la columna de la tabla.")
 
     if not _es_comprobante(tipo) and _solo_motivo_contraste(d, datos_admision):
         return DESCARTADO, ("Solo difiere el contraste y el CUPS de la admisión no distingue simple de "
