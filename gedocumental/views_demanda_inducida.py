@@ -15,13 +15,18 @@ DEMANDA_WEB_URL = os.getenv("DEMANDA_WEB_URL", "http://192.168.1.211:5050")
 
 # Mapa: fragmentos del nombre de entidad → código bot RPA
 EPS_MAPA = {
-    "SANITAS":       "colsanitas",
-    "COLSANITAS":    "colsanitas",
-    "CAPITAL SALUD": "capital_salud",
-    "CAPITALSALUD":  "capital_salud",
-    "FOMAG":         "fomag",
-    "SALUD TOTAL":   "salud_total",
-    "SALUDTOTAL":    "salud_total",
+    "SANITAS":               "colsanitas",
+    "COLSANITAS":            "colsanitas",
+    "CAPITAL SALUD":         "capital_salud",
+    "CAPITALSALUD":          "capital_salud",
+    "FOMAG":                 "fomag",
+    "MAGISTERIO":            "fomag",
+    "FIDUPREVISORA":         "fomag",
+    "LA PREVISORA":          "fomag",
+    "FIDEICOMISO":           "fomag",
+    "PRESTACIONES SOCIALES": "fomag",
+    "SALUD TOTAL":           "salud_total",
+    "SALUDTOTAL":            "salud_total",
 }
 
 
