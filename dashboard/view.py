@@ -2840,6 +2840,21 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             ''', base_params)
             filtros_contratos = [r[0] for r in cursor.fetchall() if r[0]]
 
+            # 8. KPI: cantidad de servicios prestados (líneas sis_deta) y pacientes únicos
+            cursor.execute(f'''
+                SELECT
+                    COUNT(sd.autoid)                     AS cantidad_servicios,
+                    COUNT(DISTINCT sm.nro_documento)     AS total_pacientes
+                FROM sis_maes sm
+                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                LEFT JOIN contratos c    ON c.codigo    = sm.contrato
+                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                WHERE {base_where}{extra_clause}
+            ''', base_params + extra_params)
+            row_kpis_extra = cursor.fetchone()
+            cantidad_servicios = int(row_kpis_extra[0]) if row_kpis_extra and row_kpis_extra[0] else 0
+            total_pacientes    = int(row_kpis_extra[1]) if row_kpis_extra and row_kpis_extra[1] else 0
+
         # Procesar cartera
         _labels  = {'asegurada': 'Cartera Asegurada', 'por_radicar': 'Facturado por Radicar',
                     'no_facturado': 'No Facturado',    'particulares': 'Ventas Particulares'}
@@ -2854,10 +2869,12 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             'fecha_inicio': str(fecha_inicio),
             'fecha_fin':    str(fecha_fin),
             'kpis': {
-                'total_valor':    sum(v['valor']    for v in cartera_acc.values()),
-                'total_estudios': sum(v['estudios'] for v in cartera_acc.values()),
-                'total_contratos': len(rows_contratos),
-                'total_medicos':   len(rows_medicos),
+                'total_valor':         sum(v['valor']    for v in cartera_acc.values()),
+                'total_estudios':      sum(v['estudios'] for v in cartera_acc.values()),
+                'total_contratos':     len(rows_contratos),
+                'total_medicos':       len(rows_medicos),
+                'cantidad_servicios':  cantidad_servicios,
+                'total_pacientes':     total_pacientes,
             },
             'cartera': [
                 {
