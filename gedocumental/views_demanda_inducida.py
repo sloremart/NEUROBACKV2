@@ -159,7 +159,8 @@ def demanda_inducida_view(request):
                         item["ValEpsAutorizacion"] = aut.num_autorizacion or ""
                         item["ValEpsVigencia"]     = aut.fecha_vigencia or ""
                         item["ValEpsMensaje"]      = aut.mensaje or ""
-                        archivos_raw = (aut.datos_completos or {}).get("archivos", [])
+                        dc = aut.datos_completos or {}
+                        archivos_raw = dc.get("archivos") or dc.get("archivos_descargados", [])
                         # Rutas relativas /api/descarga_fomag/ y /api/adjunto_orden/ viven en Flask
                         for arch in archivos_raw:
                             url = arch.get("url_descarga", "")
