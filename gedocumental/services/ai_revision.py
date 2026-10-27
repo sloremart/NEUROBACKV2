@@ -105,7 +105,8 @@ VERIFICACIONES OBLIGATORIAS (en este orden):
    firmas, legibilidad, datos incompletos).
    CANTIDADES: si la autorización trae, además de la tabla, una anotación u observación de cantidad (ej.
    "CANTIDAD 2" al pie de la autorización, impresa o a mano), ESA es la cantidad autorizada y prevalece
-   sobre la columna "Cantidad" de la tabla.
+   sobre la columna "Cantidad" de la tabla. En una ORDEN, que pida MÁS cantidad que la admisión no es error
+   (la orden cubre varias sesiones y cada admisión factura las suyas); solo es error si pide menos.
 Si hay varios problemas, el tipo es el del primero según este orden, y en la descripción menciona también los demás de forma breve.
 No marques como error que el documento no traiga un dato que normalmente no lleva ese tipo de documento.
 
@@ -580,7 +581,8 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         zeus = _cantidades_zeus(datos_admision)
         anotada = str(resultado.get("cantidad_anotada") or '').strip()
         if ((zeus and len(set(zeus)) == 1 and anotada.isdigit() and int(anotada) == zeus[0])
-                or _cantidad_anotada(texto, zeus)):
+                or _cantidad_anotada(texto, zeus)
+                or _orden_con_mas_cantidad(tipo_documento, resultado.get("descripcion"))):
             logger.info("%s: la cantidad anotada coincide con Zeus, se descarta '%s'",
                         tipo_documento, resultado.get("descripcion"))
             resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cantidad=True)
@@ -1108,6 +1110,18 @@ def _solo_motivo_cantidad(descripcion) -> bool:
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
     return 'cantidad' in d and not re.search(r'vencid|vigencia|nombre|identificacion|firma|legib|no cubre|'
                                              r'no incluye|no corresponde|numero de autorizacion|sin numero', d)
+
+
+def _orden_con_mas_cantidad(tipo_documento, descripcion) -> bool:
+    """
+    ORDEN que pide MÁS de lo que factura la admisión ("cantidad es 6, se esperaba 1"; "Cantidad en documento
+    (4) ... admisión (1)"): la orden cubre varias sesiones y cada admisión factura las suyas; no es error.
+    """
+    import re
+    if (tipo_documento or '').upper() != 'ORDEN' or not _solo_motivo_cantidad(descripcion):
+        return False
+    numeros = [int(n) for n in re.findall(r'(?<!\d)(?<!\d[.,])(\d{1,3})(?!\d)(?![.,]\d)', str(descripcion))]
+    return len(numeros) == 2 and numeros[0] > numeros[1]
 
 
 def _cantidades_zeus(datos_admision: dict) -> list:

@@ -223,6 +223,20 @@ class CantidadAnotadaTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, ADMISION, texto=self.TEXTO))
 
 
+class OrdenConMasCantidadTests(SimpleTestCase):
+    def test_orden_que_pide_mas_sesiones(self):
+        for desc in ("Procedimiento en documento: '992990 - INYECCIÓN O INFUSIÓN DE OTRA SUSTANCIA TERAPÉUTICA' "
+                     "pero cantidad es 6, se esperaba 1.",
+                     "Cantidad en documento (4) no coincide con la cantidad esperada en admisión (1) para el "
+                     "procedimiento 992990."):
+            self.assertEqual(evaluar_hallazgo('ORDEN', desc, ADMISION)[0], DESCARTADO, desc)
+
+    def test_orden_con_menos_o_autorizacion_se_mantiene(self):
+        self.assertIsNone(evaluar_hallazgo('ORDEN', "Cantidad en documento es 1, se esperaba 2.", ADMISION))
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', "Cantidad autorizada es 6, se esperaba 1.", ADMISION))
+        self.assertIsNone(evaluar_hallazgo('ORDEN', "Cantidad es 6, se esperaba 1; orden vencida.", ADMISION))
+
+
 class CantidadAnotadaIATests(SimpleTestCase):
     """Revisión nueva de un escaneado como el 33486: la IA devuelve cantidad_anotada y el sistema compara con Zeus."""
     ADM = dict(ADMISION, cups=['873411 - RADIOGRAFÍA DE CADERA (cant. 2)', '873333 - RADIOGRAFÍA DE PIE (cant. 2)'])
