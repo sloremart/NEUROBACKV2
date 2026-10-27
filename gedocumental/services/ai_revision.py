@@ -138,6 +138,7 @@ aunque la primera ya haya fallado:
   "procedimientos_documento": "<CUPS/procedimientos que trae el documento, o 'no aplica'>",
   "procedimientos_coinciden": "SI | NO | NO_APLICA",
   "firma_paciente": "SI | NO | NO_APLICA   (solo COMPROBANTE; en otros documentos NO_APLICA)",
+  "cantidad_anotada": "<solo AUTORIZACION: el número de la anotación u observación de cantidad que está FUERA de la tabla (ej. 'CANTIDAD 2' al pie), o '' si no hay>",
   "estudio_documento": {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
   "estudio_admision":  {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
   "recaudo": {"requiere_pago": "SI | NO | NO_INDICA", "tipo_cobro": "CUOTA_MODERADORA | COPAGO | NO_INDICA",
@@ -570,6 +571,19 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         logger.info("%s: solo difiere el contraste, se descarta '%s'", tipo_documento, resultado.get("descripcion"))
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_contraste=True)
+
+    # Cantidad: la anotación "CANTIDAD N" al pie de la autorización (leída por la IA en cantidad_anotada,
+    # o en el texto del PDF digital) prevalece sobre la tabla; si coincide con Zeus no es error
+    if (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
+            and resultado.get("paciente_coincide") != "NO"
+            and _solo_motivo_cantidad(resultado.get("descripcion"))):
+        zeus = _cantidades_zeus(datos_admision)
+        anotada = str(resultado.get("cantidad_anotada") or '').strip()
+        if ((zeus and len(set(zeus)) == 1 and anotada.isdigit() and int(anotada) == zeus[0])
+                or _cantidad_anotada(texto, zeus)):
+            logger.info("%s: la cantidad anotada coincide con Zeus, se descarta '%s'",
+                        tipo_documento, resultado.get("descripcion"))
+            resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cantidad=True)
 
     # Soportes del paciente (HC, adicionales): si es del paciente correcto, cualquier otro motivo se descarta
     if ((tipo_documento or '').upper() in TIPOS_SOLO_PACIENTE and resultado["tipo"] != "OK"
@@ -1073,6 +1087,45 @@ def _solo_motivo_contraste(descripcion, datos_admision) -> bool:
                      r'lateralidad|derech|izquierd', d)
     return bool(re.search(r'contrast', d) and not re.search(r'contrast|simple', cups)
                 and not otro and not re.search(_OTROS_MOTIVOS, d))
+
+
+def _cantidades_esperadas(descripcion) -> list:
+    """
+    Cantidades de la admisión en un hallazgo cuyo único motivo es la cantidad ("Cantidad autorizada para
+    RADIOGRAFÍA DE CADERA es 1, se esperaba 2; ..."); [] si el hallazgo trae otro motivo.
+    """
+    import re
+    import unicodedata
+    d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    if not _solo_motivo_cantidad(d):
+        return []
+    return [int(n) for n in re.findall(r'se esperaba(?:n)?\s+(\d+)', d)]
+
+
+def _solo_motivo_cantidad(descripcion) -> bool:
+    import re
+    import unicodedata
+    d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    return 'cantidad' in d and not re.search(r'vencid|vigencia|nombre|identificacion|firma|legib|no cubre|'
+                                             r'no incluye|no corresponde|numero de autorizacion|sin numero', d)
+
+
+def _cantidades_zeus(datos_admision: dict) -> list:
+    """Cantidades de cada CUPS de la admisión ('873411 - RADIOGRAFÍA ... (cant. 2)')."""
+    import re
+    return [int(m.group(1)) for c in (datos_admision.get('cups') or [])
+            for m in [re.search(r'\(cant\.\s*(\d+)\)', str(c))] if m]
+
+
+def _cantidad_anotada(texto: str, esperadas: list) -> bool:
+    """True si el PDF trae "CANTIDAD N" (anotación al pie) con la cantidad esperada para cada procedimiento."""
+    import re
+    import unicodedata
+    if not esperadas or len(set(esperadas)) != 1:
+        return False
+    n = esperadas[0]
+    anotadas = re.findall(rf'\bCANTIDAD\s*[:=]?\s*{n}\b', unicodedata.normalize('NFKD', texto or '').upper())
+    return len(anotadas) >= len(esperadas)
 
 
 def _solo_procedimiento_adicional(descripcion) -> bool:

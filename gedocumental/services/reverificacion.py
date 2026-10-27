@@ -26,14 +26,14 @@ import logging
 import os
 import re
 import time
-import unicodedata
 from datetime import timedelta
 
 from gedocumental.services.ai_revision import (
     MAX_PAGINAS_LEER, MIN_CARACTERES_TEXTO, TIPOS_SIN_REVISION_IA, _buscar_palabra, _codigos_cups,
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE,
-    _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _tokens_nombre, _NO_SON_NOMBRE,
+    _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _cantidades_esperadas, _cantidad_anotada,
+    _tokens_nombre, _NO_SON_NOMBRE,
     obtener_contexto_admision,
 )
 
@@ -198,26 +198,6 @@ def necesita_pdf(tipo_documento: str, descripcion: str) -> bool:
         return True
     return _solo_motivo_procedimiento(d) and not _menciona_lateralidad(d)
 
-
-def _cantidades_esperadas(descripcion: str) -> list:
-    """
-    Cantidades de la admisión en un hallazgo cuyo único motivo es la cantidad ("Cantidad autorizada para
-    RADIOGRAFÍA DE CADERA es 1, se esperaba 2; ..."); [] si el hallazgo trae otro motivo.
-    """
-    d = unicodedata.normalize('NFKD', descripcion or '').encode('ascii', 'ignore').decode().lower()
-    if 'cantidad' not in d or re.search(r'vencid|vigencia|nombre|identificacion|firma|legib|no cubre|'
-                                        r'no incluye|no corresponde|numero de autorizacion|sin numero', d):
-        return []
-    return [int(n) for n in re.findall(r'se esperaba(?:n)?\s+(\d+)', d)]
-
-
-def _cantidad_anotada(texto: str, esperadas: list) -> bool:
-    """True si el PDF trae "CANTIDAD N" (anotación al pie) con la cantidad esperada para cada procedimiento."""
-    if not esperadas or len(set(esperadas)) != 1:
-        return False
-    n = esperadas[0]
-    anotadas = re.findall(rf'\bCANTIDAD\s*[:=]?\s*{n}\b', unicodedata.normalize('NFKD', texto or '').upper())
-    return len(anotadas) >= len(esperadas)
 
 
 # ── Reglas ───────────────────────────────────────────────────────────────────

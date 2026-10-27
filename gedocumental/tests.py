@@ -223,6 +223,39 @@ class CantidadAnotadaTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, ADMISION, texto=self.TEXTO))
 
 
+class CantidadAnotadaIATests(SimpleTestCase):
+    """Revisión nueva de un escaneado como el 33486: la IA devuelve cantidad_anotada y el sistema compara con Zeus."""
+    ADM = dict(ADMISION, cups=['873411 - RADIOGRAFÍA DE CADERA (cant. 2)', '873333 - RADIOGRAFÍA DE PIE (cant. 2)'])
+
+    def _revisar(self, anotada, adm=None):
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        respuesta = {
+            "paciente_documento": "JUAN ALEXIS BEJARANO PEÑA", "nombre_documento": "JUAN ALEXIS BEJARANO PEÑA",
+            "identificacion_documento": "1121978991", "paciente_coincide": "SI",
+            "procedimientos_documento": "873411; 873333", "procedimientos_coinciden": "SI",
+            "firma_paciente": "NO_APLICA", "cantidad_anotada": anotada, "tipo": "AUTORIZACION",
+            "descripcion": CantidadAnotadaTests.DESC,
+        }
+        client = mock.MagicMock()
+        client.chat.completions.create.return_value.choices = [
+            mock.MagicMock(message=mock.MagicMock(content=json.dumps(respuesta)))]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            return _llamar_openai('', ['img'], 'AUTORIZACION', adm or self.ADM)
+
+    def test_anotacion_igual_a_zeus_queda_ok(self):
+        self.assertEqual(self._revisar('2')['tipo'], 'OK')
+
+    def test_sin_anotacion_o_distinta_se_mantiene(self):
+        self.assertEqual(self._revisar('')['tipo'], 'AUTORIZACION')
+        self.assertEqual(self._revisar('3')['tipo'], 'AUTORIZACION')
+
+    def test_zeus_con_cantidades_distintas_se_mantiene(self):
+        adm = dict(ADMISION, cups=['873411 - RADIOGRAFÍA DE CADERA (cant. 2)', '873333 - RADIOGRAFÍA DE PIE (cant. 1)'])
+        self.assertEqual(self._revisar('2', adm)['tipo'], 'AUTORIZACION')
+
+
 class ContrasteTests(SimpleTestCase):
     """Caso 33457: orden de RM de abdomen y pelvis con contraste; los CUPS no dicen simple ni contrastado."""
     ADM = dict(ADMISION, cups=['883401 - RESONANCIA MAGNÉTICA DE ABDOMEN (cant. 1)',
