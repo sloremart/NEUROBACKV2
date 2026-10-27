@@ -197,6 +197,23 @@ def necesita_pdf(tipo_documento: str, descripcion: str) -> bool:
 
 # ── Reglas ───────────────────────────────────────────────────────────────────
 
+def _variante_confirmada(palabra: str, tokens_zeus: list, otras: list) -> bool:
+    """
+    True si otros documentos respaldan la palabra que difiere de Zeus: uno la escribe igual, o dos o más
+    escriben una variante parecida (≥ 0.8) que tampoco es la de Zeus. Entonces el error es de Zeus.
+    """
+    from difflib import SequenceMatcher
+    parecidas = 0
+    for x in otras:
+        tokens = _tokens_nombre(x.get('nombre'))
+        if _buscar_palabra(palabra, tokens):
+            return True
+        if any(not _buscar_palabra(t, tokens_zeus) and SequenceMatcher(None, palabra, t).ratio() >= 0.8
+               for t in tokens):
+            parecidas += 1
+    return parecidas >= 2
+
+
 def _resumen_lecturas(lecturas: list, campo: str) -> str:
     return "; ".join(f"{x.get('tipo', '')}: {x.get(campo)}" for x in lecturas[:4])
 
@@ -241,7 +258,8 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
                                 f"la autorización de la EPS coincide con ZeusSalud ({id_adm}).")
         if otras and id_adm and _numero_parecido(id_doc, id_adm):
             conocidas = [x for x in otras if x.get('documento')]
-            if conocidas and not any(x['documento'] == id_doc for x in conocidas):
+            parecidos = [x for x in conocidas if x['documento'] != id_adm and _numero_parecido(x['documento'], id_doc)]
+            if conocidas and not any(x['documento'] == id_doc for x in conocidas) and len(parecidos) < 2:
                 return DESCARTADO, (f"Ningún otro documento de la admisión tiene el número {id_doc} "
                                     f"({_resumen_lecturas(conocidas, 'documento')}); ZeusSalud: {id_adm}. "
                                     "Error de lectura del escaneo o de escritura de un solo documento.")
@@ -259,8 +277,9 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
         if tipo in TIPOS_DE_TERCEROS and autorizacion and _nombre_casi_igual(_tokens_doc(leido), tokens_adm):
             distintas = [t for t in _separar_pegadas(_tokens_doc(leido), tokens_adm)
                          if not _buscar_palabra(t, tokens_adm)]
-            tokens_aut = _tokens_nombre(autorizacion.get('nombre'))
-            if distintas and tokens_aut and not any(_buscar_palabra(t, tokens_aut) for t in distintas):
+            aut_como_zeus = _mismo_paciente({'nombre_documento': autorizacion.get('nombre') or '',
+                                             'identificacion_documento': ''}, datos_admision)
+            if distintas and aut_como_zeus:
                 return DESCARTADO, (f"Error de escritura del nombre en el documento del tercero ('{leido}'); "
                                     f"la autorización de la EPS coincide con ZeusSalud "
                                     f"({datos_admision.get('paciente')}).")
@@ -269,7 +288,7 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
             distintas = [t for t in palabras if not _buscar_palabra(t, tokens_adm)]
             conocidas = [x for x in otras if len(_tokens_nombre(x.get('nombre'))) >= 2]
             nadie_repite = distintas and conocidas and not any(
-                _buscar_palabra(t, _tokens_nombre(x['nombre'])) for x in conocidas for t in distintas)
+                _variante_confirmada(t, tokens_adm, conocidas) for t in distintas)
             # Otro documento de la admisión tiene el nombre de Zeus (la IA lo aceptó o lo leyó igual)
             confirman_zeus = [x for x in conocidas
                               if _mismo_paciente({'nombre_documento': x['nombre'], 'identificacion_documento': ''},

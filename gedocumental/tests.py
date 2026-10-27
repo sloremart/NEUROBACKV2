@@ -203,9 +203,11 @@ class DocumentoDeTercerosTests(SimpleTestCase):
         self.assertEqual(r[0], DESCARTADO)
         self.assertIn('tercero', r[1])
 
-    def test_autorizacion_con_otra_lectura_tampoco_respalda_la_orden(self):
+    def test_autorizacion_con_otra_lectura_no_confirma_a_zeus(self):
+        # La regla de terceros exige que la autorización coincida con Zeus (caso 33197); sin los demás
+        # documentos no se decide
         aut = {'nombre': 'EITHAN MATTEO MORENO RODRIGEZ', 'documento': None}
-        self.assertEqual(evaluar_hallazgo('ORDEN', self.NOMBRE, self.ADM, autorizacion=aut)[0], DESCARTADO)
+        self.assertIsNone(evaluar_hallazgo('ORDEN', self.NOMBRE, self.ADM, autorizacion=aut))
 
     def test_autorizacion_igual_a_la_orden_el_error_es_de_zeus(self):
         # 32953: orden y autorización dicen BORRERO, Zeus BORERRO
@@ -384,6 +386,38 @@ class LecturasDeOtrosDocumentosTests(SimpleTestCase):
                 "admisión 'MARIA EDELMIRA SANTANA BENITO'.")
         otras = [self._otra('ORDEN', '21189487', adm['paciente'])]
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras))
+
+    def test_variante_parecida_en_varios_documentos_el_error_es_de_zeus(self):
+        # 33197: Zeus ELVERT; orden y HC ELBERT; autorización leída ELBER
+        adm = dict(ADMISION, paciente='ELVERT WALTER GOMEZ CARVAJAL')
+        aut = ("Nombre del usuario incorrecto: documento 'ELBER WALTER GOMEZ CARVAJAL', "
+               "admisión 'ELVERT WALTER GOMEZ CARVAJAL'.")
+        otras = [self._otra('ORDEN', None, 'ELBERT WALTER GOMEZ CARVAJAL'),
+                 self._otra('HCLINICA', None, 'ELBERT WALTER GOMEZ CARVAJAL'),
+                 self._otra('COMPROBANTE', None, 'ELVERT WALTER GOMEZ CARVAJAL')]
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', aut, adm, otras=otras))
+        orden = ("Nombre del usuario incorrecto: documento 'ELBERT WALTER GOMEZ CARVAJAL', "
+                 "admisión 'ELVERT WALTER GOMEZ CARVAJAL'.")
+        otras = [self._otra('AUTORIZACION', None, 'ELBER WALTER GOMEZ CARVAJAL'),
+                 self._otra('HCLINICA', None, 'ELBERT WALTER GOMEZ CARVAJAL')]
+        aut_lectura = {'nombre': 'ELBER WALTER GOMEZ CARVAJAL', 'documento': None}
+        self.assertIsNone(evaluar_hallazgo('ORDEN', orden, adm, autorizacion=aut_lectura, otras=otras))
+
+    def test_dos_variantes_distintas_en_un_solo_documento_cada_una(self):
+        # 33600: autorización RODRIGEZ, orden RIDRIGUEZ (una sola variante parecida cada una) → error de lectura
+        adm = dict(ADMISION, paciente='EITHAN MATTEO MORENO RODRIGUEZ')
+        orden = ("Nombre del usuario incorrecto: documento 'EITHAN MATTEO MORENO RIDRIGUEZ', "
+                 "admisión 'EITHAN MATTEO MORENO RODRIGUEZ'.")
+        otras = [self._otra('AUTORIZACION', None, 'EITHAN MATTEO MORENO RODRIGEZ'),
+                 self._otra('COMPROBANTE', None, 'EITHAN MATTEO MORENO RODRIGUEZ')]
+        aut_lectura = {'nombre': 'EITHAN MATTEO MORENO RODRIGEZ', 'documento': None}
+        self.assertEqual(evaluar_hallazgo('ORDEN', orden, adm, autorizacion=aut_lectura, otras=otras)[0],
+                         DESCARTADO)
+
+    def test_numero_parecido_en_varios_documentos_se_mantiene(self):
+        otras = [self._otra('ORDEN', '21242428', self.ADM['paciente']),
+                 self._otra('HCLINICA', '21242426', self.ADM['paciente'])]
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.AUT, self.ADM, otras=otras))
 
     def test_lecturas_admision_ultima_revision_de_cada_archivo(self):
         revisiones = [
