@@ -14,8 +14,8 @@ from django.utils import timezone
 
 from gedocumental.services import recaudo, reverificacion
 from gedocumental.services.reverificacion import (
-    CORREGIDO, DESCARTADO, evaluar_hallazgo, lectura_autorizacion, necesita_pdf, numeros_en_texto,
-    reverificar_hallazgos_sin_ia, texto_pdf,
+    CORREGIDO, DESCARTADO, evaluar_hallazgo, lectura_autorizacion, lecturas_admision, necesita_pdf,
+    numeros_en_texto, reverificar_hallazgos_sin_ia, texto_pdf,
 )
 
 ADMISION = {
@@ -310,6 +310,101 @@ class NombrePegadoYHistoriaClinicaTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('HCLINICA', desc, self.ADM))
 
 
+class LecturasDeOtrosDocumentosTests(SimpleTestCase):
+    """Caso 33594: Zeus 21224247; la IA leyó 21242427 en la autorización y 21222447 en la orden."""
+    ADM = dict(ADMISION, paciente='BETSY DEL CARMEN PADILLA DE OSPINA', identificacion='CC 21224247')
+    AUT = ("Número de documento incorrecto: documento '21242427', admisión 'CC 21224247' "
+           "(paciente BETSY DEL CARMEN PADILLA DE OSPINA).")
+    ORDEN = ("Número de documento incorrecto: documento '21222447', admisión 'CC 21224247' "
+             "(paciente BETSY DEL CARMEN PADILLA DE OSPINA).")
+
+    def _otra(self, tipo, documento=None, nombre=None):
+        return {'tipo': tipo, 'documento': documento, 'nombre': nombre}
+
+    def test_cada_documento_dice_un_numero_distinto(self):
+        otras = [self._otra('ORDEN', '21222447', self.ADM['paciente']),
+                 self._otra('COMPROBANTE', '21224247', self.ADM['paciente'])]
+        r = evaluar_hallazgo('AUTORIZACION', self.AUT, self.ADM, otras=otras)
+        self.assertEqual(r[0], DESCARTADO)
+        self.assertIn('Ningún otro documento', r[1])
+        otras = [self._otra('AUTORIZACION', '21242427', self.ADM['paciente'])]
+        self.assertEqual(evaluar_hallazgo('ORDEN', self.ORDEN, self.ADM, otras=otras)[0], DESCARTADO)
+
+    def test_dos_documentos_con_el_mismo_numero_se_mantiene(self):
+        otras = [self._otra('ORDEN', '21242427', self.ADM['paciente'])]
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.AUT, self.ADM, otras=otras))
+
+    def test_sin_otros_documentos_no_decide(self):
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.AUT, self.ADM, otras=[]))
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.AUT, self.ADM,
+                                           otras=[self._otra('ORDEN', None, self.ADM['paciente'])]))
+
+    def test_numero_muy_distinto_se_mantiene(self):
+        desc = "Número de documento incorrecto: documento '52000111', admisión 'CC 21224247' (paciente X)."
+        otras = [self._otra('ORDEN', '21224247', self.ADM['paciente'])]
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, self.ADM, otras=otras))
+
+    def test_nombre_que_ningun_otro_documento_confirma(self):
+        # 33600: autorización leída 'RODRIGEZ', orden 'RIDRIGUEZ', Zeus RODRIGUEZ
+        adm = dict(ADMISION, paciente='EITHAN MATTEO MORENO RODRIGUEZ', identificacion='RC 1234796155')
+        desc = ("Nombre del usuario incorrecto: documento 'EITHAN MATTEO MORENO RODRIGEZ', "
+                "admisión 'EITHAN MATTEO MORENO RODRIGUEZ'.")
+        otras = [self._otra('ORDEN', None, 'EITHAN MATTEO MORENO RIDRIGUEZ')]
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras)[0], DESCARTADO)
+
+    def test_nombre_que_otro_documento_confirma_el_error_es_de_zeus(self):
+        # 32953: orden y autorización dicen BORRERO, Zeus BORERRO
+        adm = dict(ADMISION, paciente='YERZON FERNEY BORERRO SANABRIA')
+        desc = ("Nombre del usuario incorrecto: documento 'YERZON FERNEY BORRERO SANABRIA', "
+                "admisión 'YERZON FERNEY BORERRO SANABRIA'.")
+        otras = [self._otra('ORDEN', None, 'YERZON FERNEY BORRERO SANABRIA'),
+                 self._otra('COMPROBANTE', '1121978991', 'YERZON FERNEY BORERRO SANABRIA')]
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras))
+
+    def test_una_palabra_distinta_y_otro_documento_confirma_zeus(self):
+        # 33582: autorización leída 'SANTANA BEATRIZ'; orden y comprobante con SANTANA BENITO (Zeus)
+        adm = dict(ADMISION, paciente='MARIA EDELMIRA SANTANA BENITO', identificacion='CC 21189487')
+        desc = ("Nombre del usuario incorrecto: documento 'MARIA EDELMIRA SANTANA BEATRIZ', "
+                "admisión 'MARIA EDELMIRA SANTANA BENITO'.")
+        otras = [self._otra('ORDEN', '21189487', 'SANTANA BENITO MARIA EDELMIRA')]
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras)[0], DESCARTADO)
+
+    def test_una_palabra_distinta_sin_confirmacion_de_zeus_se_mantiene(self):
+        adm = dict(ADMISION, paciente='MARIA EDELMIRA SANTANA BENITO', identificacion='CC 21189487')
+        desc = ("Nombre del usuario incorrecto: documento 'MARIA EDELMIRA SANTANA BEATRIZ', "
+                "admisión 'MARIA EDELMIRA SANTANA BENITO'.")
+        otras = [self._otra('ORDEN', None, 'MARIA SANTANA LOPEZ')]   # tampoco coincide con Zeus
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras))
+        otras = [self._otra('ORDEN', None, 'MARIA EDELMIRA SANTANA BEATRIZ')]   # la confirma
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras))
+
+    def test_varias_palabras_distintas_no_es_error_de_lectura(self):
+        adm = dict(ADMISION, paciente='MARIA EDELMIRA SANTANA BENITO', identificacion='CC 21189487')
+        desc = ("Nombre del usuario incorrecto: documento 'MARIA LUISA SANTANA BEATRIZ', "
+                "admisión 'MARIA EDELMIRA SANTANA BENITO'.")
+        otras = [self._otra('ORDEN', '21189487', adm['paciente'])]
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras))
+
+    def test_lecturas_admision_ultima_revision_de_cada_archivo(self):
+        revisiones = [
+            SimpleNamespace(IdArchivo_id=1, TipoDocumento='AUTORIZACION', TipoHallazgo='INFORMACION',
+                            Resuelta=False, Resolucion=None, NotaResolucion='', Descripcion=self.AUT),
+            SimpleNamespace(IdArchivo_id=1, TipoDocumento='AUTORIZACION', TipoHallazgo='OK',
+                            Resuelta=True, Resolucion='REEMPLAZADO', NotaResolucion='', Descripcion='Documento correcto'),
+            SimpleNamespace(IdArchivo_id=2, TipoDocumento='COMPROBANTE', TipoHallazgo='OK',
+                            Resuelta=True, Resolucion=None, NotaResolucion='', Descripcion='Documento correcto'),
+            SimpleNamespace(IdArchivo_id=3, TipoDocumento='ORDEN', TipoHallazgo='INFORMACION', Resuelta=True,
+                            Resolucion=DESCARTADO, NotaResolucion='El PDF tiene el número...', Descripcion=self.ORDEN),
+        ]
+        qs = mock.MagicMock()
+        qs.filter.return_value.exclude.return_value.order_by.return_value = revisiones
+        with mock.patch('gedocumental.models.RevisionIA.objects', qs):
+            r = lecturas_admision(33594, self.ADM)
+        self.assertEqual(r[1]['documento'], '21242427')      # la última revisión del archivo 1
+        self.assertEqual(r[2]['documento'], '21224247')      # OK → Zeus
+        self.assertEqual(r[3]['documento'], '21224247')      # la IA leyó mal (verificado en el PDF) → Zeus
+
+
 class VariosMotivosTests(SimpleTestCase):
     def test_hallazgo_con_recaudo_no_se_cierra_por_una_parte(self):
         desc = DOC_MAL + " | No se recaudó; debía cobrarse cuota moderadora de $5.000"
@@ -332,6 +427,7 @@ class ReverificarHallazgosTests(SimpleTestCase):
         with mock.patch.object(reverificacion, '_pendientes', return_value=hallazgos), \
                 mock.patch.object(reverificacion, 'obtener_contexto_admision', return_value=datos), \
                 mock.patch.object(reverificacion, '_ruta', return_value='orden.pdf'),                 mock.patch.object(reverificacion, 'lectura_autorizacion', return_value=kw.pop('aut', None)), \
+                mock.patch.object(reverificacion, 'lecturas_admision', return_value=kw.pop('lecturas', {})), \
                 mock.patch.object(reverificacion, 'texto_pdf', return_value=texto) as leer:
             return reverificar_hallazgos_sin_ia(**kw), leer
 
@@ -408,6 +504,14 @@ class ReverificarHallazgosTests(SimpleTestCase):
         self.assertEqual(r['resumen'][DESCARTADO], 1)
         self.assertIn('tercero', h.NotaResolucion)
         leer.assert_not_called()
+
+    def test_lecturas_de_otros_archivos_sin_el_propio(self):
+        h = _hallazgo(1, DOC_MAL)   # IdArchivo_id = 1
+        lecturas = {1: {'tipo': 'ORDEN', 'documento': '1121979781', 'nombre': ''},
+                    2: {'tipo': 'COMPROBANTE', 'documento': '1121978991', 'nombre': ''}}
+        r, _ = self._correr([h], texto=('', False), lecturas=lecturas)
+        self.assertEqual(r['resumen'][DESCARTADO], 1)
+        self.assertIn('Ningún otro documento', h.NotaResolucion)
 
     def test_hallazgo_que_no_usa_pdf(self):
         h = _hallazgo(1, 'Autorización vencida', tipo='AUTORIZACION')

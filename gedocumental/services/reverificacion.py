@@ -12,6 +12,8 @@ pendientes y los cierra cuando el sistema puede comprobar, con reglas fijas, que
 
   DESCARTADO — también: error de escritura del nombre o número en una ORDEN/HC (documento de un tercero)
                cuando la AUTORIZACIÓN de la EPS coincide con Zeus.
+               O el nombre/número leído en un documento no lo confirma ningún otro documento de la
+               admisión (cada escaneo "dice" algo distinto): es error de lectura, no del paciente.
 
 Las reglas con Zeus se evalúan siempre (no abren el PDF). Las que leen el PDF solo se aplican a PDFs
 digitales (todas las páginas con texto): si hay una página escaneada, solo la IA puede volver a leerla
@@ -135,12 +137,25 @@ def lectura_autorizacion(admision_id, datos_admision: dict) -> dict | None:
     from gedocumental.models import RevisionIA
     r = (RevisionIA.objects.filter(AdmisionId=admision_id, TipoDocumento__iexact='AUTORIZACION',
                                    IdArchivo__isnull=False).order_by('-IdRevision').first())
-    if not r:
-        return None
+    return _lectura_de_revision(r, datos_admision) if r else None
+
+
+def _lectura_de_revision(r, datos_admision: dict) -> dict | None:
+    """
+    Qué leyó la IA del paciente en una revisión: {'nombre', 'documento'} (None = no se sabe).
+    Sin hallazgo de nombre/número → los datos de Zeus (la IA los aceptó). Los hallazgos cerrados conservan
+    lo que se leyó, salvo los descartados porque el PDF digital mostró que la IA leyó mal ('El PDF ...').
+    """
     zeus = {'nombre': datos_admision.get('paciente') or '', 'documento': _digitos(datos_admision.get('identificacion'))}
     d = r.Descripcion or ''
-    if r.Resuelta or r.TipoHallazgo == 'OK' or not re.search(
-            r'Nombre del usuario incorrecto|Número de documento incorrecto|Paciente no corresponde', d):
+    if r.TipoHallazgo != 'OK' and re.search(r'Paciente en documento|paciente no coincide', d, re.IGNORECASE):
+        return None   # formato antiguo de "otra persona": no dice qué número/nombre leyó
+    if (r.TipoHallazgo == 'OK'
+            or (r.Resuelta and getattr(r, 'Resolucion', None) not in (DESCARTADO, CORREGIDO))
+            or (getattr(r, 'Resolucion', None) == DESCARTADO
+                and (getattr(r, 'NotaResolucion', '') or '').startswith('El PDF'))
+            or not re.search(r'Nombre del usuario incorrecto|Número de documento incorrecto|Paciente no corresponde',
+                             d)):
         return zeus
     if ' | ' in d or d.startswith('Paciente no corresponde'):
         return None
@@ -150,6 +165,19 @@ def lectura_autorizacion(admision_id, datos_admision: dict) -> dict | None:
     if d.startswith(NOMBRE_INCORRECTO):
         return {'nombre': m.group('doc'), 'documento': None}   # el número no se sabe
     return {'nombre': zeus['nombre'], 'documento': _digitos(m.group('doc'))}
+
+
+def lecturas_admision(admision_id, datos_admision: dict) -> dict:
+    """{IdArchivo: {'tipo', 'nombre', 'documento'}}: lo que leyó la IA del paciente en cada archivo vigente."""
+    from gedocumental.models import RevisionIA
+    lecturas = {}
+    for r in (RevisionIA.objects.filter(AdmisionId=admision_id, IdArchivo__isnull=False)
+              .exclude(TipoDocumento__in=TIPOS_SIN_REVISION_IA).order_by('IdArchivo', '-IdRevision')):
+        if r.IdArchivo_id in lecturas:
+            continue   # solo la última revisión de cada archivo
+        lectura = _lectura_de_revision(r, datos_admision)
+        lecturas[r.IdArchivo_id] = dict(lectura, tipo=r.TipoDocumento) if lectura else None
+    return {k: v for k, v in lecturas.items() if v}
 
 
 def necesita_autorizacion(tipo_documento: str, descripcion: str) -> bool:
@@ -169,6 +197,10 @@ def necesita_pdf(tipo_documento: str, descripcion: str) -> bool:
 
 # ── Reglas ───────────────────────────────────────────────────────────────────
 
+def _resumen_lecturas(lecturas: list, campo: str) -> str:
+    return "; ".join(f"{x.get('tipo', '')}: {x.get(campo)}" for x in lecturas[:4])
+
+
 def _solo_paciente(leido):
     # Historia clínica y soportes: solo importa que sean del paciente (otra persona sigue siendo hallazgo)
     return (DESCARTADO, "En la historia clínica y los soportes solo se valida que sean del paciente; "
@@ -177,12 +209,13 @@ def _solo_paciente(leido):
 
 def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict,
                      texto: str | None = None, firma: bool | None = None,
-                     autorizacion: dict | None = None) -> tuple[str, str] | None:
+                     autorizacion: dict | None = None, otras: list | None = None) -> tuple[str, str] | None:
     """
     Decide si un hallazgo pendiente ya no aplica. Devuelve (resolución, nota) o None si sigue abierto.
       texto: texto COMPLETO del PDF (solo PDFs digitales); None si no se leyó o es escaneado.
       firma: resultado de _detectar_firma_pdf (solo comprobantes).
       autorizacion: lectura_autorizacion() de la admisión (para órdenes y HC de terceros).
+      otras: lo que leyó la IA del paciente en los DEMÁS documentos de la admisión (lecturas_admision).
     No toca la base de datos.
     """
     d = (descripcion or '').strip()
@@ -206,6 +239,12 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
                 and autorizacion.get('documento') == id_adm):
             return DESCARTADO, (f"Error de escritura del número en el documento del tercero ({id_doc}); "
                                 f"la autorización de la EPS coincide con ZeusSalud ({id_adm}).")
+        if otras and id_adm and _numero_parecido(id_doc, id_adm):
+            conocidas = [x for x in otras if x.get('documento')]
+            if conocidas and not any(x['documento'] == id_doc for x in conocidas):
+                return DESCARTADO, (f"Ningún otro documento de la admisión tiene el número {id_doc} "
+                                    f"({_resumen_lecturas(conocidas, 'documento')}); ZeusSalud: {id_adm}. "
+                                    "Error de lectura del escaneo o de escritura de un solo documento.")
         if texto and id_adm and id_adm in numeros and id_doc not in numeros:
             return DESCARTADO, (f"El PDF tiene el número de la admisión ({id_adm}) y no el que leyó la IA "
                                 f"({id_doc}).")
@@ -225,6 +264,24 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
                 return DESCARTADO, (f"Error de escritura del nombre en el documento del tercero ('{leido}'); "
                                     f"la autorización de la EPS coincide con ZeusSalud "
                                     f"({datos_admision.get('paciente')}).")
+        if otras:
+            palabras = _separar_pegadas(_tokens_doc(leido), tokens_adm)
+            distintas = [t for t in palabras if not _buscar_palabra(t, tokens_adm)]
+            conocidas = [x for x in otras if len(_tokens_nombre(x.get('nombre'))) >= 2]
+            nadie_repite = distintas and conocidas and not any(
+                _buscar_palabra(t, _tokens_nombre(x['nombre'])) for x in conocidas for t in distintas)
+            # Otro documento de la admisión tiene el nombre de Zeus (la IA lo aceptó o lo leyó igual)
+            confirman_zeus = [x for x in conocidas
+                              if _mismo_paciente({'nombre_documento': x['nombre'], 'identificacion_documento': ''},
+                                                 datos_admision)]
+            # Casi igual letra por letra (RODRIGEZ / RODRIGUEZ), o una sola palabra distinta y al menos dos
+            # iguales (SANTANA BEATRIZ / SANTANA BENITO) cuando otro documento confirma el nombre de Zeus
+            una_palabra = len(distintas) == 1 and len(palabras) - 1 >= 2 and confirman_zeus
+            if nadie_repite and (_nombre_casi_igual(_tokens_doc(leido), tokens_adm) or una_palabra):
+                return DESCARTADO, (f"Ningún otro documento de la admisión escribe el nombre como '{leido}' "
+                                    f"({_resumen_lecturas(conocidas, 'nombre')}); ZeusSalud: "
+                                    f"{datos_admision.get('paciente')}. Error de lectura del escaneo o de "
+                                    "escritura de un solo documento.")
         if texto and _nombre_en_texto(tokens_adm, texto_tokens):
             distintas = [t for t in _tokens_doc(leido) if not _buscar_palabra(t, tokens_adm)]
             if distintas and not any(_buscar_palabra(t, texto_tokens) for t in distintas):
@@ -294,7 +351,7 @@ def reverificar_hallazgos_sin_ia(admision=None, tipo_documento=None, aplicar=Tru
     limite_relectura = ahora - timedelta(hours=REVERIFICAR_PDF_CADA_HORAS)
     inicio = time.monotonic()
     resumen = {'revisados': 0, CORREGIDO: 0, DESCARTADO: 0, 'requieren_ia': 0, 'pdf_leidos': 0, 'sin_archivo': 0}
-    detalle, contextos, autorizaciones = [], {}, {}
+    detalle, contextos, autorizaciones, lecturas = [], {}, {}, {}
 
     for h in _pendientes(admision, tipo_documento):
         resumen['revisados'] += 1
@@ -309,7 +366,12 @@ def reverificar_hallazgos_sin_ia(admision=None, tipo_documento=None, aplicar=Tru
             if h.AdmisionId not in autorizaciones:
                 autorizaciones[h.AdmisionId] = lectura_autorizacion(h.AdmisionId, datos)
             autorizacion = autorizaciones[h.AdmisionId]
-        decision = evaluar_hallazgo(h.TipoDocumento, h.Descripcion, datos, autorizacion=autorizacion)
+        otras = None
+        if (h.Descripcion or '').startswith((DOC_INCORRECTO, NOMBRE_INCORRECTO)):
+            if h.AdmisionId not in lecturas:
+                lecturas[h.AdmisionId] = lecturas_admision(h.AdmisionId, datos)
+            otras = [v for k, v in lecturas[h.AdmisionId].items() if k != h.IdArchivo_id]
+        decision = evaluar_hallazgo(h.TipoDocumento, h.Descripcion, datos, autorizacion=autorizacion, otras=otras)
         releer = (decision is None and necesita_pdf(h.TipoDocumento, h.Descripcion)
                   and (forzar_pdf or h.FechaReverificacion is None or h.FechaReverificacion < limite_relectura)
                   and time.monotonic() - inicio < max_segundos_pdf)
@@ -320,7 +382,7 @@ def reverificar_hallazgos_sin_ia(admision=None, tipo_documento=None, aplicar=Tru
             resumen['pdf_leidos'] += 1
             decision = evaluar_hallazgo(h.TipoDocumento, h.Descripcion, datos,
                                         texto=texto if completo else None, firma=firma,
-                                        autorizacion=autorizacion)
+                                        autorizacion=autorizacion, otras=otras)
             if aplicar:
                 h.FechaReverificacion = ahora
                 if not decision:
