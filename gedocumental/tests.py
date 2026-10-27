@@ -201,6 +201,30 @@ class HallazgoAceptadoTests(SimpleTestCase):
         self.assertEqual(reverificacion._lectura_de_revision(r, adm)['nombre'], 'MAIRA JIMENEZ')
 
 
+class ContrasteTests(SimpleTestCase):
+    """Caso 33457: orden de RM de abdomen y pelvis con contraste; los CUPS no dicen simple ni contrastado."""
+    ADM = dict(ADMISION, cups=['883401 - RESONANCIA MAGNÉTICA DE ABDOMEN (cant. 1)',
+                               '883440 - RESONANCIA MAGNÉTICA DE PELVIS (cant. 1)'])
+    DESC = ("Documento correcto, pero la orden incluye contraste para la resonancia magnética de abdomen y "
+            "pelvis, mientras que la admisión no especifica contraste.")
+
+    def test_cups_que_no_distingue_contraste(self):
+        self.assertEqual(evaluar_hallazgo('ORDEN', self.DESC, self.ADM)[0], DESCARTADO)
+        self.assertEqual(evaluar_hallazgo('RESULTADO', self.DESC, self.ADM)[0], DESCARTADO)
+
+    def test_cups_simple_y_orden_contrastada_se_mantiene(self):
+        adm = dict(ADMISION, cups=['883101 - RESONANCIA MAGNÉTICA DE CEREBRO SIMPLE (cant. 1)'])
+        desc = "La orden pide resonancia de cerebro con contraste y la admisión es simple."
+        self.assertIsNone(evaluar_hallazgo('ORDEN', desc, adm))
+
+    def test_contraste_con_otro_motivo_se_mantiene(self):
+        for desc in ("La orden incluye contraste y no incluye la resonancia de pelvis.",
+                     "Orden con contraste, vencida.",
+                     "Incluye contraste; rodilla derecha y la admisión es izquierda."):
+            self.assertIsNone(evaluar_hallazgo('ORDEN', desc, self.ADM), desc)
+        self.assertIsNone(evaluar_hallazgo('COMPROBANTE', self.DESC, self.ADM))
+
+
 class ProcedimientoAdicionalTests(SimpleTestCase):
     """Caso orden 759574: trae TAC de tórax (el de la admisión) y además un ecocardiograma."""
     ADM = dict(ADMISION, cups=['879301 - TOMOGRAFÍA COMPUTADA DE TÓRAX (cant. 1)'])

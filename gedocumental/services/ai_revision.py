@@ -97,7 +97,9 @@ VERIFICACIONES OBLIGATORIAS (en este orden):
      - otro tipo de estudio (resonancia vs tomografía, EMG vs EEG);
      - otra región anatómica (resonancia de abdomen vs resonancia de cerebro; columna lumbar vs cervical);
      - otra LATERALIDAD (estudio de miembro derecho y la orden pide el izquierdo);
-     - con contraste explícito cuando el CUPS es simple, o al revés.
+     - con contraste explícito cuando el CUPS dice "simple" o "sin contraste", o al revés. Si la descripción
+       del CUPS NO menciona contraste, el mismo CUPS sirve para el estudio simple y el contrastado: que la
+       orden pida contraste NO es error.
    Ante la duda razonable de que sea el mismo estudio, considéralo coincidente (procedimientos_coinciden = SI).
 3. Solo si 1 y 2 están bien, revisa el resto según la tabla de convenciones (fechas, vigencia, cantidades,
    firmas, legibilidad, datos incompletos).
@@ -557,6 +559,14 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                     tipo_documento, resultado.get("descripcion"))
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_procedimiento_adicional=True)
+
+    # Contraste que el CUPS de la admisión no distingue (mismo CUPS para simple y contrastado): no es error
+    if (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
+            and resultado.get("paciente_coincide") != "NO"
+            and _solo_motivo_contraste(resultado.get("descripcion"), datos_admision)):
+        logger.info("%s: solo difiere el contraste, se descarta '%s'", tipo_documento, resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
+                         ajuste_contraste=True)
 
     # Soportes del paciente (HC, adicionales): si es del paciente correcto, cualquier otro motivo se descarta
     if ((tipo_documento or '').upper() in TIPOS_SOLO_PACIENTE and resultado["tipo"] != "OK"
@@ -1040,6 +1050,26 @@ def _solo_motivo_procedimiento(descripcion) -> bool:
 _OTROS_MOTIVOS = (r'vencid|vigencia|caducad|numero de autorizacion|sin numero|no cuenta con numero|'
                   r'legib|cantidad|firma|paciente no|nombre|documento de identidad|identificacion|'
                   r'fecha|tachon|enmendad')
+
+
+def _solo_motivo_contraste(descripcion, datos_admision) -> bool:
+    """
+    True si el único motivo es el contraste ("la orden incluye contraste… la admisión no especifica
+    contraste") y los CUPS de la admisión no dicen simple / sin contraste / con contraste: ese CUPS se usa
+    igual para el estudio simple y el contrastado (en la orden se anota como observación).
+    """
+    import re
+    import unicodedata
+
+    def plano(t):
+        return unicodedata.normalize('NFKD', str(t or '')).encode('ascii', 'ignore').decode().lower()
+
+    d = plano(descripcion)
+    cups = plano(' '.join(str(c) for c in (datos_admision.get('cups') or [])))
+    otro = re.search(r'no incluye|no aparece|no cubre|no corresponde|en lugar de|en vez de|otra region|'
+                     r'lateralidad|derech|izquierd', d)
+    return bool(re.search(r'contrast', d) and not re.search(r'contrast|simple', cups)
+                and not otro and not re.search(_OTROS_MOTIVOS, d))
 
 
 def _solo_procedimiento_adicional(descripcion) -> bool:
