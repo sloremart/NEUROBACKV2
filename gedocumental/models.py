@@ -228,7 +228,7 @@ class AutorizacionRPA(models.Model):
     num_autorizacion = models.CharField(max_length=200, blank=True, null=True)
     fecha_vigencia   = models.CharField(max_length=60, blank=True, null=True)
     servicio         = models.TextField(blank=True, null=True)
-    cups             = models.CharField(max_length=20, blank=True, null=True)
+    cups             = models.TextField(blank=True, null=True)
     mensaje          = models.TextField(blank=True, null=True)
     datos_completos  = models.JSONField(default=dict)   # resultado completo del bot
     fecha_consulta   = models.DateTimeField(default=timezone.now)
