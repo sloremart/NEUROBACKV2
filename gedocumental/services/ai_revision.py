@@ -70,7 +70,8 @@ VERIFICACIONES OBLIGATORIAS (en este orden):
    (paciente_coincide = NO_APARECE): sigue con las demás verificaciones.
 2. PROCEDIMIENTOS: en órdenes médicas, autorizaciones y resultados, los procedimientos/CUPS del documento deben
    corresponder a los CUPS de la admisión. Compara por código CUPS y, si no hay código, por la descripción.
-   - Orden médica que no incluye los procedimientos de la admisión → SOPORTES
+   - Orden médica que no incluye los procedimientos de la admisión → SOPORTES. Si la orden o la
+     autorización trae los procedimientos de la admisión y ADEMÁS otros, es correcta (no es error).
    - Autorización que no cubre los procedimientos de la admisión → AUTORIZACION
    - Resultado/informe de un procedimiento distinto al de la admisión → REPORTE
    Indica qué trae el documento y qué esperaba la admisión.
@@ -548,6 +549,15 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_procedimiento_orden=True)
 
+    # Orden/autorización con un procedimiento de más (además de los de la admisión): no es error
+    if (not _es_comprobante(tipo_documento) and (tipo_documento or '').upper() != 'RESULTADO'
+            and resultado["tipo"] != "OK" and resultado.get("paciente_coincide") != "NO"
+            and _solo_procedimiento_adicional(resultado.get("descripcion"))):
+        logger.info("%s: solo trae un procedimiento adicional, se descarta '%s'",
+                    tipo_documento, resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
+                         ajuste_procedimiento_adicional=True)
+
     # Soportes del paciente (HC, adicionales): si es del paciente correcto, cualquier otro motivo se descarta
     if ((tipo_documento or '').upper() in TIPOS_SOLO_PACIENTE and resultado["tipo"] != "OK"
             and resultado.get("paciente_coincide") not in ("NO", "NOMBRE_MAL_ESCRITO", "DOCUMENTO_INCORRECTO")
@@ -1024,10 +1034,28 @@ def _solo_motivo_procedimiento(descripcion) -> bool:
     import unicodedata
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
     sobre_procedimiento = re.search(r'procedimiento|cups|estudio|servicio|no se especifica|no incluye|no aparece', d)
-    otros_motivos = re.search(r'vencid|vigencia|caducad|numero de autorizacion|sin numero|no cuenta con numero|'
-                              r'legib|cantidad|firma|paciente no|nombre|documento de identidad|identificacion|'
-                              r'fecha|tachon|enmendad', d)
-    return bool(sobre_procedimiento and not otros_motivos)
+    return bool(sobre_procedimiento and not re.search(_OTROS_MOTIVOS, d))
+
+
+_OTROS_MOTIVOS = (r'vencid|vigencia|caducad|numero de autorizacion|sin numero|no cuenta con numero|'
+                  r'legib|cantidad|firma|paciente no|nombre|documento de identidad|identificacion|'
+                  r'fecha|tachon|enmendad')
+
+
+def _solo_procedimiento_adicional(descripcion) -> bool:
+    """
+    True si el único motivo es que el documento trae un procedimiento DE MÁS ("incluye ECOCARDIOGRAMA, no
+    esperado en admisión que solo tiene TOMOGRAFÍA"). Una orden o autorización puede traer varios
+    procedimientos: lo que importa es que traiga los de la admisión, y el hallazgo no dice que falten.
+    """
+    import re
+    import unicodedata
+    d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    de_mas = re.search(r'(?<!no )\bincluye\b.*\b(no esperad|no solicitad|no ordenad|adicional)'
+                       r'|\badicional(es)?\b|\bademas de\b', d)
+    falta = re.search(r'no incluye|no aparece|no se especifica|no cubre|no corresponde|no coincide|en lugar de|'
+                      r'en vez de|distint|diferente|falta|lateralidad|derech|izquierd', d)
+    return bool(de_mas and not falta and not re.search(_OTROS_MOTIVOS, d))
 
 
 def _modalidad_base(m: str) -> str:

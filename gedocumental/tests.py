@@ -191,6 +191,30 @@ class ProcedimientoTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('ORDEN', desc, ADMISION, texto=texto))
 
 
+class ProcedimientoAdicionalTests(SimpleTestCase):
+    """Caso orden 759574: trae TAC de tórax (el de la admisión) y además un ecocardiograma."""
+    ADM = dict(ADMISION, cups=['879301 - TOMOGRAFÍA COMPUTADA DE TÓRAX (cant. 1)'])
+    DESC = ("Documento incorrecto: incluye ECOCARDIOGRAMA TRANSTORACICO, no esperado en admisión que solo "
+            "tiene TOMOGRAFÍA COMPUTADA DE TÓRAX.")
+
+    def test_orden_con_un_procedimiento_de_mas(self):
+        self.assertEqual(evaluar_hallazgo('ORDEN', self.DESC, self.ADM)[0], DESCARTADO)
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM)[0], DESCARTADO)
+
+    def test_ia_lo_descarta_al_revisar(self):
+        from gedocumental.services.ai_revision import _solo_procedimiento_adicional
+        self.assertTrue(_solo_procedimiento_adicional(self.DESC))
+        self.assertTrue(_solo_procedimiento_adicional("La orden incluye procedimientos adicionales a la admisión."))
+
+    def test_resultado_o_faltante_se_mantiene(self):
+        self.assertIsNone(evaluar_hallazgo('RESULTADO', self.DESC, self.ADM))
+        for desc in ("La orden no incluye TOMOGRAFÍA COMPUTADA DE TÓRAX; incluye ECOCARDIOGRAMA, no esperado.",
+                     "Incluye ECOCARDIOGRAMA en lugar de TOMOGRAFÍA, no esperado en la admisión.",
+                     "Incluye ECOCARDIOGRAMA, no esperado; orden vencida.",
+                     "Incluye RX de rodilla derecha adicional, admisión izquierda."):
+            self.assertIsNone(evaluar_hallazgo('ORDEN', desc, self.ADM), desc)
+
+
 class DocumentoDeTercerosTests(SimpleTestCase):
     """Caso 33600: la orden del hospital dice 'MORENO RIDRIGUEZZ'; la autorización y Zeus, RODRIGUEZ."""
     ADM = dict(ADMISION, paciente='EITHAN MATTEO MORENO RODRIGUEZ', identificacion='RC 1234796155')

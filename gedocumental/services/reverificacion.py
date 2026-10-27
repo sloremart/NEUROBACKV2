@@ -32,7 +32,7 @@ from gedocumental.services.ai_revision import (
     MAX_PAGINAS_LEER, MIN_CARACTERES_TEXTO, TIPOS_SIN_REVISION_IA, _buscar_palabra, _codigos_cups,
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE,
-    _procedimiento_documentado, _solo_motivo_procedimiento, _tokens_nombre, _NO_SON_NOMBRE,
+    _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _tokens_nombre, _NO_SON_NOMBRE,
     obtener_contexto_admision,
 )
 
@@ -351,6 +351,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
 
     if _es_comprobante(tipo) and firma is True and _solo_motivo_firma(d):
         return DESCARTADO, "El sistema detecta la firma del paciente en el PDF."
+
+    if not _es_comprobante(tipo) and tipo != 'RESULTADO' and _solo_procedimiento_adicional(d):
+        return DESCARTADO, ("El documento trae un procedimiento adicional a los de la admisión; "
+                            "eso no es un error.")
 
     if texto and _solo_motivo_procedimiento(d) and not _menciona_lateralidad(d):
         if tipo == 'RESULTADO' and (_consulta_documentada(texto, datos_admision)
