@@ -127,6 +127,9 @@ def demanda_inducida_view(request):
                 "ValEpsVigencia":     "",
                 "ValEpsMensaje":      "",
                 "ValEpsArchivos":     [],
+                # Cita agendada en ZeusSalud — se enriquece abajo
+                "TieneCita":  False,
+                "FechaCita":  "",
             })
 
         # Enriquecer con resultados de autorizaciones ya consultadas por los bots
@@ -160,6 +163,52 @@ def demanda_inducida_view(request):
                         item["ValEpsArchivos"] = archivos_raw
         except Exception:
             pass  # Si falla el enriquecimiento, devolver datos sin validación
+
+        # Enriquecer con citas agendadas desde ZeusSalud (mismos CUPS, fecha >= hoy)
+        try:
+            doc_list_citas = list({str(item["Documento"] or "").replace(" ", "") for item in data if item["Documento"]})
+            if doc_list_citas:
+                placeholders_c = ", ".join(["%s"] * len(doc_list_citas))
+                with connections['zeussalud'].cursor() as cur_c:
+                    cur_c.execute(f"""
+                        SELECT
+                            LTRIM(RTRIM(p.num_id))  AS doc_num,
+                            cups_norm               AS cups,
+                            CONVERT(varchar, MIN(c.fecha), 23) AS proxima_cita
+                        FROM citas c
+                        JOIN sis_paci p ON p.autoid = c.autoid
+                        JOIN (
+                            SELECT id_cita,
+                                CASE WHEN CHARINDEX('-', LTRIM(RTRIM(CAST(id_procedimiento AS VARCHAR)))) > 0
+                                     THEN LEFT(LTRIM(RTRIM(CAST(id_procedimiento AS VARCHAR))),
+                                               CHARINDEX('-', LTRIM(RTRIM(CAST(id_procedimiento AS VARCHAR)))) - 1)
+                                     ELSE LTRIM(RTRIM(CAST(id_procedimiento AS VARCHAR)))
+                                END AS cups_norm
+                            FROM citas_procedimientos
+                            UNION ALL
+                            SELECT IdCita AS id_cita,
+                                LTRIM(RTRIM(CodProcedimiento)) AS cups_norm
+                            FROM citas_procedimientos_asuntos
+                        ) cp ON cp.id_cita = c.id
+                        WHERE LTRIM(RTRIM(p.num_id)) IN ({placeholders_c})
+                          AND ISNULL(c.estado, 'P') NOT IN ('C', 'X')
+                          AND CONVERT(date, c.fecha) >= CONVERT(date, GETDATE())
+                        GROUP BY LTRIM(RTRIM(p.num_id)), cups_norm
+                    """, doc_list_citas)
+                    citas_rows = cur_c.fetchall()
+                citas_map = {
+                    (str(r[0] or "").strip(), str(r[1] or "").strip()): str(r[2] or "").strip()
+                    for r in citas_rows
+                }
+                for item in data:
+                    doc  = str(item["Documento"] or "").replace(" ", "")
+                    cups = str(item["Cups"] or "").strip()
+                    fecha_c = citas_map.get((doc, cups))
+                    if fecha_c:
+                        item["TieneCita"] = True
+                        item["FechaCita"] = fecha_c
+        except Exception:
+            pass  # Si falla la consulta de citas, devolver sin ese dato
 
         return JsonResponse({"data": data})
 
