@@ -13,6 +13,93 @@ from django.utils import timezone
 RPA_HUB_URL     = os.getenv("RPA_HUB_URL", "http://localhost:5055")
 DEMANDA_WEB_URL = os.getenv("DEMANDA_WEB_URL", "http://192.168.1.211:5050")
 
+
+def _normalizar_fecha_iso(valor) -> str:
+    """Convierte fechas en cualquier formato a YYYY-MM-DD. Devuelve '' si no reconoce."""
+    import re as _re
+    s = str(valor or "").strip()
+    m = _re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
+    if m:
+        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    m = _re.search(r"(\d{1,2})[-/](\d{1,2})[-/](\d{4})", s)
+    if m:
+        return f"{int(m.group(3)):04d}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
+    return ""
+
+
+def _cruzar_resultado_bot_con_cups(res: dict, cups_solicitado: str, fecha_orden: str = "") -> dict:
+    """
+    Cruza el resultado del bot RPA contra el CUPS específico de la fila.
+    Solo cuenta autorizaciones cuya fecha sea igual o posterior a la fecha de la orden.
+    Autorizaciones/órdenes anteriores se ignoran.
+    """
+    import re as _re
+    cups_req    = _re.sub(r"[^0-9A-Za-z]", "", str(cups_solicitado or "")).upper()
+    f_orden     = _normalizar_fecha_iso(fecha_orden)
+    status_bot  = res.get("status", "ERROR")
+    procedimientos = res.get("procedimientos") or []
+
+    estado_final = status_bot
+    num_aut_final = ""
+    cups_final    = ""
+    vigencia_final = ""
+    archivos_filtrados = []
+    procs_coincidentes = []
+
+    if status_bot == "AUTORIZADO":
+        for p in procedimientos:
+            c_item = _re.sub(r"[^0-9A-Za-z]", "", str(p.get("cups") or "")).upper()
+            if cups_req and not (c_item and (cups_req == c_item or cups_req in c_item or c_item in cups_req)):
+                continue
+            f_p = _normalizar_fecha_iso(
+                p.get("fecha_aprobacion") or p.get("fecha_creacion") or p.get("fecha_autorizacion") or ""
+            )
+            if f_orden and f_p and f_p < f_orden:
+                continue
+            procs_coincidentes.append(p)
+
+        if procs_coincidentes:
+            auts_match, vigs_match, seen_files = [], [], set()
+            for pm in procs_coincidentes:
+                aut_val = str(pm.get("num_autorizacion") or pm.get("codigo_autorizacion") or pm.get("consecutivo") or "").strip()
+                if aut_val and aut_val not in auts_match:
+                    auts_match.append(aut_val)
+                vig_val = str(pm.get("fecha_vigencia") or pm.get("fecha_vencimiento") or "").strip()
+                if vig_val and vig_val not in vigs_match:
+                    vigs_match.append(vig_val)
+                for arch in (pm.get("archivos") or []):
+                    fname = arch.get("nombre_archivo") or arch.get("url_descarga")
+                    if fname and fname not in seen_files:
+                        seen_files.add(fname)
+                        archivos_filtrados.append(arch)
+            num_aut_final  = ", ".join(auts_match) or "AUTORIZADO EPS"
+            cups_final     = cups_req
+            vigencia_final = vigs_match[0] if vigs_match else ""
+        else:
+            estado_final = "SIN_VOLANTE"
+
+    elif status_bot in ("SIN_VOLANTE", "SIN_ORDENES"):
+        estado_final = "SIN_VOLANTE"
+
+    mensaje = res.get("mensaje") or ""
+    if status_bot == "AUTORIZADO" and not procs_coincidentes and cups_req:
+        mensaje = (
+            f"Sin autorización EPS para CUPS {cups_req}"
+            + (f" con fecha ≥ {f_orden}" if f_orden else "")
+            + ". Autorizaciones anteriores ignoradas."
+        )
+
+    return {
+        "status":           estado_final,
+        "num_autorizacion": num_aut_final,
+        "cups":             cups_final or res.get("cups") or "",
+        "fecha_vigencia":   vigencia_final or res.get("fecha_vigencia") or "",
+        "servicio":         res.get("servicio") or "",
+        "mensaje":          mensaje,
+        "ValEpsArchivos":   archivos_filtrados,
+        "procedimientos":   procs_coincidentes,
+    }
+
 # Mapa: fragmentos del nombre de entidad → código bot RPA
 EPS_MAPA = {
     "SANITAS":               "colsanitas",
@@ -276,9 +363,11 @@ def consultar_autorizacion_view(request):
 
     try:
         body = json.loads(request.body)
-        eps      = body.get("eps", "")
-        doc_tipo = body.get("doc_tipo", "CC")
-        doc_num  = (body.get("doc_num", "") or "").replace(" ", "")
+        eps         = body.get("eps", "")
+        doc_tipo    = body.get("doc_tipo", "CC")
+        doc_num     = (body.get("doc_num", "") or "").replace(" ", "")
+        cups        = (body.get("cups", "") or "").strip()
+        fecha_orden = (body.get("fecha_orden", "") or "").strip()[:10]
 
         if not eps or not doc_num:
             return JsonResponse({"success": False, "error": "eps y doc_num son requeridos"}, status=400)
@@ -297,13 +386,20 @@ def consultar_autorizacion_view(request):
                     if url.startswith("/api/"):
                         arch["url_descarga"] = DEMANDA_WEB_URL + url
                 datos["ValEpsArchivos"] = archivos_db
+                # Aplicar cruce CUPS si se especificó
+                if cups:
+                    cruce = _cruzar_resultado_bot_con_cups(datos, cups, fecha_orden)
+                    datos.update(cruce)
                 return JsonResponse({"success": True, "data": datos})
             # Si venció o fue error → re-consultar (continúa abajo)
         except AutorizacionRPA.DoesNotExist:
             pass
 
-        # 2. Llamar al RPA Hub
-        payload = json.dumps({"eps": eps, "doc_tipo": doc_tipo, "doc_num": doc_num, "headless": True}).encode()
+        # 2. Llamar al RPA Hub (pasar cups_esperado y fecha_minima para filtrado temprano)
+        payload = json.dumps({
+            "eps": eps, "doc_tipo": doc_tipo, "doc_num": doc_num,
+            "headless": True, "cups_esperado": cups, "fecha_minima": fecha_orden
+        }).encode()
         req = urllib.request.Request(
             f"{RPA_HUB_URL}/api/validar",
             data=payload,
@@ -313,7 +409,7 @@ def consultar_autorizacion_view(request):
         with urllib.request.urlopen(req, timeout=90) as resp:
             resultado = json.loads(resp.read().decode())
 
-        # 3. Guardar en BD si el bot respondió con un status válido
+        # 3. Guardar el resultado RAW en BD (keyed por eps+doc_num, sin filtro CUPS)
         datos = resultado.get("data") or resultado
         if isinstance(datos, dict) and datos.get("status") not in (None, ""):
             AutorizacionRPA.objects.update_or_create(
@@ -331,16 +427,20 @@ def consultar_autorizacion_view(request):
                 },
             )
 
-        # 4. Inyectar ValEpsArchivos con URLs absolutas en la respuesta
+        # 4. Inyectar ValEpsArchivos con URLs absolutas
         datos_resp = resultado.get("data") if isinstance(resultado, dict) else resultado
         if isinstance(datos_resp, dict):
-            dc = datos_resp
-            archivos_raw = list(dc.get("archivos") or dc.get("archivos_descargados") or [])
+            archivos_raw = list(datos_resp.get("archivos") or datos_resp.get("archivos_descargados") or [])
             for arch in archivos_raw:
                 url = arch.get("url_descarga", "")
                 if url.startswith("/api/"):
                     arch["url_descarga"] = DEMANDA_WEB_URL + url
             datos_resp["ValEpsArchivos"] = archivos_raw
+
+        # 5. Aplicar cruce CUPS sobre el resultado antes de retornar
+        if isinstance(datos_resp, dict) and cups:
+            cruce = _cruzar_resultado_bot_con_cups(datos_resp, cups, fecha_orden)
+            datos_resp.update(cruce)
 
         return JsonResponse(resultado)
 

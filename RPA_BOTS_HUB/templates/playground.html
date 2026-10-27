@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RPA Hub | Laboratorio Web Visual de Bots EPS</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        body {
+            background-color: #F8FAFC;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            color: #1E293B;
+        }
+        .header-box {
+            background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%);
+            color: white;
+            padding: 1.4rem 0;
+            margin-bottom: 1.75rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        .card-custom {
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04);
+            background: white;
+        }
+        pre {
+            background-color: #0F172A;
+            color: #38BDF8;
+            padding: 1rem;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            max-height: 440px;
+            overflow-y: auto;
+        }
+        .img-soporte {
+            max-height: 520px;
+            object-fit: contain;
+            border: 1px solid #CBD5E1;
+            border-radius: 8px;
+        }
+        .table-procs th {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            background-color: #F1F5F9;
+            color: #475569;
+            white-space: nowrap;
+        }
+        .table-procs td {
+            font-size: 0.78rem;
+            vertical-align: middle;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header-box">
+        <div class="container-fluid px-4 d-flex justify-content-between align-items-center">
+            <div>
+                <h3 class="fw-bold mb-1"><i class="bi bi-robot me-2"></i>RPA Hub — Laboratorio Web Visual</h3>
+                <p class="mb-0 text-white-50 small">Consola interactiva de pruebas visuales y extracción de procedimientos CUPS en portales EPS</p>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-success bg-opacity-25 text-white border border-light border-opacity-25 px-3 py-2">
+                    <i class="bi bi-check2-circle me-1"></i>Colsanitas + Salud Total + FOMAG + Capital Salud
+                </span>
+                <span class="badge bg-light text-primary px-3 py-2 fw-semibold">v1.4 Modular</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="container-fluid px-4 mb-5">
+        <div class="row g-4">
+            <!-- Formulario de Prueba -->
+            <div class="col-lg-4">
+                <div class="card card-custom p-4">
+                    <h5 class="fw-bold mb-3"><i class="bi bi-sliders me-2 text-primary"></i>Configurar Prueba</h5>
+                    
+                    <form id="formPrueba">
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">EPS Destino</label>
+                            <select id="epsSelect" class="form-select" required onchange="actualizarCasosRapidos()">
+                                {% for eps in eps_list %}
+                                <option value="{{ eps.codigo }}" {% if eps.codigo == 'capital_salud' %}selected{% endif %}>{{ eps.nombre }} ({{ eps.codigo }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="row g-2 mb-3">
+                            <div class="col-4">
+                                <label class="form-label fw-semibold">Tipo Doc</label>
+                                <select id="docTipo" class="form-select">
+                                    <option value="CC" selected>CC</option>
+                                    <option value="TI">TI</option>
+                                    <option value="CE">CE</option>
+                                    <option value="RC">RC</option>
+                                    <option value="PA">PA</option>
+                                </select>
+                            </div>
+                            <div class="col-8">
+                                <label class="form-label fw-semibold">Número Documento</label>
+                                <input type="text" id="docNum" class="form-control" placeholder="Ej: 52765213" value="52765213" required>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Casos de Prueba Rápidos</label>
+                            <div class="d-flex flex-wrap gap-2" id="casosRapidosBox">
+                                <button type="button" class="btn btn-outline-warning text-dark btn-sm fw-semibold" onclick="seleccionarCaso('capital_salud', '52765213')">
+                                    <i class="bi bi-hospital me-1"></i>Capital Salud Positivo (52765213)
+                                </button>
+                                <button type="button" class="btn btn-outline-success btn-sm fw-semibold" onclick="seleccionarCaso('fomag', '1123438381')">
+                                    <i class="bi bi-file-earmark-arrow-down me-1"></i>FOMAG Positivo (1123438381)
+                                </button>
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="seleccionarCaso('salud_total', '41707077')">
+                                    <i class="bi bi-check-circle me-1"></i>Salud Total Positivo (41707077)
+                                </button>
+                                <button type="button" class="btn btn-outline-info btn-sm text-dark" onclick="seleccionarCaso('colsanitas', '17337293')">
+                                    <i class="bi bi-check-circle me-1"></i>Colsanitas Positivo (17337293)
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="setDoc('86055679')">
+                                    <i class="bi bi-x-circle me-1"></i>Negativo / Sin Volante (86055679)
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="form-check form-switch mb-4 p-3 bg-light rounded border">
+                            <input class="form-check-input ms-0 me-3" type="checkbox" id="modoVisual" checked>
+                            <label class="form-check-label fw-semibold" for="modoVisual">
+                                <i class="bi bi-display me-1 text-primary"></i>Modo Visual (Abrir Navegador)
+                            </label>
+                            <div class="text-muted small ms-4">Permite ver la ventana de Chrome ejecutando el paso a paso en vivo</div>
+                        </div>
+
+                        <button type="submit" id="btnEjecutar" class="btn btn-primary w-100 py-2 fw-semibold">
+                            <i class="bi bi-play-circle-fill me-2"></i>Ejecutar Prueba en Vivo
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Resultados -->
+            <div class="col-lg-8">
+                <div class="card card-custom p-4 h-100">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div>
+                            <h5 class="fw-bold mb-0"><i class="bi bi-journal-code me-2 text-primary"></i>Resultado de la Validación</h5>
+                            <small id="resSubtitulo" class="text-muted"></small>
+                        </div>
+                        <span id="badgeEstado" class="badge bg-secondary px-3 py-2">Esperando ejecución...</span>
+                    </div>
+
+                    <!-- Spinner de carga -->
+                    <div id="loadingBox" class="text-center py-5 d-none">
+                        <div class="spinner-border text-primary" style="width: 3rem; height: 3rem;" role="status"></div>
+                        <p class="mt-3 fw-semibold text-muted">
+                            El bot está navegando en el portal de la EPS...<br>
+                            <small>Iniciando sesión, consultando órdenes/direccionamientos y descargando soportes PDF.</small>
+                        </p>
+                    </div>
+
+                    <!-- Contenido del Resultado -->
+                    <div id="resultadoBox" class="d-none">
+                        <div id="alertMensaje" class="alert alert-info py-2 px-3 small mb-2"></div>
+
+                        <!-- Caja de Carpeta de Descargas FOMAG -->
+                        <div id="boxCarpetaDescargas" class="d-none alert alert-light border d-flex justify-content-between align-items-center py-2 px-3 mb-3">
+                            <div class="small text-truncate me-2">
+                                <i class="bi bi-folder2-open text-warning me-1"></i>
+                                <strong>Carpeta Local Guardada:</strong>
+                                <code id="txtRutaCarpeta" class="text-dark ms-1">-</code>
+                            </div>
+                            <button type="button" id="btnAbrirCarpeta" class="btn btn-sm btn-warning fw-semibold text-nowrap">
+                                <i class="bi bi-folder-symlink me-1"></i>Abrir Carpeta en PC
+                            </button>
+                        </div>
+
+                        <div class="row g-2 mb-3">
+                            <div class="col-md-3 col-6">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block" style="font-size: 0.7rem;">Paciente</small>
+                                    <span id="resPaciente" class="fw-bold text-dark small">-</span>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block" style="font-size: 0.7rem;">Autorización / Orden</small>
+                                    <span id="resNumAut" class="fw-bold text-primary small">-</span>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block" style="font-size: 0.7rem;">CUPS Activos</small>
+                                    <span id="resCups" class="fw-bold text-dark small">-</span>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block" style="font-size: 0.7rem;">Vigencia</small>
+                                    <span id="resVigencia" class="fw-bold text-dark small">-</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <ul class="nav nav-tabs mb-3" id="resultTabs" role="tablist">
+                            <li class="nav-item">
+                                <button class="nav-link active fw-semibold" id="tab-procs" data-bs-toggle="tab" data-bs-target="#pane-procs" type="button">
+                                    <i class="bi bi-list-check me-1"></i>Procedimientos y Descargas <span id="badgeCountProcs" class="badge bg-primary ms-1">0</span>
+                                </button>
+                            </li>
+                            <li class="nav-item">
+                                <button class="nav-link fw-semibold" id="tab-soporte" data-bs-toggle="tab" data-bs-target="#pane-soporte" type="button">
+                                    <i class="bi bi-image me-1"></i>Captura de Auditoría
+                                </button>
+                            </li>
+                            <li class="nav-item">
+                                <button class="nav-link fw-semibold" id="tab-json" data-bs-toggle="tab" data-bs-target="#pane-json" type="button">
+                                    <i class="bi bi-code-slash me-1"></i>JSON Estructurado
+                                </button>
+                            </li>
+                        </ul>
+
+                        <div class="tab-content">
+                            <!-- Tabla de Procedimientos y CUPS -->
+                            <div class="tab-pane fade show active" id="pane-procs">
+                                <div class="table-responsive border rounded">
+                                    <table class="table table-hover table-procs mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>CUPS</th>
+                                                <th>Consecutivo / Cód.</th>
+                                                <th>Procedimiento / Servicio</th>
+                                                <th class="text-center">Cant.</th>
+                                                <th>N° Orden / Aut.</th>
+                                                <th>Estado</th>
+                                                <th>Vigencia</th>
+                                                <th>Orden y Adjuntos</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="tbodyProcedimientos">
+                                            <tr>
+                                                <td colspan="8" class="text-center text-muted py-3">Sin procedimientos para mostrar</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- Captura de Pantalla -->
+                            <div class="tab-pane fade text-center" id="pane-soporte">
+                                <img id="imgEvidencia" src="" alt="Evidencia EPS" class="img-fluid img-soporte w-100 shadow-sm mt-1">
+                            </div>
+
+                            <!-- JSON -->
+                            <div class="tab-pane fade" id="pane-json">
+                                <pre id="jsonOutput" class="mt-1"></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function setDoc(num) {
+            document.getElementById('docNum').value = num;
+        }
+
+        function seleccionarCaso(eps, doc) {
+            document.getElementById('epsSelect').value = eps;
+            document.getElementById('docNum').value = doc;
+        }
+
+        function actualizarCasosRapidos() {
+            var eps = document.getElementById('epsSelect').value;
+            if (eps === 'capital_salud') {
+                document.getElementById('docNum').value = '52765213';
+            } else if (eps === 'fomag') {
+                document.getElementById('docNum').value = '1123438381';
+            } else if (eps === 'salud_total') {
+                document.getElementById('docNum').value = '41707077';
+            } else if (eps === 'colsanitas') {
+                document.getElementById('docNum').value = '17337293';
+            }
+        }
+
+        function abrirCarpetaLocal(docNum) {
+            fetch('/api/abrir_carpeta_fomag/' + encodeURIComponent(docNum), { method: 'POST' })
+                .then(r => r.json())
+                .then(d => {
+                    if (!d.ok) alert('No se pudo abrir la carpeta automáticamente: ' + (d.error || ''));
+                });
+        }
+
+        document.getElementById('formPrueba').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            var eps = document.getElementById('epsSelect').value;
+            var docTipo = document.getElementById('docTipo').value;
+            var docNum = document.getElementById('docNum').value.trim();
+            var visual = document.getElementById('modoVisual').checked;
+            
+            var btn = document.getElementById('btnEjecutar');
+            var loadingBox = document.getElementById('loadingBox');
+            var resultadoBox = document.getElementById('resultadoBox');
+            var badgeEstado = document.getElementById('badgeEstado');
+            
+            btn.disabled = true;
+            loadingBox.classList.remove('d-none');
+            resultadoBox.classList.add('d-none');
+            badgeEstado.className = 'badge bg-warning text-dark px-3 py-2';
+            badgeEstado.innerText = 'Ejecutando Bot...';
+            
+            fetch('/api/ejecutar_prueba', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    eps: eps,
+                    doc_tipo: docTipo,
+                    doc_num: docNum,
+                    visual: visual
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                btn.disabled = false;
+                loadingBox.classList.add('d-none');
+                resultadoBox.classList.remove('d-none');
+                
+                var alertMsg = document.getElementById('alertMensaje');
+                alertMsg.innerText = data.mensaje || '';
+
+                if (data.status === 'AUTORIZADO') {
+                    badgeEstado.className = 'badge bg-success px-3 py-2';
+                    badgeEstado.innerText = 'AUTORIZADO / ACTIVO';
+                    alertMsg.className = 'alert alert-success py-2 px-3 small mb-2';
+                } else if (data.status === 'SIN_VOLANTE' || data.status === 'SIN_ORDENES') {
+                    badgeEstado.className = 'badge bg-warning text-dark px-3 py-2';
+                    badgeEstado.innerText = 'SIN ORDEN ACTIVA / VOLANTE';
+                    alertMsg.className = 'alert alert-warning py-2 px-3 small mb-2';
+                } else if (data.status === 'SIN_CONTRATO' || data.status === 'NO_ENCONTRADO') {
+                    badgeEstado.className = 'badge bg-secondary px-3 py-2';
+                    badgeEstado.innerText = 'NO AFILIADO / SIN CONTRATO';
+                    alertMsg.className = 'alert alert-secondary py-2 px-3 small mb-2';
+                } else {
+                    badgeEstado.className = 'badge bg-danger px-3 py-2';
+                    badgeEstado.innerText = 'ERROR: ' + (data.status || 'FALLIDO');
+                    alertMsg.className = 'alert alert-danger py-2 px-3 small mb-2';
+                }
+
+                // Mostrar caja de carpeta local si hay descargas
+                var boxCarpeta = document.getElementById('boxCarpetaDescargas');
+                if (data.carpeta_descargas && data.archivos_descargados && data.archivos_descargados.length > 0) {
+                    boxCarpeta.classList.remove('d-none');
+                    document.getElementById('txtRutaCarpeta').innerText = data.carpeta_descargas;
+                    document.getElementById('btnAbrirCarpeta').onclick = function() {
+                        abrirCarpetaLocal(data.doc_num || docNum);
+                    };
+                } else {
+                    boxCarpeta.classList.add('d-none');
+                }
+                
+                document.getElementById('resSubtitulo').innerText = (data.eps_nombre || eps) + ' • Consulta: ' + (data.fecha_consulta || '');
+                document.getElementById('resPaciente').innerText = data.paciente_nombre || data.doc_num || 'N/A';
+                document.getElementById('resNumAut').innerText = data.num_autorizacion || 'N/A';
+                document.getElementById('resVigencia').innerText = data.fecha_vigencia || 'N/A';
+                document.getElementById('resCups').innerText = data.cups || 'N/A';
+                
+                // Renderizar tabla de procedimientos
+                var procs = data.procedimientos || [];
+                document.getElementById('badgeCountProcs').innerText = procs.length;
+                var tbody = document.getElementById('tbodyProcedimientos');
+                tbody.innerHTML = '';
+                
+                if (procs.length > 0) {
+                    procs.forEach(function(p) {
+                        var archivosHtml = '<span class="text-muted small">-</span>';
+                        if (p.archivos && p.archivos.length > 0) {
+                            archivosHtml = '<div class="d-flex flex-wrap gap-1">';
+                            p.archivos.forEach(function(a) {
+                                if (a.tipo === 'ORDEN_PDF') {
+                                    archivosHtml += `<a href="${a.url_descarga}" target="_blank" class="btn btn-xs btn-success py-0 px-2 small" style="font-size:0.72rem;" title="${a.nombre_archivo}"><i class="bi bi-file-earmark-check me-1"></i>Orden PDF</a>`;
+                                } else {
+                                    archivosHtml += `<a href="${a.url_descarga}" target="_blank" class="btn btn-xs btn-primary py-0 px-2 small" style="font-size:0.72rem;" title="${a.nombre_archivo}"><i class="bi bi-paperclip me-1"></i>${a.nombre_original || 'Adjunto'}</a>`;
+                                }
+                            });
+                            archivosHtml += '</div>';
+                        }
+                        var tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td><span class="badge bg-primary bg-opacity-10 text-primary fw-bold">${p.cups || '-'}</span></td>
+                            <td class="text-muted font-monospace small">${p.codigo_servicio || p.consecutivo || '-'}</td>
+                            <td class="fw-semibold text-dark">${p.servicio || p.descripcion || '-'}</td>
+                            <td class="text-center"><span class="badge bg-light text-dark border">${p.cantidad || '1'}</span></td>
+                            <td class="fw-bold text-success font-monospace">${p.num_autorizacion || p.num_orden || '-'}</td>
+                            <td><span class="badge bg-success-subtle text-success">${p.estado || '-'}</span></td>
+                            <td class="text-nowrap small">${p.fecha_vigencia || p.fecha_vencimiento || '-'}</td>
+                            <td>${archivosHtml}</td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">No se encontraron procedimientos activos direccionados para este documento.</td></tr>';
+                }
+                
+                // Imagen y JSON
+                document.getElementById('jsonOutput').textContent = JSON.stringify(data, null, 2);
+                if (data.soporte_evidencia) {
+                    document.getElementById('imgEvidencia').src = '/api/evidencia/' + data.soporte_evidencia + '?t=' + Date.now();
+                }
+            })
+            .catch(err => {
+                btn.disabled = false;
+                loadingBox.classList.add('d-none');
+                badgeEstado.className = 'badge bg-danger px-3 py-2';
+                badgeEstado.innerText = 'Error de Conexión';
+                alert('Error al ejecutar prueba: ' + err);
+            });
+        });
+    </script>
+</body>
+</html>

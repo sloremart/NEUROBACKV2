@@ -1,0 +1,23 @@
+[
+  {
+    "id": "colsanitas_positivo",
+    "eps": "colsanitas",
+    "tipo": "CC",
+    "documento": "17337293",
+    "descripcion": "Caso positivo: Paciente con volante de autorización expedido (Wilmer Hernández)",
+    "esperado": {
+      "status": "AUTORIZADO",
+      "num_autorizacion_contiene": "356856718"
+    }
+  },
+  {
+    "id": "colsanitas_sin_volante",
+    "eps": "colsanitas",
+    "tipo": "CC",
+    "documento": "86055679",
+    "descripcion": "Caso negativo: Paciente activo pero sin volantes expedidos",
+    "esperado": {
+      "status": "SIN_VOLANTE"
+    }
+  }
+]

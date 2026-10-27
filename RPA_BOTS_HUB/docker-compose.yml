@@ -1,0 +1,31 @@
+services:
+  rpa-bots-api:
+    build: .
+    container_name: rpa_bots_api
+    restart: unless-stopped
+    command: python -u api.py
+    ports:
+      - "5055:5055"
+    env_file:
+      - .env
+    environment:
+      - TZ=America/Bogota
+    volumes:
+      - rpa_data:/app/data
+
+  rpa-bots-playground:
+    build: .
+    container_name: rpa_bots_playground
+    restart: unless-stopped
+    command: python -u playground.py
+    ports:
+      - "5070:5070"
+    env_file:
+      - .env
+    environment:
+      - TZ=America/Bogota
+    volumes:
+      - rpa_data:/app/data
+
+volumes:
+  rpa_data:
