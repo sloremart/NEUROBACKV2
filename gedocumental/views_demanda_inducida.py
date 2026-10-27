@@ -88,7 +88,7 @@ def demanda_inducida_view(request):
                 JOIN sis_empre e ON c.empresa        = e.codigo
                 LEFT JOIN sis_medi med ON o.cod_med  = med.codigo
                 WHERE c.codigo NOT IN (5, 6)
-                  AND i.codigo NOT LIKE '[A-Za-z]%'
+                  AND i.codigo NOT LIKE '[A-Za-z]%%'
                   AND (
                       UPPER(e.nombre) LIKE '%%SANITAS%%'
                       OR UPPER(e.nombre) LIKE '%%COLSANITAS%%'
