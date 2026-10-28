@@ -592,6 +592,13 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_procedimiento_adicional=True)
 
+    # Paciente particular: en la orden/autorización no se exige el procedimiento de la admisión
+    if (resultado["tipo"] != "OK" and resultado.get("paciente_coincide") != "NO"
+            and _procedimiento_libre_particular(tipo_documento, resultado.get("descripcion"), datos_admision)):
+        logger.info("%s de paciente particular: se descarta '%s'", tipo_documento, resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
+                         ajuste_particular=True)
+
     # Contraste que el CUPS de la admisión no distingue (mismo CUPS para simple y contrastado): no es error
     if (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
             and resultado.get("paciente_coincide") != "NO"
@@ -1206,6 +1213,24 @@ def _cantidad_anotada(texto: str, esperadas: list) -> bool:
     n = esperadas[0]
     anotadas = re.findall(rf'\bCANTIDAD\s*[:=]?\s*{n}\b', unicodedata.normalize('NFKD', texto or '').upper())
     return len(anotadas) >= len(esperadas)
+
+
+def _es_particular(datos_admision: dict) -> bool:
+    """Admisión facturada a un contrato PARTICULAR (tarifa plena, descuentos, bono): el paciente paga."""
+    contrato = str(datos_admision.get('contrato') or '').upper()
+    if contrato:
+        return 'PARTICULAR' in contrato
+    return 'PARTICULAR' in str(datos_admision.get('entidad') or '').upper()
+
+
+def _procedimiento_libre_particular(tipo_documento, descripcion, datos_admision: dict) -> bool:
+    """
+    Paciente PARTICULAR: puede tomarse cualquier examen (ej. la orden es una consulta de ortopedia con la
+    anotación "CON RX DE RODILLAS" y se factura la RX). En ORDEN/AUTORIZACION la diferencia de
+    procedimiento no es hallazgo; otros motivos (paciente, vencida, cantidad...) sí.
+    """
+    return ((tipo_documento or '').upper() in ('ORDEN', 'AUTORIZACION') and _es_particular(datos_admision)
+            and _solo_motivo_procedimiento(descripcion))
 
 
 def _solo_procedimiento_adicional(descripcion) -> bool:

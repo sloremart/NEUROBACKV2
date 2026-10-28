@@ -223,6 +223,24 @@ class CantidadAnotadaTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, ADMISION, texto=self.TEXTO))
 
 
+class ParticularTests(SimpleTestCase):
+    """Caso 32999: particular; la orden es consulta de ortopedia (890380) 'CON RX DE RODILLAS', se factura la RX."""
+    ADM = dict(ADMISION, entidad='PARTICULAR TARIFA PLENA', contrato='PARTICULAR TARIFA PLENA',
+               cups=['873420 - RADIOGRAFÍA DE RODILLA (AP- LATERAL) (cant. 2)'])
+    DESC = "Procedimiento en documento '890380' no coincide con '873420' de admisión. Se esperaba RX de rodilla."
+
+    def test_orden_de_particular_con_otro_procedimiento(self):
+        self.assertEqual(evaluar_hallazgo('ORDEN', self.DESC, self.ADM)[0], DESCARTADO)
+        adm = dict(self.ADM, entidad='', contrato='PARTICULAR 10% DESCUENTO')
+        self.assertEqual(evaluar_hallazgo('ORDEN', self.DESC, adm)[0], DESCARTADO)
+
+    def test_eps_u_otro_motivo_se_mantiene(self):
+        eps = dict(self.ADM, entidad='PARTICULAR 10% DESCUENTO', contrato='CAPITAL SALUD SUBSIDIADO')
+        self.assertIsNone(evaluar_hallazgo('ORDEN', self.DESC, eps))
+        self.assertIsNone(evaluar_hallazgo('ORDEN', self.DESC + " Orden vencida.", self.ADM))
+        self.assertIsNone(evaluar_hallazgo('RESULTADO', self.DESC, self.ADM))
+
+
 class CostoIATests(SimpleTestCase):
     """Ahorro de llamadas e imágenes a OpenAI."""
 
