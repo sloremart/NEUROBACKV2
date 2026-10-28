@@ -276,7 +276,12 @@ def demanda_inducida_view(request):
                                         aut_especifica = f"#{raw_consec}" + (f" (Orden {raw_orden})" if raw_orden else "")
                                     vig_especifica = str(proc.get("fecha_vigencia") or proc.get("fecha_vencimiento") or "").strip()
                                     break
-                        item["ValEpsAutorizacion"] = aut_especifica or aut.num_autorizacion or ""
+                        # Si hay procedimientos en caché pero ninguno coincide con este CUPS →
+                        # este CUPS no fue autorizado para Neuro, mostrar vacío (no el número de otro CUPS)
+                        if cups_fila_norm and procedimientos_dc:
+                            item["ValEpsAutorizacion"] = aut_especifica
+                        else:
+                            item["ValEpsAutorizacion"] = aut_especifica or aut.num_autorizacion or ""
                         if vig_especifica:
                             item["ValEpsVigencia"] = vig_especifica
                         if cups_fila:
