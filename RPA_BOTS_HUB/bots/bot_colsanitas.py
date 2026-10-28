@@ -59,8 +59,10 @@ class BotColsanitas(BaseEPSBot):
             context = None
             page = None
             try:
+                real_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
                 launch_kwargs = {
                     "headless": is_headless,
+                    "user_agent": real_ua,
                     "args": [
                         "--disable-blink-features=AutomationControlled",
                         "--no-sandbox",
@@ -82,6 +84,16 @@ class BotColsanitas(BaseEPSBot):
                 await page.goto(login_url, wait_until="domcontentloaded", timeout=45000)
                 await asyncio.sleep(2)
 
+                # Detectar bloqueo Radware WAF ("ANOMALY DETECTED")
+                page_title = await page.title()
+                page_text = await page.evaluate("() => document.body ? document.body.innerText : ''")
+                if "Radware" in page_title or "ANOMALY DETECTED" in page_text or "shieldsquare" in page_text.lower():
+                    resultado["status"] = "BLOQUEO_WAF_RADWARE"
+                    resultado["estado_eps"] = "CAPTCHA_DETECTADO"
+                    resultado["mensaje"] = "El portal de EPS Sanitas/Colsanitas activó el escudo antibot (Radware). La sesión debe renovarse manualmente."
+                    await page.screenshot(path=evidencia_path, full_page=True)
+                    return resultado
+
                 # 2. Si aparece formulario de login, ingresar credenciales
                 if await page.query_selector("#username"):
                     await page.fill("#username", self.eps_user)
@@ -93,37 +105,28 @@ class BotColsanitas(BaseEPSBot):
                 await page.goto(form_url, wait_until="domcontentloaded")
                 await asyncio.sleep(3)
 
-                # 4. Verificar que el formulario cargó; si no, limpiar sesión y reintentar
-                try:
-                    await page.wait_for_selector("select[id='formaVDGeneral:selectOneTipoDoc']", timeout=25000)
-                except Exception:
-                    await context.close()
-                    if os.path.exists(user_data_dir):
-                        shutil.rmtree(user_data_dir, ignore_errors=True)
-                    os.makedirs(user_data_dir, exist_ok=True)
-                    context = await p.chromium.launch_persistent_context(user_data_dir, **launch_kwargs)
-                    page = context.pages[0] if context.pages else await context.new_page()
-                    await self.stealth.apply_stealth_async(page)
-                    await page.goto(login_url, wait_until="domcontentloaded", timeout=45000)
-                    await asyncio.sleep(3)
-                    if await page.query_selector("#username"):
-                        await page.fill("#username", self.eps_user)
-                        await page.fill("#password", self.eps_pass)
-                        await page.click("input[value='Ingresar']")
-                        await asyncio.sleep(6)
-                    await page.goto(form_url, wait_until="domcontentloaded")
-                    await asyncio.sleep(3)
-                    await page.wait_for_selector("select[id='formaVDGeneral:selectOneTipoDoc']", timeout=40000)
+                # Detectar Radware también en el validador interno
+                page_title = await page.title()
+                page_text = await page.evaluate("() => document.body ? document.body.innerText : ''")
+                if "Radware" in page_title or "ANOMALY DETECTED" in page_text:
+                    resultado["status"] = "BLOQUEO_WAF_RADWARE"
+                    resultado["estado_eps"] = "CAPTCHA_DETECTADO"
+                    resultado["mensaje"] = "El validador de EPS Sanitas activó el escudo antibot (Radware). La sesión debe renovarse manualmente."
+                    await page.screenshot(path=evidencia_path, full_page=True)
+                    return resultado
 
-                # 5. Seleccionar tipo de consulta por Documento
+                # 4. Seleccionar tipo de consulta por Documento
                 await page.evaluate("""() => {
                     const radio = document.getElementById('formaVDGeneral:radioTipoConsultaTipoDoc:0');
                     if (radio) { radio.checked = true; radio.click(); if (radio.onchange) radio.onchange(); }
                 }""")
                 await asyncio.sleep(2)
 
-                # 6. Llenar tipo de doc y número (limpiar campo antes)
-                await page.select_option("select[id='formaVDGeneral:selectOneTipoDoc']", value=doc_tipo)
+                # 5. Llenar tipo de doc y número (limpiar campo antes)
+                try:
+                    await page.select_option("select[id='formaVDGeneral:selectOneTipoDoc']", label=doc_tipo)
+                except Exception:
+                    await page.select_option("select[id='formaVDGeneral:selectOneTipoDoc']", value=doc_tipo)
                 doc_sel = "input[id='formaVDGeneral:numDocumento']"
                 await page.fill(doc_sel, "")
                 await page.evaluate("""(sel) => {

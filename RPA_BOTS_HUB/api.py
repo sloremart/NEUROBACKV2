@@ -1,4 +1,6 @@
 import os
+import zipfile
+import shutil
 from flask import Flask, request, jsonify, send_from_directory
 from hub import BotHub
 
@@ -65,6 +67,31 @@ def api_validar():
         
     except ValueError as ve:
         return jsonify({"success": False, "error": str(ve)}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/restaurar_sesion/<eps_codigo>', methods=['POST'])
+def restaurar_sesion(eps_codigo):
+    token = request.headers.get("X-Session-Token", "")
+    if token != os.getenv("SESSION_RESTORE_TOKEN", "neuro2026"):
+        return jsonify({"success": False, "error": "Token inválido"}), 403
+    allowed = {"colsanitas", "salud_total", "capital_salud", "fomag"}
+    if eps_codigo not in allowed:
+        return jsonify({"success": False, "error": "EPS no permitida"}), 400
+    if "file" not in request.files:
+        return jsonify({"success": False, "error": "No se recibió archivo"}), 400
+    f = request.files["file"]
+    session_dir = os.path.join(HUB_DIR, "data", f".session_{eps_codigo}")
+    if os.path.exists(session_dir):
+        shutil.rmtree(session_dir, ignore_errors=True)
+    os.makedirs(session_dir, exist_ok=True)
+    tmp_zip = os.path.join(HUB_DIR, "data", f"_tmp_session_{eps_codigo}.zip")
+    f.save(tmp_zip)
+    try:
+        with zipfile.ZipFile(tmp_zip, "r") as z:
+            z.extractall(session_dir)
+        os.remove(tmp_zip)
+        return jsonify({"success": True, "mensaje": f"Sesión {eps_codigo} restaurada en {session_dir}"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
