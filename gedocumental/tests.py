@@ -843,3 +843,18 @@ class RecaudoTests(SimpleTestCase):
         self.assertEqual(recaudo._numero('$ 5,000'), 5000)
         self.assertEqual(recaudo._numero('11.5'), 11.5)
         self.assertIsNone(recaudo._numero('NO_INDICA'))
+        self.assertEqual(recaudo._numero('0.115'), 0.115)
+
+    def test_porcentaje_copago_con_valor_pesos_cero(self):
+        # "Recaudo de pago: 0.115 | Porcentaje Copago: 11.5 | Valor pesos pago compartido: 0.0"
+        for doc in ({'requiere_pago': 'NO', 'tipo_cobro': 'COPAGO', 'valor': '0.0', 'porcentaje': '11.5'},
+                    {'requiere_pago': 'NO_INDICA', 'valor': '0.0', 'porcentaje': '11.5'},
+                    {'requiere_pago': 'SI', 'tipo_cobro': 'COPAGO', 'valor': '0.115', 'porcentaje': ''},
+                    {'requiere_pago': 'SI', 'tipo_cobro': 'COPAGO', 'porcentaje': '0.115'}):
+            self.assertIsNone(self._verificar(doc, copago=11500.0), doc)
+        r = self._verificar({'requiere_pago': 'NO', 'valor': '0.0', 'porcentaje': '11.5'})
+        self.assertIn('No se recaudó', r[1])
+
+    def test_no_requiere_pago_con_cobro(self):
+        r = self._verificar({'requiere_pago': 'NO', 'valor': '0', 'porcentaje': '0'}, copago=15400.0)
+        self.assertIn('no requiere pago', r[1])

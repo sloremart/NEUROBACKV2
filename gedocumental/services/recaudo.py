@@ -48,7 +48,7 @@ def _numero(valor):
     t = str(valor).strip().replace('$', '').replace(' ', '')
     if not t or not re.search(r'\d', t):
         return None
-    if re.fullmatch(r'\d{1,3}([.,]\d{3})+', t):          # separador de miles
+    if re.fullmatch(r'[1-9]\d{0,2}([.,]\d{3})+', t):     # separador de miles ('0.115' no lo es)
         t = re.sub(r'[.,]', '', t)
     t = t.replace(',', '.')
     try:
@@ -128,6 +128,13 @@ def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
     categoria = _opcion(recaudo_doc.get('categoria'))
     afiliado_doc = _opcion(recaudo_doc.get('tipo_afiliado'))
     exonerado = _opcion(recaudo_doc.get('exoneracion')) == 'SI'
+    # Fracción en lugar de porcentaje o de pesos ("Recaudo de pago: 0.115" = 11,5 %)
+    if valor_doc and valor_doc < 1:
+        porcentaje_doc, valor_doc = porcentaje_doc or valor_doc, None
+    if porcentaje_doc and porcentaje_doc < 1:
+        porcentaje_doc *= 100
+    if porcentaje_doc and tipo_doc not in ('CUOTA_MODERADORA', 'COPAGO'):
+        tipo_doc = 'COPAGO'
     if (requiere in ('', 'NO_INDICA') and categoria in ('', 'NO_INDICA') and not exonerado
             and valor_doc is None and porcentaje_doc is None):
         return None   # el documento no dice nada del pago
@@ -146,9 +153,11 @@ def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
         notas.append(f"Tipo de afiliado en Zeus {z['afiliado_zeus'].lower()}, la autorización dice "
                      f"{afiliado_doc.lower()}")
 
-    # 1. No requiere pago (dice "no requiere pago", recaudo 0, o alerta de exoneración)
-    sin_pago = (exonerado or requiere == 'NO'
-                or (valor_doc == 0 and not porcentaje_doc and requiere != 'SI'))
+    # 1. No requiere pago (dice "no requiere pago", recaudo 0, o alerta de exoneración).
+    # Un porcentaje o valor mayor a 0 prevalece sobre otro campo en 0
+    # (ej. "Valor pesos pago compartido: 0.0" con "Porcentaje Copago: 11.5").
+    con_cobro = bool(porcentaje_doc or valor_doc)
+    sin_pago = exonerado or (not con_cobro and (requiere == 'NO' or (valor_doc == 0 and requiere != 'SI')))
     if sin_pago:
         if cobrado > TOLERANCIA_PESOS:
             motivo = "una alerta de exoneración" if exonerado else "que no requiere pago"

@@ -170,7 +170,8 @@ Si el documento no trae procedimiento (comprobante, factura…), usa NO_APLICA e
 "recaudo" = condiciones de pago SOLO si el documento es una AUTORIZACION o el validador de derechos de la EPS
 (en cualquier otro documento, todo NO_INDICA y ''). Transcribe lo que dice el documento, sin calcular:
   requiere_pago: NO si dice "no requiere pago", "exento", o el recaudo/valor a pagar es 0 y el porcentaje de
-                 copago es 0; SI si indica un valor o porcentaje mayor a 0; si no dice nada, NO_INDICA.
+                 copago es 0; SI si indica un valor o porcentaje mayor a 0 (aunque otro campo como "valor pesos
+                 pago compartido" diga 0); si no dice nada, NO_INDICA.
   tipo_cobro: lo que diga "condiciones de pago y recaudo" o similar (cuota moderadora o copago).
   valor: el valor en pesos a recaudar (solo dígitos); porcentaje: el porcentaje de copago (ej. 11.5).
   categoria: categoría o rango salarial (A, B, C) o nivel (Z para subsidiado nivel Z).
