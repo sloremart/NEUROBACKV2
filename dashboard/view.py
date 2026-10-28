@@ -2659,6 +2659,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
         cartera_filter  = request.GET.get('cartera_filter', '')
         servicio_filter = request.GET.get('servicio_filter', '')
         contrato_filter = request.GET.get('contrato_filter', '')
+        empresa_filter  = request.GET.get('empresa_filter', '')
 
         base_where = (
             "CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s"
@@ -2705,8 +2706,16 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             )
             contrato_params = [contrato_filter]
 
-        extra_clause = cartera_clause + servicio_clause + contrato_clause
-        extra_params = servicio_params + contrato_params
+        empresa_clause = ""
+        empresa_params: list = []
+        if empresa_filter:
+            empresa_clause = (
+                " AND LTRIM(RTRIM(ISNULL(se.nombre, CAST(sm.EPSPaciente AS VARCHAR(20))))) = %s"
+            )
+            empresa_params = [empresa_filter]
+
+        extra_clause = cartera_clause + servicio_clause + contrato_clause + empresa_clause
+        extra_params = servicio_params + contrato_params + empresa_params
 
         with connections['zeussalud'].cursor() as cursor:
 
@@ -2743,6 +2752,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                 FROM sis_maes sm
                 LEFT JOIN contratos c    ON c.codigo    = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                LEFT JOIN sis_empre se   ON se.codigo  = sm.EPSPaciente
                 WHERE {base_where}{extra_clause}
                 GROUP BY LEFT(CONVERT(varchar(20), sm.fecha_ing, 120), 7)
                 ORDER BY mes
@@ -2758,6 +2768,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                 FROM sis_maes sm
                 LEFT JOIN contratos c    ON c.codigo = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                LEFT JOIN sis_empre se   ON se.codigo = sm.EPSPaciente
                 WHERE {base_where}{extra_clause}
                 GROUP BY LTRIM(RTRIM(ISNULL(c.nombre, CAST(sm.contrato AS VARCHAR(20)))))
                 ORDER BY estudios DESC
@@ -2774,6 +2785,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                 FROM sis_maes sm
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
                 LEFT JOIN contratos c     ON c.codigo = sm.contrato
+                LEFT JOIN sis_empre se    ON se.codigo = sm.EPSPaciente
                 WHERE {base_where}{extra_clause}
                 GROUP BY LTRIM(RTRIM(COALESCE(uf.descripcion,
                     CAST(sm.ufuncional AS VARCHAR(10)), 'Sin servicio')))
@@ -2791,6 +2803,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                 LEFT JOIN Medicos m       ON m.codigo = sm.cod_medico
                 LEFT JOIN contratos c     ON c.codigo = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                LEFT JOIN sis_empre se    ON se.codigo = sm.EPSPaciente
                 WHERE {base_where}{extra_clause}
                 GROUP BY LTRIM(RTRIM(COALESCE(m.nombre, 'Sin médico')))
                 ORDER BY estudios DESC
@@ -2811,6 +2824,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                 LEFT JOIN sis_proc sp ON LTRIM(RTRIM(sp.cups)) = LTRIM(RTRIM(sd.cups))
                 LEFT JOIN contratos c    ON c.codigo = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                LEFT JOIN sis_empre se   ON se.codigo = sm.EPSPaciente
                 WHERE {base_where}{extra_clause}
                 GROUP BY
                     LTRIM(RTRIM(ISNULL(c.nombre, CAST(sm.contrato AS VARCHAR(20))))),
@@ -2820,7 +2834,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             ''', base_params + extra_params)
             rows_procedimientos = cursor.fetchall()
 
-            # 7. Opciones de filtro (sobre el rango completo, sin filtros de cartera/servicio/contrato)
+            # 7. Opciones de filtro (sobre el rango completo, sin filtros activos)
             cursor.execute(f'''
                 SELECT DISTINCT LTRIM(RTRIM(COALESCE(uf.descripcion,
                     CAST(sm.ufuncional AS VARCHAR(10)), 'Sin servicio')))
@@ -2840,6 +2854,15 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             ''', base_params)
             filtros_contratos = [r[0] for r in cursor.fetchall() if r[0]]
 
+            cursor.execute(f'''
+                SELECT DISTINCT LTRIM(RTRIM(ISNULL(se.nombre, CAST(sm.EPSPaciente AS VARCHAR(20)))))
+                FROM sis_maes sm
+                LEFT JOIN sis_empre se ON se.codigo = sm.EPSPaciente
+                WHERE {base_where}
+                ORDER BY 1
+            ''', base_params)
+            filtros_empresas = [r[0] for r in cursor.fetchall() if r[0]]
+
             # 8. KPI: cantidad de servicios prestados (líneas sis_deta) y pacientes únicos.
             # sis_maes.autoid es el id del PACIENTE (sis_paci.autoid); el detalle de la admisión se une
             # por sis_deta.estudio = sis_maes.con_estudio
@@ -2851,6 +2874,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                 JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN contratos c    ON c.codigo    = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                LEFT JOIN sis_empre se   ON se.codigo   = sm.EPSPaciente
                 WHERE {base_where}{extra_clause}
             ''', base_params + extra_params)
             row_kpis_extra = cursor.fetchone()
@@ -2918,10 +2942,12 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             'filtros': {
                 'servicios': filtros_servicios,
                 'contratos': filtros_contratos,
+                'empresas':  filtros_empresas,
             },
             'filtros_activos': {
                 'cartera':  cartera_filter,
                 'servicio': servicio_filter,
                 'contrato': contrato_filter,
+                'empresa':  empresa_filter,
             },
         })
