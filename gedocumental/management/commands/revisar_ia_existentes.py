@@ -78,10 +78,14 @@ class Command(BaseCommand):
         self.stdout.write(f"Archivos a revisar: {len(archivos)}")
         contextos = {}
         resumen = {}
+        entrada = salida = llamadas = 0
         for a in archivos:
             if a.Admision_id not in contextos:
                 contextos[a.Admision_id] = obtener_contexto_admision(a.Admision_id)
             res = revisar_archivo(a, contextos[a.Admision_id])
+            if res:
+                tok = res.get('tokens') or [0, 0]
+                entrada, salida, llamadas = entrada + tok[0], salida + tok[1], llamadas + res.get('llamadas', 1)
             tipo = res['tipo'] if res else 'OMITIDO'
             resumen[tipo] = resumen.get(tipo, 0) + 1
             detalle = f" — {res['descripcion']}" if res and tipo != 'OK' else ''
@@ -90,5 +94,9 @@ class Command(BaseCommand):
             self.stdout.flush()  # avance visible aunque se ejecute sin terminal (docker exec / cron)
 
         self.stdout.write(f"Resumen: {resumen}")
+        revisados = sum(v for k, v in resumen.items() if k != 'OMITIDO')
+        if revisados:
+            self.stdout.write(f"Consumo OpenAI: {llamadas} llamadas para {revisados} archivos | tokens de entrada "
+                              f"{entrada:,} | de salida {salida:,} | promedio {entrada // revisados:,} por archivo")
         if resumen.get('OMITIDO'):
             self.stdout.write("OMITIDO = IA desactivada, sin API key, formato no revisable o archivo no encontrado en disco.")

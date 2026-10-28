@@ -241,6 +241,7 @@ CORS_ALLOW_METHODS = [
 # de este archivo. Para activar/desactivar: cambiar REVISAR_CON_IA en
 # docker-compose.yml (o en .env) y reiniciar el contenedor.
 # La API key va en .env del servidor (no versionado).
+# OPENAI_MODEL (opcional, en .env): modelo de la revisión; por defecto gpt-4o-mini.
 
 AUTH_USER_MODEL = 'login.CustomUser'
 CORS_ALLOWED_ORIGINS = [

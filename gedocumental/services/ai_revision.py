@@ -33,8 +33,13 @@ TIPOS_OBSERVACION = [
 
 # Por debajo de este número de caracteres el PDF se trata como escaneado
 MIN_CARACTERES_TEXTO = 50
-# Páginas máximas que se envían como imagen (controla costo y tiempo)
+# Páginas máximas que se envían como imagen (controla costo y tiempo): cada página escaneada es la mayor
+# parte del costo de una revisión. HC y adicionales solo validan el paciente (primera página); el
+# RESULTADO trae paciente y estudio en las primeras páginas.
 MAX_PAGINAS_IMAGEN = 3
+MAX_PAGINAS_IMAGEN_POR_TIPO = {'HCLINICA': 1, 'HCNEURO': 1, 'ADICIONALES': 1, 'RESULTADO': 2}
+# Modelo de OpenAI (variable de entorno OPENAI_MODEL); gpt-4o-mini por defecto
+MODELO_POR_DEFECTO = 'gpt-4o-mini'
 # Lectura del PDF: a la IA solo van MAX_CARACTERES_TEXTO de texto, así que no se leen más páginas
 # de las necesarias (los RESULTADOS de SIESA pueden tener muchas páginas con gráficas muy pesadas)
 MAX_CARACTERES_TEXTO = 6000
@@ -248,7 +253,8 @@ def obtener_contexto_admision(consecutivo) -> dict:
     return datos
 
 
-def _leer_pdf(ruta_absoluta: str, siempre_imagen: bool = False) -> tuple[str, list[str]]:
+def _leer_pdf(ruta_absoluta: str, siempre_imagen: bool = False,
+              max_imagenes: int = MAX_PAGINAS_IMAGEN) -> tuple[str, list[str]]:
     """
     Devuelve (texto, imagenes_base64), decidiendo página por página: las que
     tienen texto se leen como texto; las escaneadas o fotos guardadas en PDF
@@ -272,7 +278,7 @@ def _leer_pdf(ruta_absoluta: str, siempre_imagen: bool = False) -> tuple[str, li
                 if tiene_texto:
                     textos.append(f"[Página {num}]\n{texto_pagina}")
                     caracteres += len(texto_pagina)
-                if (not tiene_texto or siempre_imagen) and len(imagenes) < MAX_PAGINAS_IMAGEN:
+                if (not tiene_texto or siempre_imagen) and len(imagenes) < max_imagenes:
                     buffer = io.BytesIO()
                     pagina.to_image(resolution=200).original.convert("RGB").save(buffer, format="PNG")
                     imagenes.append(base64.b64encode(buffer.getvalue()).decode())
@@ -302,10 +308,13 @@ def _leer_imagen(ruta_absoluta: str) -> tuple[str, list[str]]:
         return "", []
 
 
-def _leer_documento(ruta_absoluta: str, tipo_documento: str = '') -> tuple[str, list[str]]:
+def _leer_documento(ruta_absoluta: str, tipo_documento: str = '', ver_firma: bool = True) -> tuple[str, list[str]]:
+    """ver_firma=False: el sistema ya detectó la firma, no hace falta la imagen de un comprobante digital."""
     if ruta_absoluta.lower().endswith(EXTENSIONES_IMAGEN):
         return _leer_imagen(ruta_absoluta)
-    return _leer_pdf(ruta_absoluta, siempre_imagen=(tipo_documento or '').upper() in TIPOS_CON_FIRMA)
+    tipo = (tipo_documento or '').upper()
+    return _leer_pdf(ruta_absoluta, siempre_imagen=tipo in TIPOS_CON_FIRMA and ver_firma,
+                     max_imagenes=MAX_PAGINAS_IMAGEN_POR_TIPO.get(tipo, MAX_PAGINAS_IMAGEN))
 
 
 def _formatear_contexto(datos_admision: dict) -> str:
@@ -341,7 +350,12 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         f"TIPO DE DOCUMENTO CARGADO: {tipo_documento}\n\n"
         f"DATOS REALES DE LA ADMISIÓN (sistema):\n{_formatear_contexto(datos_admision)}\n\n"
     )
-    if _es_comprobante(tipo_documento):
+    if _es_comprobante(tipo_documento) and firma_detectada and not imagenes:
+        encabezado += (
+            "Este documento es un COMPROBANTE y el SISTEMA YA VERIFICÓ la firma del paciente (firma_paciente = SI). "
+            "Solo verifica el PACIENTE. NO compares procedimientos ni CUPS (procedimientos_coinciden = NO_APLICA).\n\n"
+        )
+    elif _es_comprobante(tipo_documento):
         encabezado += (
             "VERIFICACIÓN ADICIONAL (este documento es un COMPROBANTE): mira la imagen y verifica que haya una "
             "firma o trazo manuscrito del paciente (o su acompañante) en el espacio \"Firma del paciente\". "
@@ -369,8 +383,9 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     if _contenido is not None:
         contenido = _contenido
 
+    modelo = getattr(settings, 'OPENAI_MODEL', '') or os.environ.get('OPENAI_MODEL', '') or MODELO_POR_DEFECTO
     respuesta = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model=modelo,
         messages=[
             {"role": "system", "content": PROMPT_SISTEMA},
             {"role": "user",   "content": contenido},
@@ -381,6 +396,10 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     )
 
     resultado = json.loads(respuesta.choices[0].message.content)
+    # Consumo (para medir el costo): tokens de entrada y de salida de esta llamada
+    uso = getattr(respuesta, 'usage', None)
+    resultado["tokens"] = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
+    resultado["llamadas"] = 1
 
     # Normalizar el tipo por si la IA devuelve algo inesperado
     tipo = resultado.get("tipo", "").upper().strip()
@@ -443,7 +462,12 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                      "final de la hoja, debajo de otro rótulo \"Firma del paciente\"): firma_paciente = SI")
         ajustes["firma_paciente"] = "SI"
 
-    if notas and not _reintento and resultado["tipo"] != "OK":
+    if notas and not _reintento and resultado["tipo"] != "OK" and _solo_motivos_corregidos(resultado, ajustes):
+        # La corrección del sistema explica todo el hallazgo: queda OK sin repetir la consulta (ahorra
+        # una llamada completa con imágenes)
+        logger.info("Verificación del sistema corrige a la IA (%s): OK sin repetir la consulta", ", ".join(ajustes))
+        resultado.update(ajustes, tipo="OK", descripcion="Documento correcto", ajuste_sistema=list(ajustes))
+    elif notas and not _reintento and resultado["tipo"] != "OK":
         logger.info("Verificación del sistema corrige a la IA (%s); se repite la revisión", ", ".join(ajustes))
         nota = ("\n\nVERIFICADO POR EL SISTEMA: " + "; ".join(notas) + ". No reportes esto como error. "
                 "Reporta únicamente otros problemas, si los hay; si no hay ninguno, el tipo es OK.")
@@ -451,8 +475,11 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             contenido_2 = [dict(contenido[0], text=contenido[0]["text"] + nota)] + contenido[1:]
         else:
             contenido_2 = contenido + nota
+        primera = resultado
         resultado = _llamar_openai(texto, imagenes, tipo_documento, datos_admision,
                                    _reintento=True, _contenido=contenido_2, firma_detectada=firma_detectada)
+        resultado["tokens"] = [a + b for a, b in zip(primera["tokens"], resultado["tokens"])]
+        resultado["llamadas"] = 2
         resultado.update(ajustes)
         resultado["ajuste_sistema"] = list(ajustes)
 
@@ -827,6 +854,26 @@ def _solo_motivo_paciente(descripcion) -> bool:
     sobre_paciente = re.search(r'paciente|nombre|usuario|identificacion|documento de identidad', d)
     otros = re.search(r'procedimiento|cups|estudio|firma|vencid|autorizacion|cantidad|legib|lateralidad', d)
     return bool(sobre_paciente and not otros)
+
+
+def _solo_motivos_corregidos(resultado: dict, ajustes: dict) -> bool:
+    """
+    True si el sistema corrigió UN solo dato (paciente, procedimiento o firma) y la descripción de la IA
+    no habla de nada más: el hallazgo queda resuelto sin volver a llamar a la IA. Con varios ajustes o con
+    otros motivos en la descripción se repite la consulta, para que la IA diga si queda algún problema.
+    """
+    import re
+    import unicodedata
+    d = unicodedata.normalize('NFKD', str(resultado.get("descripcion") or '')).encode('ascii', 'ignore').decode().lower()
+    if not d or len(ajustes) != 1:
+        return False
+    if "paciente_coincide" in ajustes:
+        return _solo_motivo_paciente(d)
+    if "procedimientos_coinciden" in ajustes:
+        return _solo_motivo_procedimiento(d) and not re.search(r'derech|izquierd|lateralidad', d)
+    if "firma_paciente" in ajustes:
+        return 'firma' in d and not re.search(_OTROS_MOTIVOS.replace('firma|', ''), d)
+    return False
 
 
 def _id_documento(resultado: dict, id_adm: str) -> str:
@@ -1320,13 +1367,14 @@ def analizar_documento(ruta_absoluta: str, tipo_documento: str, datos_admision: 
     Lee el PDF o la imagen y lo envía a la IA. No toca la base de datos.
     Devuelve None si no se pudo leer. Puede lanzar excepciones de la API.
     """
-    texto, imagenes = _leer_documento(ruta_absoluta, tipo_documento)
+    firma = _detectar_firma_pdf(ruta_absoluta) if _es_comprobante(tipo_documento) else None
+    # Firma ya detectada por el sistema: el comprobante digital va solo como texto (sin imagen)
+    texto, imagenes = _leer_documento(ruta_absoluta, tipo_documento, ver_firma=firma is not True)
     if (tipo_documento or '').upper() == 'RESULTADO' and texto:
         texto = _quitar_secciones_ordenes(texto)
     if not texto and not imagenes:
         logger.info("PDF sin contenido legible: %s", ruta_absoluta)
         return None
-    firma = _detectar_firma_pdf(ruta_absoluta) if _es_comprobante(tipo_documento) else None
     resultado = _llamar_openai(texto, imagenes, tipo_documento, datos_admision, firma_detectada=firma)
     resultado["modo"] = ("mixto" if texto else "imagen") if imagenes else "texto"
     if (tipo_documento or '').upper() == 'AUTORIZACION':

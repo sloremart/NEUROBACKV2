@@ -223,6 +223,60 @@ class CantidadAnotadaTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, ADMISION, texto=self.TEXTO))
 
 
+class CostoIATests(SimpleTestCase):
+    """Ahorro de llamadas e imágenes a OpenAI."""
+
+    def tearDown(self):
+        for ruta in getattr(self, 'rutas', []):
+            os.unlink(ruta)
+
+    def _crear(self, paginas):
+        ruta = _pdf(paginas)
+        self.rutas = getattr(self, 'rutas', []) + [ruta]
+        return ruta
+
+    def test_paginas_en_imagen_segun_tipo(self):
+        from gedocumental.services.ai_revision import _leer_documento
+        ruta = self._crear(['', '', ''])   # escaneado de 3 páginas
+        self.assertEqual(len(_leer_documento(ruta, 'HCLINICA')[1]), 1)
+        self.assertEqual(len(_leer_documento(ruta, 'RESULTADO')[1]), 2)
+        self.assertEqual(len(_leer_documento(ruta, 'AUTORIZACION')[1]), 3)
+
+    def test_comprobante_digital_con_firma_detectada_va_sin_imagen(self):
+        from gedocumental.services.ai_revision import _leer_documento
+        ruta = self._crear([TEXTO_ORDEN])
+        self.assertEqual(len(_leer_documento(ruta, 'COMPROBANTE', ver_firma=False)[1]), 0)
+        self.assertEqual(len(_leer_documento(ruta, 'COMPROBANTE')[1]), 1)
+
+    def _llamar(self, descripcion):
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        respuesta = {
+            "paciente_documento": "BEJARANO PEÑA JUAN ALEXIS", "nombre_documento": "BEJARANO PEÑA JUAN ALEXIS",
+            "identificacion_documento": "1121978991", "paciente_coincide": "NO",
+            "procedimientos_documento": "881302", "procedimientos_coinciden": "SI",
+            "firma_paciente": "NO_APLICA", "tipo": "INFORMACION", "descripcion": descripcion,
+        }
+        client = mock.MagicMock()
+        client.chat.completions.create.return_value = mock.MagicMock(
+            choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(respuesta)))],
+            usage=mock.MagicMock(prompt_tokens=25000, completion_tokens=300))
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            r = _llamar_openai('', ['img'], 'ORDEN', ADMISION)
+        return r, client.chat.completions.create.call_count
+
+    def test_correccion_del_sistema_sin_segunda_llamada(self):
+        r, llamadas = self._llamar("Paciente no corresponde: documento 'BEJARANO PEÑA JUAN ALEXIS', "
+                                   "admisión 'JUAN ALEXIS BEJARANO PEÑA'.")
+        self.assertEqual((r['tipo'], llamadas, r['llamadas'], r['tokens']), ('OK', 1, 1, [25000, 300]))
+
+    def test_con_otro_motivo_repite_la_consulta(self):
+        r, llamadas = self._llamar("Paciente no corresponde: documento 'BEJARANO PEÑA JUAN ALEXIS'. "
+                                   "Orden vencida.")
+        self.assertEqual((llamadas, r['llamadas'], r['tokens']), (2, 2, [50000, 600]))
+
+
 class CantidadesIgualesTests(SimpleTestCase):
     """Revisión con la clave nueva: la IA lee 'CANTIDAD 2' pero deja el tipo AUTORIZACION."""
     ADM = dict(ADMISION, cups=['882317 - DOPPLER (cant. 2)'])
