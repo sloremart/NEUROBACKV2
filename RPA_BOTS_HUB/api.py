@@ -70,6 +70,20 @@ def api_validar():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/api/restaurar_state/<eps_codigo>', methods=['POST'])
+def restaurar_state(eps_codigo):
+    token = request.headers.get("X-Session-Token", "")
+    if token != os.getenv("SESSION_RESTORE_TOKEN", "neuro2026"):
+        return jsonify({"success": False, "error": "Token inválido"}), 403
+    if eps_codigo != "colsanitas":
+        return jsonify({"success": False, "error": "EPS no soportada aún"}), 400
+    if "file" not in request.files:
+        return jsonify({"success": False, "error": "No se recibió archivo"}), 400
+    f = request.files["file"]
+    state_path = os.path.join(HUB_DIR, "data", f"{eps_codigo}_state.json")
+    f.save(state_path)
+    return jsonify({"success": True, "mensaje": f"Storage state guardado en {state_path}"})
+
 @app.route('/upload_sesion', methods=['GET'])
 def upload_sesion_form():
     return '''<!DOCTYPE html>
@@ -80,8 +94,8 @@ button{background:#2563eb;color:#fff;border:none;padding:12px 24px;border-radius
 #msg{margin-top:20px;padding:12px;border-radius:6px;display:none}
 .ok{background:#d1fae5;color:#065f46}.err{background:#fee2e2;color:#991b1b}</style></head>
 <body><h2>Restaurar sesión Colsanitas</h2>
-<p>Selecciona el archivo <b>session_colsanitas.zip</b> y haz clic en Subir.</p>
-<input type="file" id="f" accept=".zip">
+<p>Sube el archivo <b>colsanitas_state.json</b> (cookies portables) o el ZIP del perfil.</p>
+<input type="file" id="f" accept=".zip,.json">
 <button onclick="subir()">Subir sesión</button>
 <div id="msg"></div>
 <script>
@@ -92,7 +106,8 @@ async function subir(){
   const msg=document.getElementById('msg');
   msg.style.display='block';msg.className='';msg.textContent='Subiendo...';
   try{
-    const r=await fetch('/api/restaurar_sesion/colsanitas',{method:'POST',headers:{'X-Session-Token':'neuro2026'},body:fd});
+    const endpoint=f.name.endsWith('.json')?'/api/restaurar_state/colsanitas':'/api/restaurar_sesion/colsanitas';
+    const r=await fetch(endpoint,{method:'POST',headers:{'X-Session-Token':'neuro2026'},body:fd});
     const d=await r.json();
     if(d.success){msg.className='ok';msg.textContent='✓ '+d.mensaje;}
     else{msg.className='err';msg.textContent='Error: '+d.error;}

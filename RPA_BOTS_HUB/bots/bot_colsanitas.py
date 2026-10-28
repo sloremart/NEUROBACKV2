@@ -50,6 +50,7 @@ class BotColsanitas(BaseEPSBot):
 
         base_hub = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         user_data_dir = os.path.join(base_hub, "data", ".session_colsanitas")
+        storage_state_path = os.path.join(base_hub, "data", "colsanitas_state.json")
         os.makedirs(user_data_dir, exist_ok=True)
 
         login_url = "https://portal.colsanitas.com/sso/login?service=https%3A%2F%2Fappcore.colsanitas.com%2FValidadorDerechos%2Fpages%2Fgestion%2FValidacionDerechos.seam%3FflagConsulta%3D1"
@@ -75,7 +76,16 @@ class BotColsanitas(BaseEPSBot):
                 if os.name == 'nt':
                     launch_kwargs["channel"] = "chrome"
 
-                context = await p.chromium.launch_persistent_context(user_data_dir, **launch_kwargs)
+                # Usar storage_state JSON (cross-platform) si existe; si no, usar perfil persistente
+                if os.path.exists(storage_state_path):
+                    browser = await p.chromium.launch(**{k: v for k, v in launch_kwargs.items() if k != "no_viewport"})
+                    context = await browser.new_context(
+                        storage_state=storage_state_path,
+                        user_agent=real_ua,
+                        no_viewport=True
+                    )
+                else:
+                    context = await p.chromium.launch_persistent_context(user_data_dir, **launch_kwargs)
                 page = context.pages[0] if context.pages else await context.new_page()
                 await self.stealth.apply_stealth_async(page)
                 await self.activar_visor_en_vivo(page, is_headless, dir_evidencias)
