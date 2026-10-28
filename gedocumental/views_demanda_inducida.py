@@ -250,7 +250,6 @@ def demanda_inducida_view(request):
                     aut = aut_map.get(key)
                     if aut:
                         item["ValEpsEstado"]       = aut.status or ""
-                        item["ValEpsAutorizacion"] = aut.num_autorizacion or ""
                         item["ValEpsVigencia"]     = aut.fecha_vigencia or ""
                         item["ValEpsMensaje"]      = aut.mensaje or ""
                         dc = aut.datos_completos or {}
@@ -260,8 +259,26 @@ def demanda_inducida_view(request):
                             url = arch.get("url_descarga", "")
                             if url.startswith("/api/"):
                                 arch["url_descarga"] = DEMANDA_WEB_URL + url
-                        # Filtrar solo el PDF que corresponde al CUPS de esta fila
-                        cups_fila = str(item.get("Cups", "")).strip().split("-")[0]
+                        # Cruzar por CUPS para mostrar la autorización específica de esta fila
+                        cups_fila = str(item.get("Cups", "")).strip().split("-")[0].strip()
+                        import re as _re_aux
+                        cups_fila_norm = _re_aux.sub(r"[^0-9A-Za-z]", "", cups_fila).upper()
+                        procedimientos_dc = dc.get("procedimientos") or []
+                        aut_especifica = ""
+                        vig_especifica = ""
+                        if cups_fila_norm and procedimientos_dc:
+                            for proc in procedimientos_dc:
+                                c_proc = _re_aux.sub(r"[^0-9A-Za-z]", "", str(proc.get("cups") or "")).upper()
+                                if c_proc and (cups_fila_norm == c_proc or cups_fila_norm in c_proc or c_proc in cups_fila_norm):
+                                    raw_consec = str(proc.get("consecutivo") or "").strip()
+                                    raw_orden  = str(proc.get("num_orden") or "").strip()
+                                    if raw_consec:
+                                        aut_especifica = f"#{raw_consec}" + (f" (Orden {raw_orden})" if raw_orden else "")
+                                    vig_especifica = str(proc.get("fecha_vigencia") or proc.get("fecha_vencimiento") or "").strip()
+                                    break
+                        item["ValEpsAutorizacion"] = aut_especifica or aut.num_autorizacion or ""
+                        if vig_especifica:
+                            item["ValEpsVigencia"] = vig_especifica
                         if cups_fila:
                             item["ValEpsArchivos"] = [
                                 a for a in archivos_raw
