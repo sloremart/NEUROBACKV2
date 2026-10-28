@@ -78,7 +78,7 @@ class BotColsanitas(BaseEPSBot):
 
                 # Usar storage_state JSON (cross-platform) si existe; si no, usar perfil persistente
                 if os.path.exists(storage_state_path):
-                    browser = await p.chromium.launch(**{k: v for k, v in launch_kwargs.items() if k != "no_viewport"})
+                    browser = await p.chromium.launch(**{k: v for k, v in launch_kwargs.items() if k not in ("no_viewport", "user_agent")})
                     context = await browser.new_context(
                         storage_state=storage_state_path,
                         user_agent=real_ua,
