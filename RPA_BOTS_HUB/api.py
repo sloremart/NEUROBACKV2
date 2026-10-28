@@ -70,6 +70,36 @@ def api_validar():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/upload_sesion', methods=['GET'])
+def upload_sesion_form():
+    return '''<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Restaurar Sesión</title>
+<style>body{font-family:sans-serif;max-width:500px;margin:60px auto;padding:20px}
+h2{color:#333}input[type=file]{margin:16px 0;display:block}
+button{background:#2563eb;color:#fff;border:none;padding:12px 24px;border-radius:6px;font-size:16px;cursor:pointer}
+#msg{margin-top:20px;padding:12px;border-radius:6px;display:none}
+.ok{background:#d1fae5;color:#065f46}.err{background:#fee2e2;color:#991b1b}</style></head>
+<body><h2>Restaurar sesión Colsanitas</h2>
+<p>Selecciona el archivo <b>session_colsanitas.zip</b> y haz clic en Subir.</p>
+<input type="file" id="f" accept=".zip">
+<button onclick="subir()">Subir sesión</button>
+<div id="msg"></div>
+<script>
+async function subir(){
+  const f=document.getElementById('f').files[0];
+  if(!f){alert('Selecciona un archivo ZIP primero');return;}
+  const fd=new FormData();fd.append('file',f);
+  const msg=document.getElementById('msg');
+  msg.style.display='block';msg.className='';msg.textContent='Subiendo...';
+  try{
+    const r=await fetch('/api/restaurar_sesion/colsanitas',{method:'POST',headers:{'X-Session-Token':'neuro2026'},body:fd});
+    const d=await r.json();
+    if(d.success){msg.className='ok';msg.textContent='✓ '+d.mensaje;}
+    else{msg.className='err';msg.textContent='Error: '+d.error;}
+  }catch(e){msg.className='err';msg.textContent='Error de red: '+e;}
+}
+</script></body></html>'''
+
 @app.route('/api/restaurar_sesion/<eps_codigo>', methods=['POST'])
 def restaurar_sesion(eps_codigo):
     token = request.headers.get("X-Session-Token", "")
