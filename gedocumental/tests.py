@@ -208,19 +208,20 @@ class CantidadAnotadaTests(SimpleTestCase):
     PAGINA = ("AUTORIZACION DE SERVICIOS\nServicios Autorizados Cantidad\n{cups} 1\n"
               "NO REQUIERE PAGO\nVALIDO HASTA 20261214\nCANTIDAD 2\n")
     TEXTO = PAGINA.format(cups='873411 RADIOGRAFIA DE CADERA') + PAGINA.format(cups='873333 RADIOGRAFIA DE PIE')
+    ADM = dict(ADMISION, cups=['873411 - RADIOGRAFÍA DE CADERA (cant. 2)', '873333 - RADIOGRAFÍA DE PIE (cant. 2)'])
 
     def test_anotacion_de_cantidad_en_cada_pagina(self):
         self.assertTrue(necesita_pdf('AUTORIZACION', self.DESC))
-        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, ADMISION, texto=self.TEXTO)[0], DESCARTADO)
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM, texto=self.TEXTO)[0], DESCARTADO)
 
     def test_anotacion_solo_en_una_pagina_se_mantiene(self):
         texto = self.PAGINA.format(cups='873411') + "AUTORIZACION 873333 RADIOGRAFIA DE PIE 1\n"
-        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, ADMISION, texto=texto))
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM, texto=texto))
 
     def test_sin_texto_o_con_otro_motivo_se_mantiene(self):
-        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, ADMISION))
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM))
         desc = self.DESC + " Autorización vencida."
-        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, ADMISION, texto=self.TEXTO))
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, self.ADM, texto=self.TEXTO))
 
 
 class ParticularTests(SimpleTestCase):
@@ -295,6 +296,50 @@ class CostoIATests(SimpleTestCase):
         self.assertEqual((llamadas, r['llamadas'], r['tokens']), (2, 2, [50000, 600]))
 
 
+class TranscripcionTablaTests(SimpleTestCase):
+    """Caso 31807: orden escaneada con RM, EEG y, en la última fila, la consulta de neurología pediátrica."""
+    ADM = dict(ADMISION, cups=['890375 - CONSULTA DE CONTROL POR NEUROLOGIA PEDIATRICA (cant. 1)'])
+    DESC = ("Procedimientos en documento: RM y EEG; se esperaba consulta de control por especialista en "
+            "neurología pediátrica.")
+
+    def _llamar(self, transcripcion, tipo='ORDEN', imagenes=('img',)):
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        revision = {
+            "nombre_documento": "AREVALO ACUÑA NICOLE", "identificacion_documento": "1121902635",
+            "paciente_coincide": "SI", "procedimientos_documento": "883101 RM; 891402 EEG",
+            "procedimientos_coinciden": "NO", "firma_paciente": "NO_APLICA", "tipo": "SOPORTES",
+            "descripcion": self.DESC,
+            "estudio_documento": {"modalidad": "RM", "region": "CABEZA"},
+            "estudio_admision": {"modalidad": "CONSULTA", "especialidad": "NEUROLOGIA_PEDIATRICA"},
+        }
+
+        def respuesta(contenido, tokens):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
+                                  usage=mock.MagicMock(prompt_tokens=tokens, completion_tokens=100))
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [
+            respuesta(revision, 25000), respuesta({"procedimientos": transcripcion}, 20000)]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            r = _llamar_openai('', list(imagenes), tipo, self.ADM)
+        return r, client.chat.completions.create.call_count
+
+    def test_la_transcripcion_trae_la_ultima_fila(self):
+        r, llamadas = self._llamar("883101 RESONANCIA MAGNETICA DE CEREBRO; 891402 ELECTROENCEFALOGRAMA; "
+                                   "890375 CONSULTA DE CONTROL POR NEUROLOGIA PEDIATRICA")
+        self.assertEqual((r['tipo'], llamadas, r['llamadas'], r['tokens']), ('OK', 2, 2, [45000, 200]))
+        self.assertTrue(r['ajuste_transcripcion'])
+
+    def test_la_transcripcion_tampoco_la_trae(self):
+        r, llamadas = self._llamar("883101 RESONANCIA MAGNETICA DE CEREBRO; 891402 ELECTROENCEFALOGRAMA")
+        self.assertEqual((r['tipo'], llamadas), ('SOPORTES', 2))
+
+    def test_documento_digital_no_hace_la_consulta_extra(self):
+        r, llamadas = self._llamar("890375", imagenes=())
+        self.assertEqual((r['tipo'], llamadas), ('SOPORTES', 1))
+
+
 class CantidadesIgualesTests(SimpleTestCase):
     """Revisión con la clave nueva: la IA lee 'CANTIDAD 2' pero deja el tipo AUTORIZACION."""
     ADM = dict(ADMISION, cups=['882317 - DOPPLER (cant. 2)'])
@@ -316,6 +361,18 @@ class CantidadesIgualesTests(SimpleTestCase):
         desc = "Cantidad autorizada en el documento es 2, mientras que la admisión es 2."
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, dict(ADMISION, cups=['882317 - DOPPLER (cant. 1)'])))
 
+    def test_zeus_ya_tiene_la_cantidad_del_documento(self):
+        # Caso 34348: autorización con 2 RX de rodilla; Zeus hoy factura 873420 con cantidad 2
+        desc = ("Cantidad autorizada en el documento es 2, se esperaba 1 para el procedimiento 873420. "
+                "Documento correcto en lo demás.")
+        adm = dict(ADMISION, cups=['873420 - RADIOGRAFÍA DE RODILLA (AP- LATERAL) (cant. 2)'])
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, adm)[0], CORREGIDO)
+        adm2 = dict(ADMISION, cups=['873420 - RADIOGRAFÍA DE RODILLA (cant. 2)', '871121 - RX TÓRAX (cant. 1)'])
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, adm2)[0], CORREGIDO)
+        # Zeus sigue con 1: se mantiene
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc,
+                                           dict(ADMISION, cups=['873420 - RADIOGRAFÍA DE RODILLA (cant. 1)'])))
+
 
 class OrdenConMasCantidadTests(SimpleTestCase):
     def test_orden_que_pide_mas_sesiones(self):
@@ -326,7 +383,8 @@ class OrdenConMasCantidadTests(SimpleTestCase):
             self.assertEqual(evaluar_hallazgo('ORDEN', desc, ADMISION)[0], DESCARTADO, desc)
 
     def test_orden_con_menos_o_autorizacion_se_mantiene(self):
-        self.assertIsNone(evaluar_hallazgo('ORDEN', "Cantidad en documento es 1, se esperaba 2.", ADMISION))
+        self.assertIsNone(evaluar_hallazgo('ORDEN', "Cantidad en documento es 1, se esperaba 2.",
+                                           dict(ADMISION, cups=['881302 - ECOGRAFÍA DE ABDOMEN TOTAL (cant. 2)'])))
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', "Cantidad autorizada es 6, se esperaba 1.", ADMISION))
         self.assertIsNone(evaluar_hallazgo('ORDEN', "Cantidad es 6, se esperaba 1; orden vencida.", ADMISION))
 
@@ -376,6 +434,13 @@ class ContrasteTests(SimpleTestCase):
         self.assertEqual(evaluar_hallazgo('ORDEN', self.DESC, self.ADM)[0], DESCARTADO)
         self.assertEqual(evaluar_hallazgo('RESULTADO', self.DESC, self.ADM)[0], DESCARTADO)
 
+    def test_redacciones_de_contraste_no_especificado(self):
+        for fin in ("en la admisión no aparece contraste.", "la admisión no incluye el medio de contraste.",
+                    "la admisión no menciona el uso de contraste."):
+            desc = ("Documento correcto, pero la orden incluye contraste para la resonancia magnética de abdomen "
+                    "y pelvis, mientras que " + fin)
+            self.assertEqual(evaluar_hallazgo('ORDEN', desc, self.ADM)[0], DESCARTADO, desc)
+
     def test_cups_simple_y_orden_contrastada_se_mantiene(self):
         adm = dict(ADMISION, cups=['883101 - RESONANCIA MAGNÉTICA DE CEREBRO SIMPLE (cant. 1)'])
         desc = "La orden pide resonancia de cerebro con contraste y la admisión es simple."
@@ -404,8 +469,46 @@ class ProcedimientoAdicionalTests(SimpleTestCase):
         self.assertTrue(_solo_procedimiento_adicional(self.DESC))
         self.assertTrue(_solo_procedimiento_adicional("La orden incluye procedimientos adicionales a la admisión."))
 
-    def test_resultado_o_faltante_se_mantiene(self):
-        self.assertIsNone(evaluar_hallazgo('RESULTADO', self.DESC, self.ADM))
+    def test_examen_de_la_orden_que_no_se_tomo(self):
+        # No es obligatorio tomar todos los exámenes de la orden: puede que solo se tome uno
+        adm = dict(ADMISION, cups=['883401 - RESONANCIA MAGNÉTICA DE ABDOMEN (cant. 1)'])
+        for desc in ("La orden incluye resonancia de abdomen y de pelvis; la de pelvis no aparece en la admisión.",
+                     "La resonancia magnética de pelvis de la orden no está en la admisión.",
+                     "Orden con RM de abdomen y RM de pelvis, esta última no fue facturada.",
+                     "La orden incluye contraste y la RM de pelvis, que no se encuentra en la admisión."):
+            self.assertEqual(evaluar_hallazgo('ORDEN', desc, adm)[0], DESCARTADO, desc)
+        for desc in ("La resonancia de abdomen de la admisión no aparece en la orden.",
+                     "La orden no incluye la resonancia de abdomen de la admisión; pide RM de tórax."):
+            self.assertIsNone(evaluar_hallazgo('ORDEN', desc, adm), desc)
+
+    def test_resultado_con_varios_estudios(self):
+        # Un mismo informe trae RM de abdomen y RM de pelvis juntas
+        adm = dict(ADMISION, cups=['883401 - RESONANCIA MAGNÉTICA DE ABDOMEN (cant. 1)'])
+        for desc in (self.DESC, "El resultado incluye además resonancia de pelvis, no esperada en la admisión.",
+                     "El informe trae RM de pelvis que no está en la admisión."):
+            self.assertEqual(evaluar_hallazgo('RESULTADO', desc, adm)[0], DESCARTADO, desc)
+        self.assertIsNone(evaluar_hallazgo('RESULTADO', "El resultado es de RM de tórax en lugar de abdomen.", adm))
+
+    def test_abdomen_y_pelvis_van_juntos(self):
+        from gedocumental.services.ai_revision import _mismo_estudio, _diferencia_clara
+        rm = {'modalidad': 'RM', 'lateralidad': 'NO_ESPECIFICA', 'contraste': 'CON'}
+        self.assertTrue(_mismo_estudio(dict(rm, region='PELVIS'), dict(rm, region='ABDOMEN')))
+        self.assertFalse(_diferencia_clara(dict(rm, region='ABDOMEN'), dict(rm, region='PELVIS')))
+        self.assertTrue(_diferencia_clara(dict(rm, region='TORAX'), dict(rm, region='ABDOMEN')))
+        for adm_cups in ('883401 - RESONANCIA MAGNÉTICA DE ABDOMEN (cant. 1)',
+                         '883440 - RESONANCIA MAGNÉTICA DE PELVIS (cant. 1)'):
+            adm = dict(ADMISION, cups=[adm_cups])
+            for desc in ("El resultado es de resonancia de abdomen y pelvis; la admisión es solo de abdomen.",
+                         "La orden pide RM de pelvis, mientras que la admisión corresponde a RM de abdomen.",
+                         "Resonancia magnética de abdomen y pelvis contrastada no coincide con el CUPS de la admisión."):
+                self.assertEqual(evaluar_hallazgo('RESULTADO', desc, adm)[0], DESCARTADO, desc)
+        adm = dict(ADMISION, cups=['883401 - RESONANCIA MAGNÉTICA DE ABDOMEN (cant. 1)'])
+        for desc in ("La orden es de TAC de abdomen y pelvis; la admisión es resonancia de abdomen.",
+                     "Orden de RM de abdomen y pelvis vencida.",
+                     "El resultado es de RM de pelvis y tórax; la admisión es de abdomen."):
+            self.assertIsNone(evaluar_hallazgo('ORDEN', desc, adm), desc)
+
+    def test_faltante_se_mantiene(self):
         for desc in ("La orden no incluye TOMOGRAFÍA COMPUTADA DE TÓRAX; incluye ECOCARDIOGRAMA, no esperado.",
                      "Incluye ECOCARDIOGRAMA en lugar de TOMOGRAFÍA, no esperado en la admisión.",
                      "Incluye ECOCARDIOGRAMA, no esperado; orden vencida.",
@@ -824,6 +927,16 @@ class RecaudoTests(SimpleTestCase):
     def test_copago_cuando_era_cuota_moderadora(self):
         r = self._verificar({'requiere_pago': 'SI', 'categoria': 'A'}, afiliado_zeus='COTIZANTE', copago=11500.0)
         self.assertEqual(r[0], 'RECAUDO')
+        self.assertIn('Tipo de cobro incorrecto', r[1])
+
+    def test_procedimiento_cobrado_como_copago_otra_eps(self):
+        # Caso 34134 (Salud Total): la autorización dice cuota moderadora $5.000; en SIESA, copago $5.000
+        otra = dict(empresa='EPS002', contrato='SALUD TOTAL CONTRIBUTIVO')
+        doc = {'requiere_pago': 'SI', 'tipo_cobro': 'CUOTA_MODERADORA', 'valor': '5000'}
+        self.assertIsNone(self._verificar(doc, copago=5000.0, **otra))
+        self.assertIn('Valor recaudado distinto', self._verificar(doc, copago=20000.0, **otra)[1])
+        # En una consulta va cuota moderadora: el copago sí es tipo incorrecto
+        r = self._verificar(doc, copago=5000.0, consultas=[True], **otra)
         self.assertIn('Tipo de cobro incorrecto', r[1])
 
     def test_no_se_recaudo(self):

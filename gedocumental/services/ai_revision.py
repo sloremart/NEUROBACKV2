@@ -76,9 +76,13 @@ VERIFICACIONES OBLIGATORIAS (en este orden):
 2. PROCEDIMIENTOS: en órdenes médicas, autorizaciones y resultados, los procedimientos/CUPS del documento deben
    corresponder a los CUPS de la admisión. Compara por código CUPS y, si no hay código, por la descripción.
    - Orden médica que no incluye los procedimientos de la admisión → SOPORTES. Si la orden o la
-     autorización trae los procedimientos de la admisión y ADEMÁS otros, es correcta (no es error).
+     autorización trae los procedimientos de la admisión y ADEMÁS otros, es correcta (no es error): no es
+     obligatorio tomar todos los exámenes de la orden, puede que solo se tome uno. NUNCA reportes que un
+     procedimiento de la orden no esté en la admisión; solo es error que FALTE en la orden el de la admisión.
    - Autorización que no cubre los procedimientos de la admisión → AUTORIZACION
-   - Resultado/informe de un procedimiento distinto al de la admisión → REPORTE
+   - Resultado/informe de un procedimiento distinto al de la admisión → REPORTE. Un mismo informe puede traer
+     varios estudios (ej. RM de abdomen y RM de pelvis juntas): es correcto si incluye el de la admisión,
+     aunque traiga otros.
    Indica qué trae el documento y qué esperaba la admisión.
    CONSULTAS: una consulta de primera vez, de control o de seguimiento de la MISMA especialidad coincide
    (ej. "CONTROL MEDICINA FISICA Y REHABILITACION" vs CUPS "consulta de primera vez por especialista en
@@ -97,7 +101,8 @@ VERIFICACIONES OBLIGATORIAS (en este orden):
      cráneo ≈ cerebro ≈ encéfalo (para TAC/RM de cabeza); "simple" = sin contraste (puede no mencionarse);
      EMG = electromiografía; neuroconducción = velocidad de conducción nerviosa = VCN = estudio de neuroconducción;
      EEG = electroencefalograma; PSG = polisomnografía; ecografía = ultrasonido = ecografía doppler cuando el CUPS es doppler;
-     RX = radiografía. También son normales abreviaturas, órdenes distintos de palabras y textos más cortos o más largos.
+     RX = radiografía; abdomen y pelvis van juntos (un estudio o informe de "abdomen y pelvis" corresponde al
+     CUPS de abdomen o al de pelvis). También son normales abreviaturas, órdenes distintos de palabras y textos más cortos o más largos.
    SOLO es error de procedimiento cuando cambia algo de fondo:
      - otro tipo de estudio (resonancia vs tomografía, EMG vs EEG);
      - otra región anatómica (resonancia de abdomen vs resonancia de cerebro; columna lumbar vs cervical);
@@ -141,7 +146,7 @@ aunque la primera ya haya fallado:
   "nombre_documento": "<solo el nombre completo del paciente TRANSCRITO LETRA POR LETRA tal como está escrito en el documento, sin corregir ortografía ni completarlo con el de la admisión, o ''>",
   "identificacion_documento": "<solo el número de documento del paciente (el que va junto a IDENTIFICACIÓN, CC, TI, RC, CE, documento), sin tipo ni separadores, o ''. NUNCA el número de fórmula, folio, factura, autorización, orden o código de barras>",
   "paciente_coincide": "SI | NO | NO_APARECE",
-  "procedimientos_documento": "<CUPS/procedimientos que trae el documento, o 'no aplica'>",
+  "procedimientos_documento": "<TODOS los CUPS/procedimientos que trae el documento, con su código, sin omitir ninguna fila de la tabla (revisa hasta la última), o 'no aplica'>",
   "procedimientos_coinciden": "SI | NO | NO_APLICA",
   "firma_paciente": "SI | NO | NO_APLICA   (solo COMPROBANTE; en otros documentos NO_APLICA)",
   "cantidad_anotada": "<solo AUTORIZACION: el número de la anotación u observación de cantidad que está FUERA de la tabla (ej. 'CANTIDAD 2' al pie), o '' si no hay>",
@@ -330,6 +335,37 @@ def _formatear_contexto(datos_admision: dict) -> str:
         f"Fecha de ingreso: {datos_admision.get('fecha') or 'N/A'}\n"
         f"CUPS de la admisión:\n{lineas_cups}"
     )
+
+
+PROMPT_TRANSCRIBIR = (
+    "Transcribe TODAS las filas de la tabla de servicios/procedimientos de la orden o autorización, en orden y "
+    "sin omitir ninguna (revisa hasta la ÚLTIMA fila). Solo transcribe, no evalúes. Responde en JSON: "
+    '{"procedimientos": "<código CUPS y descripción de cada fila, separados por punto y coma>"}'
+)
+
+
+def _transcribir_procedimientos(client, modelo: str, imagenes: list[str]) -> tuple[str, list]:
+    """Consulta corta: solo la transcripción de la tabla de procedimientos. Devuelve (texto, [tokens])."""
+    contenido = [{"type": "text", "text": "Documento escaneado: ver imágenes adjuntas."}]
+    contenido += [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"}}
+                  for img in imagenes]
+    try:
+        respuesta = client.chat.completions.create(
+            model=modelo,
+            messages=[{"role": "system", "content": PROMPT_TRANSCRIBIR}, {"role": "user", "content": contenido}],
+            response_format={"type": "json_object"},
+            max_tokens=400,
+            temperature=0,
+        )
+        uso = getattr(respuesta, 'usage', None)
+        tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
+        procedimientos = json.loads(respuesta.choices[0].message.content).get("procedimientos") or ''
+    except Exception as exc:
+        logger.warning("No se pudo transcribir la tabla de procedimientos: %s", exc)
+        return '', [0, 0]
+    if isinstance(procedimientos, list):
+        procedimientos = '; '.join(str(p) for p in procedimientos)
+    return str(procedimientos), tokens
 
 
 def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_admision: dict,
@@ -572,6 +608,21 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_codigo_cups=True)
 
+    # Orden/autorización ESCANEADA en la que la IA dice que falta el procedimiento de la admisión: a veces
+    # no lee una fila de la tabla (ej. la consulta en la última fila, caso 31807). Se pide solo la
+    # transcripción de la tabla (consulta corta) y se busca el código CUPS de la admisión.
+    if ((tipo_documento or '').upper() in ('ORDEN', 'AUTORIZACION') and imagenes and not _reintento
+            and resultado["tipo"] != "OK" and resultado.get("paciente_coincide") != "NO"
+            and _solo_motivo_procedimiento(resultado.get("descripcion"))):
+        procedimientos, tokens = _transcribir_procedimientos(client, modelo, imagenes)
+        resultado["tokens"] = [a + b for a, b in zip(resultado["tokens"], tokens)]
+        resultado["llamadas"] = resultado.get("llamadas", 1) + 1
+        if _mismo_codigo_cups('', procedimientos, datos_admision):
+            logger.info("La transcripción de la tabla trae el CUPS de la admisión: se descarta '%s'",
+                        resultado.get("descripcion"))
+            resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
+                             procedimientos_documento=procedimientos, ajuste_transcripcion=True)
+
     # ÓRDENES y AUTORIZACIONES: un hallazgo cuyo ÚNICO motivo es el procedimiento ("no se especifican
     # procedimientos", "no aparece el CUPS"...) se descarta si no hay diferencia clara de estudio.
     # Otros motivos (vencida, sin número, ilegible, cantidades, firma) se mantienen.
@@ -584,9 +635,9 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_procedimiento_orden=True)
 
-    # Orden/autorización con un procedimiento de más (además de los de la admisión): no es error
-    if (not _es_comprobante(tipo_documento) and (tipo_documento or '').upper() != 'RESULTADO'
-            and resultado["tipo"] != "OK" and resultado.get("paciente_coincide") != "NO"
+    # Orden, autorización o resultado con un procedimiento de más (además de los de la admisión): no es
+    # error (no se toman todos los de la orden; un informe puede traer varios estudios juntos)
+    if (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK" and resultado.get("paciente_coincide") != "NO"
             and _solo_procedimiento_adicional(resultado.get("descripcion"))):
         logger.info("%s: solo trae un procedimiento adicional, se descarta '%s'",
                     tipo_documento, resultado.get("descripcion"))
@@ -599,6 +650,14 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         logger.info("%s de paciente particular: se descarta '%s'", tipo_documento, resultado.get("descripcion"))
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_particular=True)
+
+    # Abdomen y pelvis van juntos: un documento de abdomen y pelvis sirve para el CUPS de cualquiera de los dos
+    if (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
+            and resultado.get("paciente_coincide") != "NO"
+            and _solo_motivo_abdomen_pelvis(resultado.get("descripcion"))):
+        logger.info("%s: abdomen y pelvis van juntos, se descarta '%s'", tipo_documento, resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
+                         ajuste_abdomen_pelvis=True)
 
     # Contraste que el CUPS de la admisión no distingue (mismo CUPS para simple y contrastado): no es error
     if (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
@@ -1142,10 +1201,28 @@ def _solo_motivo_contraste(descripcion, datos_admision) -> bool:
 
     d = plano(descripcion)
     cups = plano(' '.join(str(c) for c in (datos_admision.get('cups') or [])))
+    # "no aparece / no incluye contraste" habla del contraste mismo, no de otro procedimiento
+    sin_contraste = re.sub(r'\bno\s+(se\s+)?(aparece|incluye|especifica|menciona|indica|registra|refiere|cubre|tiene)'
+                           r'\s+((el|la|un|uso|medio|de|del)\s+)*contrast\w*', ' ', d)
     otro = re.search(r'no incluye|no aparece|no cubre|no corresponde|en lugar de|en vez de|otra region|'
-                     r'lateralidad|derech|izquierd', d)
+                     r'lateralidad|derech|izquierd', _quitar_procedimiento_de_mas(sin_contraste))
     return bool(re.search(r'contrast', d) and not re.search(r'contrast|simple', cups)
                 and not otro and not re.search(_OTROS_MOTIVOS, d))
+
+
+# Frases que dicen que el documento trae un procedimiento que NO está en la admisión (de más, no faltante):
+# "la RM de pelvis no está en la admisión", "no fue facturada", "solo se tomó…"
+_PROCEDIMIENTO_DE_MAS = (
+    r'\bno\s+(esta|estan|aparece|aparecen|se\s+encuentran?|figuran?|se\s+incluyen?|estan?\s+incluid[oa]s?|'
+    r'fue\s+facturad[oa]|fueron\s+facturad[oa]s|se\s+facturo)\s+'
+    r'((en|dentro|de|la|los|las|el|lo)\s+)*admision\w*'
+    r'|\bno\s+(fue|fueron)\s+(tomad|realizad|facturad)\w*'
+    r'|\bsolo\s+se\s+(tomo|realizo|facturo)')
+
+
+def _quitar_procedimiento_de_mas(d: str) -> str:
+    import re
+    return re.sub(_PROCEDIMIENTO_DE_MAS, ' ', d)
 
 
 def _cantidades_esperadas(descripcion) -> list:
@@ -1198,6 +1275,35 @@ def _cantidades_iguales(descripcion, datos_admision: dict) -> bool:
     return len(numeros) >= 2 and len(set(numeros)) == 1 and numeros[0] in zeus
 
 
+def _cantidad_documento_en_zeus(descripcion, datos_admision: dict) -> bool:
+    """
+    Hallazgo de cantidad ("Cantidad autorizada en el documento es 2, se esperaba 1 para el procedimiento
+    873420") en el que la cantidad del DOCUMENTO es la que hoy tiene Zeus para ese CUPS: la admisión se
+    corrigió en SIESA (o la IA comparó con un dato viejo).
+    """
+    import re
+    import unicodedata
+    d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    if not _solo_motivo_cantidad(d):
+        return False
+    por_cups = {}
+    for c in datos_admision.get('cups') or []:
+        m = re.search(r'^\s*(\S+)\s*-.*\(cant\.\s*(\d+)\)', str(c))
+        if m:
+            por_cups[m.group(1).upper()] = por_cups.get(m.group(1).upper(), 0) + int(m.group(2))
+    pares = re.findall(r'(?<!\d)(\d{1,3})(?![\d.,]\d)[^;]{0,40}?se esperaba(?:n)?\s+(\d{1,3})([^;]*)', d)
+    if not pares or not por_cups:
+        return False
+    for doc, _, resto in pares:
+        codigos = [c for c in _codigos_cups(resto) if c in por_cups]
+        if codigos:
+            if por_cups[codigos[0]] != int(doc):
+                return False
+        elif len(por_cups) != 1 or int(doc) not in por_cups.values():
+            return False
+    return True
+
+
 def _cantidades_zeus(datos_admision: dict) -> list:
     """Cantidades de cada CUPS de la admisión ('873411 - RADIOGRAFÍA ... (cant. 2)')."""
     import re
@@ -1244,9 +1350,9 @@ def _solo_procedimiento_adicional(descripcion) -> bool:
     import unicodedata
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
     de_mas = re.search(r'(?<!no )\bincluye\b.*\b(no esperad|no solicitad|no ordenad|adicional)'
-                       r'|\badicional(es)?\b|\bademas de\b', d)
+                       r'|\badicional(es)?\b|\bademas de\b|' + _PROCEDIMIENTO_DE_MAS, d)
     falta = re.search(r'no incluye|no aparece|no se especifica|no cubre|no corresponde|no coincide|en lugar de|'
-                      r'en vez de|distint|diferente|falta|lateralidad|derech|izquierd', d)
+                      r'en vez de|distint|diferente|falta|lateralidad|derech|izquierd', _quitar_procedimiento_de_mas(d))
     return bool(de_mas and not falta and not re.search(_OTROS_MOTIVOS, d))
 
 
@@ -1262,6 +1368,28 @@ def _modalidad_base(m: str) -> str:
     if m in ('RADIOGRAFIA', 'RAYOS_X'):
         return 'RX'
     return m
+
+
+def _abdomen_y_pelvis(region_doc: str, region_adm: str) -> bool:
+    """Abdomen y pelvis se toman y se informan juntos: un estudio de uno corresponde al CUPS del otro."""
+    return {(region_doc or '').upper(), (region_adm or '').upper()} == {'ABDOMEN', 'PELVIS'}
+
+
+def _solo_motivo_abdomen_pelvis(descripcion) -> bool:
+    """
+    True si el hallazgo solo dice que el documento es de abdomen y/o pelvis y la admisión de la otra región
+    ("la orden es de RM de abdomen y pelvis, la admisión solo de abdomen"): van juntos, no es error.
+    """
+    import re
+    import unicodedata
+    d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    otra_region = re.search(r'crane|cerebr|encefal|cuello|torax|column|cervical|dorsal|lumbar|rodill|cadera|'
+                            r'hombro|mano|pie\b|tobillo|muslo|pierna|brazo|codo|muñeca|muneca|silla turca|orbita|'
+                            r'lateralidad|derech|izquierd', d)
+    modalidades = [m for m in (r'resonancia|\brm\b|\brmn\b', r'tomograf|\btac\b|\btc\b|escanograf',
+                               r'ecograf|ultrason', r'radiograf|\brx\b') if re.search(m, d)]
+    return bool(re.search(r'abdom', d) and re.search(r'pelvi', d) and not otra_region
+                and len(modalidades) <= 1 and not re.search(_OTROS_MOTIVOS, d))
 
 
 def _region_base(r: str) -> str:
@@ -1350,7 +1478,8 @@ def _diferencia_clara(doc, adm) -> bool:
 
     if mod_d in ('TAC', 'RM', 'RX', 'ECOGRAFIA'):
         reg_d, reg_a = _region_base(val(doc, 'region')), _region_base(val(adm, 'region'))
-        if reg_d not in desconocidos and reg_a not in desconocidos and reg_d != reg_a:
+        if (reg_d not in desconocidos and reg_a not in desconocidos and reg_d != reg_a
+                and not _abdomen_y_pelvis(val(doc, 'region'), val(adm, 'region'))):
             return True
         lat = {val(doc, 'lateralidad'), val(adm, 'lateralidad')}
         if lat == {'DERECHA', 'IZQUIERDA'}:
@@ -1383,7 +1512,8 @@ def _mismo_estudio(doc, adm) -> bool:
         esp_d, esp_a = _norm_especialidad(val(doc, 'especialidad')), _norm_especialidad(val(adm, 'especialidad'))
         return not esp_d or not esp_a or esp_d == esp_a
 
-    return (compatibles(val(doc, 'region'), val(adm, 'region'), {'', 'NO_APLICA'})
+    return ((compatibles(val(doc, 'region'), val(adm, 'region'), {'', 'NO_APLICA'})
+             or _abdomen_y_pelvis(val(doc, 'region'), val(adm, 'region')))
             and compatibles(val(doc, 'lateralidad'), val(adm, 'lateralidad'), {'', 'NO_ESPECIFICA'})
             and compatibles(val(doc, 'contraste'), val(adm, 'contraste'), {'', 'NO_ESPECIFICA'}))
 

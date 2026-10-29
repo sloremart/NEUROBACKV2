@@ -32,7 +32,7 @@ from gedocumental.services.ai_revision import (
     MAX_PAGINAS_LEER, MIN_CARACTERES_TEXTO, TIPOS_SIN_REVISION_IA, _buscar_palabra, _codigos_cups,
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE,
-    _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _cantidades_esperadas, _cantidad_anotada,
+    _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada,
     _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular,
     _tokens_nombre, _NO_SON_NOMBRE,
     obtener_contexto_admision,
@@ -370,15 +370,23 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
         return DESCARTADO, ("La IA leyó en el documento la misma cantidad de la admisión (coincide con Zeus); "
                             "la marcó como hallazgo por error.")
 
+    if _cantidad_documento_en_zeus(d, datos_admision):
+        return CORREGIDO, ("La cantidad del documento es la que hoy tiene la admisión en Zeus "
+                           f"({', '.join(datos_admision.get('cups') or [])}).")
+
     if _orden_con_mas_cantidad(tipo, d):
         return DESCARTADO, ("La orden pide más cantidad de la que factura la admisión (varias sesiones); "
                             "no es un error.")
+
+    if not _es_comprobante(tipo) and _solo_motivo_abdomen_pelvis(d):
+        return DESCARTADO, ("Abdomen y pelvis se toman y se informan juntos; el estudio corresponde al CUPS "
+                            "de la admisión.")
 
     if not _es_comprobante(tipo) and _solo_motivo_contraste(d, datos_admision):
         return DESCARTADO, ("Solo difiere el contraste y el CUPS de la admisión no distingue simple de "
                             "contrastado; no es un error.")
 
-    if not _es_comprobante(tipo) and tipo != 'RESULTADO' and _solo_procedimiento_adicional(d):
+    if not _es_comprobante(tipo) and _solo_procedimiento_adicional(d):
         return DESCARTADO, ("El documento trae un procedimiento adicional a los de la admisión; "
                             "eso no es un error.")
 
