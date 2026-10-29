@@ -306,7 +306,7 @@ def demanda_inducida_view(request):
                         SELECT
                             LTRIM(RTRIM(p.num_id))  AS doc_num,
                             cups_norm               AS cups,
-                            CONVERT(varchar, MIN(c.fecha), 23) AS proxima_cita
+                            CONVERT(varchar, MAX(c.fecha), 23) AS proxima_cita
                         FROM citas c
                         JOIN sis_paci p ON p.autoid = c.autoid
                         JOIN (
@@ -324,7 +324,7 @@ def demanda_inducida_view(request):
                         ) cp ON cp.id_cita = c.id
                         WHERE LTRIM(RTRIM(p.num_id)) IN ({placeholders_c})
                           AND ISNULL(c.estado, 'P') NOT IN ('C', 'X')
-                          AND CONVERT(date, c.fecha) >= CONVERT(date, GETDATE())
+                          AND CONVERT(date, c.fecha) >= DATEADD(day, -90, CONVERT(date, GETDATE()))
                         GROUP BY LTRIM(RTRIM(p.num_id)), cups_norm
                     """, doc_list_citas)
                     citas_rows = cur_c.fetchall()
