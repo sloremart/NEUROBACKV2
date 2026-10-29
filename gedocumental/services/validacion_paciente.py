@@ -7,9 +7,7 @@ No usa IA: compara cada campo contra los catálogos que usa Zeus para RIPS
   - OrientacionSexual(sismaelm ORINSEX): 1..5  (0 / NULL = sin diligenciar) — NO se valida: no es obligatoria
   - PertenenciaEtnica(sismaelm ETNIA):   1..7  (7 = Ninguna de las anteriores)
   - discapacidad     (sismaelm DISCAP):  1..8  (8 = Sin discapacidad)
-  - ZonaTerritorial:                     '01' Urbana, '02' Rural (RDA)
-  - zona:                                'U' / 'R' (la que usan los RIPS de spFEVRIPS); basta con una de las dos
-  - id_cargo (CIUO):  ocupación; 9998 = hogar/estudiante/jubilado... es válido, 9999 = "no se tiene información"
+  Zona territorial y ocupación ya no se validan.
 
 "No lo declara", "Ninguna" y "Sin discapacidad" son respuestas válidas: no se marcan.
 """
@@ -39,9 +37,9 @@ CAMPOS_SQL = """
     sm.con_estudio,
     sp.tipo_id, sp.num_id, sp.primer_nom, sp.primer_ape, sp.fecha_naci, sp.sexo,
     sp.IdentidadGenero, sp.OrientacionSexual, sp.PertenenciaEtnica, sp.CodigoComunidadEtnica,
-    sp.ZonaTerritorial, sp.discapacidad, sp.id_cargo,
+    sp.discapacidad,
     sp.cod_dep, sp.cod_muni, sp.codPaisResidencia, sp.IdPais,
-    sp.direccion, sp.telefono, sp.celular, sp.zona
+    sp.direccion, sp.telefono, sp.celular
 """
 
 
@@ -77,9 +75,9 @@ def validar_datos_pacientes_bulk(consecutivos) -> dict:
 def _evaluar(fila) -> dict:
     (tipo_id, num_id, nombre, apellido, fecha_naci, sexo,
      identidad, orientacion, etnia, comunidad,
-     zona, discapacidad, id_cargo,
+     discapacidad,
      cod_dep, cod_muni, pais_res, nacionalidad,
-     direccion, telefono, celular, zona_rips_raw) = fila
+     direccion, telefono, celular) = fila
 
     faltantes = []
 
@@ -107,15 +105,8 @@ def _evaluar(fila) -> dict:
         falta("Pertenencia étnica", "Sin diligenciar")
     elif _entero(etnia) == 1 and not _txt(comunidad):
         falta("Comunidad étnica", "Paciente indígena sin comunidad étnica")
-    # Zona: basta con cualquiera de los dos campos diligenciado (no se compara si coinciden)
-    if _txt(zona) not in ('01', '02') and _txt(zona_rips_raw).upper() not in ('U', 'R'):
-        falta("Zona territorial", "Sin diligenciar (Urbana / Rural)")
     if _entero(discapacidad) not in range(1, 9):
         falta("Discapacidad", "Sin diligenciar")
-    if not _txt(id_cargo):
-        falta("Ocupación", "Sin código de ocupación (CIUO)")
-    elif _txt(id_cargo) == '9999':
-        falta("Ocupación", "Registrada como 'no se tiene información'")
 
     # Residencia
     if not _txt(cod_dep):
