@@ -2729,7 +2729,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                     COUNT(DISTINCT sm.autoid)                      AS estudios,
                     SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0)) AS valor
                 FROM sis_maes sm
-                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN contratos c ON c.codigo = sm.contrato
                 WHERE {base_where}
                 GROUP BY
@@ -2749,7 +2749,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                     COUNT(DISTINCT sm.autoid)                          AS estudios,
                     SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))     AS valor
                 FROM sis_maes sm
-                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN contratos c    ON c.codigo    = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
                 LEFT JOIN sis_empre se   ON se.codigo  = sm.EPSPaciente
@@ -2766,7 +2766,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                     COUNT(DISTINCT sm.autoid)                          AS estudios,
                     SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))     AS valor
                 FROM sis_maes sm
-                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN contratos c    ON c.codigo = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
                 LEFT JOIN sis_empre se   ON se.codigo = sm.EPSPaciente
@@ -2784,7 +2784,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                     COUNT(DISTINCT sm.autoid)                          AS estudios,
                     SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))     AS valor
                 FROM sis_maes sm
-                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
                 LEFT JOIN contratos c     ON c.codigo = sm.contrato
                 LEFT JOIN sis_empre se    ON se.codigo = sm.EPSPaciente
@@ -2802,7 +2802,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                     COUNT(DISTINCT sm.autoid)                          AS estudios,
                     SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))     AS valor
                 FROM sis_maes sm
-                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN Medicos m       ON m.codigo = sm.cod_medico
                 LEFT JOIN contratos c     ON c.codigo = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
@@ -2823,7 +2823,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                     CAST(AVG(sd.vlr_servicio) AS DECIMAL(18, 0))                     AS valor_uni,
                     SUM(sd.cantidad * sd.vlr_servicio)                               AS total
                 FROM sis_maes sm
-                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN sis_proc sp ON LTRIM(RTRIM(sp.cups)) = LTRIM(RTRIM(sd.cups))
                 LEFT JOIN contratos c    ON c.codigo = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
@@ -2872,7 +2872,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                     SUM(sd.cantidad)                     AS cantidad_servicios,
                     COUNT(DISTINCT sm.autoid)            AS total_pacientes
                 FROM sis_maes sm
-                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
+                JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN contratos c    ON c.codigo    = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
                 LEFT JOIN sis_empre se   ON se.codigo   = sm.EPSPaciente
