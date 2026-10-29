@@ -2869,7 +2869,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             # 8. KPI: cantidad de servicios prestados (líneas sis_deta) y pacientes únicos.
             cursor.execute(f'''
                 SELECT
-                    COUNT(sd.autoid)                     AS cantidad_servicios,
+                    SUM(sd.cantidad)                     AS cantidad_servicios,
                     COUNT(DISTINCT sm.autoid)            AS total_pacientes
                 FROM sis_maes sm
                 JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
