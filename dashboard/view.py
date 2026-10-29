@@ -2663,8 +2663,6 @@ class DashboardFacturacionRegularDetalladaView(APIView):
 
         base_where = (
             "CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s"
-            " AND ISNULL(sm.Prefijo, '') != 'MGL'"
-            " AND sm.contrato NOT IN (5, 6)"
         )
         base_params = [fecha_inicio, fecha_fin]
 
@@ -2728,9 +2726,10 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                         WHEN sm.contabilizado = 1 AND ISNULL(sm.radicado, 0) = 0  THEN 'por_radicar'
                         ELSE 'no_facturado'
                     END AS segmento,
-                    COUNT(sm.autoid)               AS estudios,
-                    SUM(ISNULL(sm.vlr_factura, 0)) AS valor
+                    COUNT(DISTINCT sm.autoid)                      AS estudios,
+                    SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0)) AS valor
                 FROM sis_maes sm
+                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
                 LEFT JOIN contratos c ON c.codigo = sm.contrato
                 WHERE {base_where}
                 GROUP BY
@@ -2746,10 +2745,11 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             # 2. Tendencia mensual
             cursor.execute(f'''
                 SELECT
-                    LEFT(CONVERT(varchar(20), sm.fecha_ing, 120), 7) AS mes,
-                    COUNT(sm.autoid)               AS estudios,
-                    SUM(ISNULL(sm.vlr_factura, 0)) AS valor
+                    LEFT(CONVERT(varchar(20), sm.fecha_ing, 120), 7)  AS mes,
+                    COUNT(DISTINCT sm.autoid)                          AS estudios,
+                    SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))     AS valor
                 FROM sis_maes sm
+                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
                 LEFT JOIN contratos c    ON c.codigo    = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
                 LEFT JOIN sis_empre se   ON se.codigo  = sm.EPSPaciente
@@ -2763,9 +2763,10 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             cursor.execute(f'''
                 SELECT
                     LTRIM(RTRIM(ISNULL(c.nombre, CAST(sm.contrato AS VARCHAR(20))))) AS contrato,
-                    COUNT(sm.autoid)               AS estudios,
-                    SUM(ISNULL(sm.vlr_factura, 0)) AS valor
+                    COUNT(DISTINCT sm.autoid)                          AS estudios,
+                    SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))     AS valor
                 FROM sis_maes sm
+                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
                 LEFT JOIN contratos c    ON c.codigo = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
                 LEFT JOIN sis_empre se   ON se.codigo = sm.EPSPaciente
@@ -2780,9 +2781,10 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                 SELECT
                     LTRIM(RTRIM(COALESCE(uf.descripcion,
                         CAST(sm.ufuncional AS VARCHAR(10)), 'Sin servicio'))) AS servicio,
-                    COUNT(sm.autoid)               AS estudios,
-                    SUM(ISNULL(sm.vlr_factura, 0)) AS valor
+                    COUNT(DISTINCT sm.autoid)                          AS estudios,
+                    SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))     AS valor
                 FROM sis_maes sm
+                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
                 LEFT JOIN contratos c     ON c.codigo = sm.contrato
                 LEFT JOIN sis_empre se    ON se.codigo = sm.EPSPaciente
@@ -2797,9 +2799,10 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             cursor.execute(f'''
                 SELECT
                     LTRIM(RTRIM(COALESCE(m.nombre, 'Sin médico'))) AS medico,
-                    COUNT(sm.autoid)               AS estudios,
-                    SUM(ISNULL(sm.vlr_factura, 0)) AS valor
+                    COUNT(DISTINCT sm.autoid)                          AS estudios,
+                    SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))     AS valor
                 FROM sis_maes sm
+                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
                 LEFT JOIN Medicos m       ON m.codigo = sm.cod_medico
                 LEFT JOIN contratos c     ON c.codigo = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
@@ -2864,14 +2867,12 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             filtros_empresas = [r[0] for r in cursor.fetchall() if r[0]]
 
             # 8. KPI: cantidad de servicios prestados (líneas sis_deta) y pacientes únicos.
-            # sis_maes.autoid es el id del PACIENTE (sis_paci.autoid); el detalle de la admisión se une
-            # por sis_deta.estudio = sis_maes.con_estudio
             cursor.execute(f'''
                 SELECT
-                    COUNT(*)                             AS cantidad_servicios,
+                    COUNT(sd.autoid)                     AS cantidad_servicios,
                     COUNT(DISTINCT sm.autoid)            AS total_pacientes
                 FROM sis_maes sm
-                JOIN sis_deta sd ON sd.estudio = sm.con_estudio
+                JOIN sis_deta sd ON sd.fuente_tips = sm.autoid
                 LEFT JOIN contratos c    ON c.codigo    = sm.contrato
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
                 LEFT JOIN sis_empre se   ON se.codigo   = sm.EPSPaciente
