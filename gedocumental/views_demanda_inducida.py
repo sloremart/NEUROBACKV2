@@ -301,44 +301,69 @@ def demanda_inducida_view(request):
             doc_list_citas = list({str(item["Documento"] or "").replace(" ", "") for item in data if item["Documento"]})
             if doc_list_citas:
                 placeholders_c = ", ".join(["%s"] * len(doc_list_citas))
+                cups_subquery = """
+                    SELECT id_cita,
+                        CASE WHEN CHARINDEX('-', LTRIM(RTRIM(CAST(id_procedimiento AS VARCHAR)))) > 0
+                             THEN LEFT(LTRIM(RTRIM(CAST(id_procedimiento AS VARCHAR))),
+                                       CHARINDEX('-', LTRIM(RTRIM(CAST(id_procedimiento AS VARCHAR)))) - 1)
+                             ELSE LTRIM(RTRIM(CAST(id_procedimiento AS VARCHAR)))
+                        END AS cups_norm
+                    FROM citas_procedimientos
+                    UNION ALL
+                    SELECT IdCita AS id_cita,
+                        LTRIM(RTRIM(CodProcedimiento)) AS cups_norm
+                    FROM citas_procedimientos_asuntos
+                """
                 with connections['zeussalud'].cursor() as cur_c:
+                    # 1) Citas ya atendidas (fecha pasada, no canceladas) → excluir del listado
+                    cur_c.execute(f"""
+                        SELECT DISTINCT
+                            LTRIM(RTRIM(p.num_id)) AS doc_num,
+                            cups_norm              AS cups
+                        FROM citas c
+                        JOIN sis_paci p ON p.autoid = c.autoid
+                        JOIN ({cups_subquery}) cp ON cp.id_cita = c.id
+                        WHERE LTRIM(RTRIM(p.num_id)) IN ({placeholders_c})
+                          AND ISNULL(c.estado, 'P') NOT IN ('C', 'X')
+                          AND CONVERT(date, c.fecha) < CONVERT(date, GETDATE())
+                    """, doc_list_citas)
+                    atendidas_set = {
+                        (str(r[0] or "").strip(), str(r[1] or "").strip())
+                        for r in cur_c.fetchall()
+                    }
+
+                    # 2) Citas futuras → marcar TieneCita con fecha
                     cur_c.execute(f"""
                         SELECT
                             LTRIM(RTRIM(p.num_id))  AS doc_num,
                             cups_norm               AS cups,
-                            CONVERT(varchar, MAX(c.fecha), 23) AS proxima_cita
+                            CONVERT(varchar, MIN(c.fecha), 23) AS proxima_cita
                         FROM citas c
                         JOIN sis_paci p ON p.autoid = c.autoid
-                        JOIN (
-                            SELECT id_cita,
-                                CASE WHEN CHARINDEX('-', LTRIM(RTRIM(CAST(id_procedimiento AS VARCHAR)))) > 0
-                                     THEN LEFT(LTRIM(RTRIM(CAST(id_procedimiento AS VARCHAR))),
-                                               CHARINDEX('-', LTRIM(RTRIM(CAST(id_procedimiento AS VARCHAR)))) - 1)
-                                     ELSE LTRIM(RTRIM(CAST(id_procedimiento AS VARCHAR)))
-                                END AS cups_norm
-                            FROM citas_procedimientos
-                            UNION ALL
-                            SELECT IdCita AS id_cita,
-                                LTRIM(RTRIM(CodProcedimiento)) AS cups_norm
-                            FROM citas_procedimientos_asuntos
-                        ) cp ON cp.id_cita = c.id
+                        JOIN ({cups_subquery}) cp ON cp.id_cita = c.id
                         WHERE LTRIM(RTRIM(p.num_id)) IN ({placeholders_c})
                           AND ISNULL(c.estado, 'P') NOT IN ('C', 'X')
-                          AND CONVERT(date, c.fecha) >= DATEADD(day, -90, CONVERT(date, GETDATE()))
+                          AND CONVERT(date, c.fecha) >= CONVERT(date, GETDATE())
                         GROUP BY LTRIM(RTRIM(p.num_id)), cups_norm
                     """, doc_list_citas)
-                    citas_rows = cur_c.fetchall()
-                citas_map = {
-                    (str(r[0] or "").strip(), str(r[1] or "").strip()): str(r[2] or "").strip()
-                    for r in citas_rows
-                }
+                    citas_map = {
+                        (str(r[0] or "").strip(), str(r[1] or "").strip()): str(r[2] or "").strip()
+                        for r in cur_c.fetchall()
+                    }
+
+                # Excluir ya atendidas y marcar próximas citas
+                data_filtrada = []
                 for item in data:
                     doc  = str(item["Documento"] or "").replace(" ", "")
                     cups = str(item["Cups"] or "").strip()
+                    if (doc, cups) in atendidas_set:
+                        continue  # ya fue atendida → no mostrar
                     fecha_c = citas_map.get((doc, cups))
                     if fecha_c:
                         item["TieneCita"] = True
                         item["FechaCita"] = fecha_c
+                    data_filtrada.append(item)
+                data = data_filtrada
         except Exception:
             pass  # Si falla la consulta de citas, devolver sin ese dato
 
