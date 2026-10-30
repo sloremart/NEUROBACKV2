@@ -162,6 +162,10 @@ def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
     cobrado = cm + cp
     cobrado_txt = " y ".join(t for t in (f"cuota moderadora {_pesos(cm)}" if cm else '',
                                           f"copago {_pesos(cp)}" if cp else '') if t) or "nada"
+    if 'MRC' in z["contrato"].upper():
+        # Sanitas MRC: el tipo de afiliado está en la pestaña MP de la plataforma, que no sale en el
+        # pantallazo de la autorización; lo que lea la IA no es confiable y vale lo de Zeus
+        afiliado_doc = ''
     afiliado = afiliado_doc if afiliado_doc in ('COTIZANTE', 'BENEFICIARIO') else z["afiliado_zeus"]
     notas = []
     if (afiliado_doc in ('COTIZANTE', 'BENEFICIARIO') and z["afiliado_zeus"]

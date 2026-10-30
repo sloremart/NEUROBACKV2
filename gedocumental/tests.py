@@ -970,6 +970,13 @@ class RecaudoTests(SimpleTestCase):
         r = self._verificar(doc, copago=5000.0, consultas=[True], **otra)
         self.assertIn('Tipo de cobro incorrecto', r[1])
 
+    def test_mrc_no_valida_tipo_de_afiliado(self):
+        # Caso 34368: en MRC el tipo de afiliado no se ve en el pantallazo; vale el de Zeus
+        doc = {'requiere_pago': 'SI', 'categoria': 'B', 'tipo_afiliado': 'COTIZANTE'}
+        self.assertIsNone(self._verificar(doc, copago=17300.0))
+        r = self._verificar(doc, copago=17300.0, contrato='SANITAS EVENTO CONTRIBUTIVO')
+        self.assertIn('Tipo de afiliado en Zeus beneficiario', r[1])
+
     def test_no_se_recaudo(self):
         r = self._verificar({'requiere_pago': 'SI', 'categoria': 'A'}, consultas=[True])
         self.assertIn('No se recaudó', r[1])
