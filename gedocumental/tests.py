@@ -1019,6 +1019,13 @@ class RecaudoTests(SimpleTestCase):
         r = self._verificar({'requiere_pago': 'NO', 'valor': '0', 'porcentaje': '0'}, copago=15400.0)
         self.assertIn('no requiere pago', r[1])
 
+    def test_cuota_moderadora_con_recaudo_y_porcentaje_cero(self):
+        # Caso 34409 (Sanitas): "Cuota Moderadora", "Recaudo de pago: 0", "Porcentaje Copago: 0.0"
+        doc = {'requiere_pago': 'SI', 'tipo_cobro': 'CUOTA_MODERADORA', 'valor': '0', 'porcentaje': '0.0',
+               'categoria': 'A'}
+        self.assertIsNone(self._verificar(doc, consultas=[True]))
+        self.assertIn('no requiere pago', self._verificar(doc, consultas=[True], cuota_moderadora=5000.0)[1])
+
 
 class DatosOrdenPacienteTests(SimpleTestCase):
     """Médico, IPS y fecha de ordenamiento y nivel educativo (variables dinámicas de la admisión en Zeus)."""

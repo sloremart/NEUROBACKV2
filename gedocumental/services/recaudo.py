@@ -177,8 +177,11 @@ def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
     # Un porcentaje o valor mayor a 0 prevalece sobre otro campo en 0
     # (ej. "Valor pesos pago compartido: 0.0" con "Porcentaje Copago: 11.5").
     con_cobro = bool(porcentaje_doc or valor_doc)
+    # Recaudo 0 y porcentaje 0 (Sanitas: "Cuota Moderadora", "Recaudo de pago: 0", "Porcentaje Copago: 0.0"):
+    # no se cobra, aunque la IA diga requiere_pago SI por el nombre de la condición de pago
     sin_pago = exonerado or (not con_cobro and (requiere == 'NO'
-                                                or (valor_doc == 0 and (requiere != 'SI' or cobertura))))
+                                                or (valor_doc == 0 and (requiere != 'SI' or cobertura
+                                                                        or porcentaje_doc == 0))))
     if sin_pago:
         if cobrado > TOLERANCIA_PESOS:
             motivo = "una alerta de exoneración" if exonerado else "que no requiere pago"
