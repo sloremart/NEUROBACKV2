@@ -1030,6 +1030,7 @@ class DatosOrdenPacienteTests(SimpleTestCase):
                     fecha_naci=datetime(2010, 6, 23), sexo='F', identidad=2, orientacion=None, etnia=7,
                     comunidad='', discapacidad=8, cod_dep='50', cod_muni='001', pais_res='170', nacionalidad=170,
                     direccion='CALLE 6 # 26-30', telefono='3102677920', celular='',
+                    zona='01', zona_rips='U', id_cargo='9998',
                     fecha_ing=datetime(2026, 10, 21), medico='DRA KARINA GONZALES', ips='SANITAS DE LA 36',
                     fecha_orden='2026/10/21', nivel='3')
         fila.update(cambios)
@@ -1046,3 +1047,9 @@ class DatosOrdenPacienteTests(SimpleTestCase):
         self.assertEqual(self._faltantes(fecha_orden='2026/09/22'), {})
         self.assertIn('Posterior al ingreso', self._faltantes(fecha_orden='2029/09/11')['Fecha de ordenamiento'])
         self.assertEqual(self._faltantes(fecha_orden='22/09')['Fecha de ordenamiento'], 'Fecha no válida')
+
+    def test_zona_territorial_y_ocupacion(self):
+        self.assertEqual(self._faltantes(zona=None, zona_rips='R'), {})
+        f = self._faltantes(zona='', zona_rips=None, id_cargo='9999')
+        self.assertEqual(set(f), {'Zona territorial', 'Ocupación'})
+        self.assertIn('Ocupación', self._faltantes(id_cargo=None))

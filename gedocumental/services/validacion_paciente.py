@@ -7,7 +7,9 @@ No usa IA: compara cada campo contra los catálogos que usa Zeus para RIPS
   - OrientacionSexual(sismaelm ORINSEX): 1..5  (0 / NULL = sin diligenciar) — NO se valida: no es obligatoria
   - PertenenciaEtnica(sismaelm ETNIA):   1..7  (7 = Ninguna de las anteriores)
   - discapacidad     (sismaelm DISCAP):  1..8  (8 = Sin discapacidad)
-  Zona territorial y ocupación ya no se validan.
+  - ZonaTerritorial:                     '01' Urbana, '02' Rural (RDA)
+  - zona:                                'U' / 'R' (la que usan los RIPS de spFEVRIPS); basta con una de las dos
+  - id_cargo (CIUO):  ocupación; 9998 = hogar/estudiante/jubilado... es válido, 9999 = "no se tiene información"
 
 Datos de la orden (VariablesDinamicasEntidades del formulario de admisión; Zeus guarda UN valor por
 paciente en VariablesDinamicasEntidadesRegistros y lo sobrescribe en cada admisión):
@@ -51,6 +53,7 @@ CAMPOS_SQL = """
     sp.discapacidad,
     sp.cod_dep, sp.cod_muni, sp.codPaisResidencia, sp.IdPais,
     sp.direccion, sp.telefono, sp.celular,
+    sp.ZonaTerritorial, sp.zona, sp.id_cargo,
     sm.fecha_ing,
 """ + ",\n".join(
     f"(SELECT TOP 1 v.Valor FROM VariablesDinamicasEntidadesRegistros v "
@@ -104,6 +107,7 @@ def _evaluar(fila) -> dict:
      discapacidad,
      cod_dep, cod_muni, pais_res, nacionalidad,
      direccion, telefono, celular,
+     zona, zona_rips_raw, id_cargo,
      fecha_ing, medico_ordena, ips_ordena, fecha_ordenamiento, nivel_educativo) = fila
 
     faltantes = []
@@ -132,8 +136,15 @@ def _evaluar(fila) -> dict:
         falta("Pertenencia étnica", "Sin diligenciar")
     elif _entero(etnia) == 1 and not _txt(comunidad):
         falta("Comunidad étnica", "Paciente indígena sin comunidad étnica")
+    # Zona: basta con cualquiera de los dos campos diligenciado (no se compara si coinciden)
+    if _txt(zona) not in ('01', '02') and _txt(zona_rips_raw).upper() not in ('U', 'R'):
+        falta("Zona territorial", "Sin diligenciar (Urbana / Rural)")
     if _entero(discapacidad) not in range(1, 9):
         falta("Discapacidad", "Sin diligenciar")
+    if not _txt(id_cargo):
+        falta("Ocupación", "Sin código de ocupación (CIUO)")
+    elif _txt(id_cargo) == '9999':
+        falta("Ocupación", "Registrada como 'no se tiene información'")
     if _entero(nivel_educativo) not in range(1, 14):
         falta("Nivel educativo", "Sin diligenciar")
 
