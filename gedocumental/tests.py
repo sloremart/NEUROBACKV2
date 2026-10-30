@@ -968,6 +968,15 @@ class RecaudoTests(SimpleTestCase):
         r = self._verificar({'requiere_pago': 'NO', 'valor': '0.0', 'porcentaje': '11.5'})
         self.assertIn('No se recaudó', r[1])
 
+    def test_salud_total_valor_cero_porcentaje_100(self):
+        # Caso 34300: "Tipo Recaudo: Copago | Valor: 0 | Porcentaje: 100% | Valor Maximo: 0.0000"
+        otra = dict(empresa='EPS002', contrato='SALUD TOTAL CONTRIBUTIVO', valor_servicios=756800.0)
+        for doc in ({'requiere_pago': 'SI', 'tipo_cobro': 'COPAGO', 'valor': '0', 'porcentaje': '100'},
+                    {'requiere_pago': 'NO', 'tipo_cobro': 'COPAGO', 'valor': '0', 'porcentaje': '100%'}):
+            self.assertIsNone(self._verificar(doc, **otra), doc)
+        r = self._verificar({'requiere_pago': 'NO', 'valor': '0', 'porcentaje': '100'}, copago=5000.0, **otra)
+        self.assertIn('no requiere pago', r[1])
+
     def test_no_requiere_pago_con_cobro(self):
         r = self._verificar({'requiere_pago': 'NO', 'valor': '0', 'porcentaje': '0'}, copago=15400.0)
         self.assertIn('no requiere pago', r[1])

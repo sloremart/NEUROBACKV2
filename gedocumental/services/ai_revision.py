@@ -179,6 +179,8 @@ Si el documento no trae procedimiento (comprobante, factura…), usa NO_APLICA e
                  pago compartido" diga 0); si no dice nada, NO_INDICA.
   tipo_cobro: lo que diga "condiciones de pago y recaudo" o similar (cuota moderadora o copago).
   valor: el valor en pesos a recaudar (solo dígitos); porcentaje: el porcentaje de copago (ej. 11.5).
+         En Salud Total ("PAGOS COMPARTIDOS") "Valor: 0" significa que no se cobra, aunque diga "Porcentaje: 100%"
+         (ese porcentaje es la cobertura, no el copago): requiere_pago NO, porcentaje ''.
   categoria: categoría o rango salarial (A, B, C) o nivel (Z para subsidiado nivel Z).
   tipo_afiliado: si el usuario es cotizante o beneficiario.
   exoneracion: SI solo si alguna alerta o marca médica dice "EXONERACION PRESTACION"; alertas como NORMAL,

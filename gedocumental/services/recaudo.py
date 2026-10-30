@@ -28,6 +28,7 @@ REGIMEN_CONTRIBUTIVO, REGIMEN_SUBSIDIADO = 1, 2
 CUOTA_MODERADORA_SANITAS = {'A': 5000, 'B': 20100, 'C': 52800}
 COPAGO_SANITAS = {'A': 11.5, 'B': 17.3, 'C': 23.0}
 COPAGO_NIVEL_Z = 10.0
+PORCENTAJE_COPAGO_MAXIMO = 50.0
 
 # Zeus TipoAfiliado: 1 Cotizante, 2 Beneficiario, 3 Sustituto de pensión, 4 Pensionado
 AFILIADO_ZEUS = {1: 'COTIZANTE', 2: 'BENEFICIARIO', 3: 'COTIZANTE', 4: 'COTIZANTE'}
@@ -143,6 +144,11 @@ def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
         porcentaje_doc, valor_doc = porcentaje_doc or valor_doc, None
     if porcentaje_doc and porcentaje_doc < 1:
         porcentaje_doc *= 100
+    # Un copago nunca es la mitad o más del servicio: "Porcentaje: 100%" con "Valor: 0" (Salud Total) es la
+    # cobertura, no el copago
+    cobertura = bool(porcentaje_doc and porcentaje_doc >= PORCENTAJE_COPAGO_MAXIMO)
+    if cobertura:
+        porcentaje_doc = None
     if porcentaje_doc and tipo_doc not in ('CUOTA_MODERADORA', 'COPAGO'):
         tipo_doc = 'COPAGO'
     if (requiere in ('', 'NO_INDICA') and categoria in ('', 'NO_INDICA') and not exonerado
@@ -167,7 +173,8 @@ def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
     # Un porcentaje o valor mayor a 0 prevalece sobre otro campo en 0
     # (ej. "Valor pesos pago compartido: 0.0" con "Porcentaje Copago: 11.5").
     con_cobro = bool(porcentaje_doc or valor_doc)
-    sin_pago = exonerado or (not con_cobro and (requiere == 'NO' or (valor_doc == 0 and requiere != 'SI')))
+    sin_pago = exonerado or (not con_cobro and (requiere == 'NO'
+                                                or (valor_doc == 0 and (requiere != 'SI' or cobertura))))
     if sin_pago:
         if cobrado > TOLERANCIA_PESOS:
             motivo = "una alerta de exoneración" if exonerado else "que no requiere pago"
