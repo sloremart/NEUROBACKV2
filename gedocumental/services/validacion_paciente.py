@@ -9,14 +9,25 @@ No usa IA: compara cada campo contra los catálogos que usa Zeus para RIPS
   - discapacidad     (sismaelm DISCAP):  1..8  (8 = Sin discapacidad)
   Zona territorial y ocupación ya no se validan.
 
+Datos de la orden (VariablesDinamicasEntidades del formulario de admisión; Zeus guarda UN valor por
+paciente en VariablesDinamicasEntidadesRegistros y lo sobrescribe en cada admisión):
+  2 MEDICO QUE ORDENA, 3 IPS QUE ORDENA, 4 FECHA DE ORDENAMIENTO ('AAAA/MM/DD'),
+  6 Nivel Educativo (VariablesDinamicasEntidadesOpciones: 1..13, 13 = Ninguno).
+
 "No lo declara", "Ninguna" y "Sin discapacidad" son respuestas válidas: no se marcan.
 """
 
 import logging
+from datetime import datetime
 
 from django.db import connections
 
 logger = logging.getLogger(__name__)
+
+VARIABLE_MEDICO_ORDENA = 2
+VARIABLE_IPS_ORDENA = 3
+VARIABLE_FECHA_ORDENAMIENTO = 4
+VARIABLE_NIVEL_EDUCATIVO = 6
 
 TELEFONOS_FICTICIOS = {'', '0', '3000000000', '300000000', '30000000', '0000000000'}
 DIRECCIONES_FICTICIAS = {'', 'SIN DIRECCION', 'NO TIENE', 'N/A', 'NA', 'NINGUNA'}
@@ -39,8 +50,23 @@ CAMPOS_SQL = """
     sp.IdentidadGenero, sp.OrientacionSexual, sp.PertenenciaEtnica, sp.CodigoComunidadEtnica,
     sp.discapacidad,
     sp.cod_dep, sp.cod_muni, sp.codPaisResidencia, sp.IdPais,
-    sp.direccion, sp.telefono, sp.celular
-"""
+    sp.direccion, sp.telefono, sp.celular,
+    sm.fecha_ing,
+""" + ",\n".join(
+    f"(SELECT TOP 1 v.Valor FROM VariablesDinamicasEntidadesRegistros v "
+    f"WHERE v.IdPaciente = sm.autoid AND v.IdVariableDinamicaEntidad = {variable} ORDER BY v.Id DESC)"
+    for variable in (VARIABLE_MEDICO_ORDENA, VARIABLE_IPS_ORDENA, VARIABLE_FECHA_ORDENAMIENTO,
+                     VARIABLE_NIVEL_EDUCATIVO))
+
+
+def _fecha(valor):
+    """'2026/10/21' (formato del formulario de Zeus) o '2026-10-21' → date; None si no es una fecha."""
+    for formato in ('%Y/%m/%d', '%Y-%m-%d', '%d/%m/%Y'):
+        try:
+            return datetime.strptime(_txt(valor)[:10], formato).date()
+        except ValueError:
+            pass
+    return None
 
 
 def validar_datos_paciente(consecutivo) -> dict | None:
@@ -77,7 +103,8 @@ def _evaluar(fila) -> dict:
      identidad, orientacion, etnia, comunidad,
      discapacidad,
      cod_dep, cod_muni, pais_res, nacionalidad,
-     direccion, telefono, celular) = fila
+     direccion, telefono, celular,
+     fecha_ing, medico_ordena, ips_ordena, fecha_ordenamiento, nivel_educativo) = fila
 
     faltantes = []
 
@@ -107,6 +134,19 @@ def _evaluar(fila) -> dict:
         falta("Comunidad étnica", "Paciente indígena sin comunidad étnica")
     if _entero(discapacidad) not in range(1, 9):
         falta("Discapacidad", "Sin diligenciar")
+    if _entero(nivel_educativo) not in range(1, 14):
+        falta("Nivel educativo", "Sin diligenciar")
+
+    # Datos de la orden (formulario de la admisión)
+    if not _txt(medico_ordena):
+        falta("Médico que ordena", "Sin diligenciar")
+    if not _txt(ips_ordena):
+        falta("IPS que ordena", "Sin diligenciar")
+    fecha_orden = _fecha(fecha_ordenamiento)
+    if fecha_orden is None:
+        falta("Fecha de ordenamiento", "Sin diligenciar" if not _txt(fecha_ordenamiento) else "Fecha no válida")
+    elif fecha_ing and fecha_orden > fecha_ing.date():
+        falta("Fecha de ordenamiento", f"Posterior al ingreso ({fecha_orden:%Y/%m/%d})")
 
     # Residencia
     if not _txt(cod_dep):

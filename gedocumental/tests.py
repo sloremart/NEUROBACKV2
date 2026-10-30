@@ -1011,3 +1011,31 @@ class RecaudoTests(SimpleTestCase):
     def test_no_requiere_pago_con_cobro(self):
         r = self._verificar({'requiere_pago': 'NO', 'valor': '0', 'porcentaje': '0'}, copago=15400.0)
         self.assertIn('no requiere pago', r[1])
+
+
+class DatosOrdenPacienteTests(SimpleTestCase):
+    """Médico, IPS y fecha de ordenamiento y nivel educativo (variables dinámicas de la admisión en Zeus)."""
+
+    def _faltantes(self, **cambios):
+        from datetime import datetime
+        from gedocumental.services.validacion_paciente import _evaluar
+        fila = dict(tipo_id='TI', num_id='1122928591', nombre='DANNA', apellido='GOMEZ',
+                    fecha_naci=datetime(2010, 6, 23), sexo='F', identidad=2, orientacion=None, etnia=7,
+                    comunidad='', discapacidad=8, cod_dep='50', cod_muni='001', pais_res='170', nacionalidad=170,
+                    direccion='CALLE 6 # 26-30', telefono='3102677920', celular='',
+                    fecha_ing=datetime(2026, 10, 21), medico='DRA KARINA GONZALES', ips='SANITAS DE LA 36',
+                    fecha_orden='2026/10/21', nivel='3')
+        fila.update(cambios)
+        return {f['campo']: f['motivo'] for f in _evaluar(tuple(fila.values()))['faltantes']}
+
+    def test_completo(self):
+        self.assertEqual(self._faltantes(), {})
+
+    def test_campos_vacios(self):
+        f = self._faltantes(medico='', ips=None, fecha_orden='', nivel=None)
+        self.assertEqual(set(f), {'Médico que ordena', 'IPS que ordena', 'Fecha de ordenamiento', 'Nivel educativo'})
+
+    def test_fecha_de_ordenamiento(self):
+        self.assertEqual(self._faltantes(fecha_orden='2026/09/22'), {})
+        self.assertIn('Posterior al ingreso', self._faltantes(fecha_orden='2029/09/11')['Fecha de ordenamiento'])
+        self.assertEqual(self._faltantes(fecha_orden='22/09')['Fecha de ordenamiento'], 'Fecha no válida')
