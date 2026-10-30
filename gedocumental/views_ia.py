@@ -258,7 +258,9 @@ def bandeja_cuentas_medicas(request):
             completo = val['completo'] if val else None
             fecha_ing = adm[6] if adm else None
 
-            if pendientes:
+            # Datos obligatorios del paciente o de la orden sin diligenciar en Zeus (médico/IPS/fecha que
+            # ordena, nivel educativo, zona, ocupación...) también son hallazgo: la admisión no queda lista
+            if pendientes or completo is False:
                 estado_ia = 'con_hallazgos'
             elif [t for t in faltantes_doc if t != 'RESULTADO']:
                 estado_ia = 'documentos_incompletos'
