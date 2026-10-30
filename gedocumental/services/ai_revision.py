@@ -64,7 +64,8 @@ que se cargan a una ADMISIÓN. Te doy los datos reales de la admisión tomados d
 VERIFICACIONES OBLIGATORIAS (en este orden):
 1. PACIENTE: el nombre y/o número de identificación que aparece en el documento debe ser el mismo paciente de la admisión.
    El paciente es quien aparece como "Paciente", "Nombre del paciente" o en los DATOS DEL PACIENTE. NUNCA tomes
-   como paciente al médico, especialista, tecnólogo, transcriptor, profesional que firma o usuario que imprime.
+   como paciente al médico, especialista, tecnólogo, transcriptor, profesional que firma o usuario que imprime,
+   NI al "Responsable", acudiente, acompañante o cotizante (su nombre y su cédula NO son los del paciente).
    Tolera tildes, mayúsculas, orden de nombres/apellidos, guiones o comas y un segundo nombre faltante,
    pero NO un paciente distinto NI errores de ortografía en el nombre (ej. PAULA vs PAOLA).
    Si es OTRA PERSONA (nombres o apellidos distintos) → tipo INFORMACION: "Paciente no corresponde:
@@ -567,7 +568,8 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             clase = "misma_persona"
         if clase == "misma_persona":
             resultado["paciente_coincide"] = "SI"
-            if resultado["tipo"] == "INFORMACION" and _solo_motivo_paciente(resultado.get("descripcion")):
+            # Cualquier tipo de hallazgo (la IA a veces pone SOPORTES): si solo habla del paciente, no hay error
+            if resultado["tipo"] != "OK" and _solo_motivo_paciente(resultado.get("descripcion")):
                 resultado.update(tipo="OK", descripcion="Documento correcto")
         elif clase == "otra_persona":
             nombre_doc = resultado.get("nombre_documento") or ""
@@ -599,6 +601,11 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                              f"admisión '{datos_admision.get('paciente')}'."),
                 paciente_coincide="NOMBRE_MAL_ESCRITO",
             )
+    elif (resultado["tipo"] != "OK" and str(resultado.get("descripcion") or '').startswith("Paciente no corresponde")
+          and _solo_motivo_paciente(resultado.get("descripcion")) and _mismo_paciente(resultado, datos_admision)):
+        # La IA aceptó el paciente (o no lo marcó) pero igual escribió "Paciente no corresponde" con el mismo nombre
+        logger.info("Mismo paciente: se descarta '%s'", resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", paciente_coincide="SI")
 
     # Mismo código CUPS en el documento y en la admisión: el procedimiento coincide, aunque la
     # descripción esté escrita distinto ("...TITULACION DE DISPOSITIVO MEDICO" vs "...DE CPAP NASAL").

@@ -340,6 +340,37 @@ class TranscripcionTablaTests(SimpleTestCase):
         self.assertEqual((r['tipo'], llamadas), ('SOPORTES', 1))
 
 
+class MismoPacienteSoportesTests(SimpleTestCase):
+    """Caso 34505: la IA marca SOPORTES 'Paciente no corresponde' con el mismo nombre en documento y admisión."""
+    ADM = dict(ADMISION, paciente='DANNA SOFIA GOMEZ MELGAREJO', identificacion='TI 1122928591')
+    DESC = ("Paciente no corresponde: documento 'DANNA SOFIA GOMEZ MELGAREJO', "
+            "admisión 'DANNA SOFIA GOMEZ MELGAREJO'.")
+
+    def _llamar(self, paciente_coincide, identificacion='1122928591'):
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        revision = {
+            "nombre_documento": "DANNA SOFIA GOMEZ MELGAREJO", "identificacion_documento": identificacion,
+            "paciente_coincide": paciente_coincide, "procedimientos_coinciden": "SI",
+            "firma_paciente": "NO_APLICA", "tipo": "SOPORTES", "descripcion": self.DESC,
+        }
+        client = mock.MagicMock()
+        client.chat.completions.create.return_value = mock.MagicMock(
+            choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(revision)))],
+            usage=mock.MagicMock(prompt_tokens=1000, completion_tokens=100))
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            return _llamar_openai('', ['img'], 'ORDEN', self.ADM)
+
+    def test_mismo_paciente_no_es_hallazgo(self):
+        for coincide in ('NO', 'SI'):
+            self.assertEqual(self._llamar(coincide)['tipo'], 'OK', coincide)
+
+    def test_cedula_del_responsable_no_es_otra_persona(self):
+        r = self._llamar('NO', identificacion='40325527')
+        self.assertNotIn('Paciente no corresponde', r['descripcion'])
+
+
 class CantidadesIgualesTests(SimpleTestCase):
     """Revisión con la clave nueva: la IA lee 'CANTIDAD 2' pero deja el tipo AUTORIZACION."""
     ADM = dict(ADMISION, cups=['882317 - DOPPLER (cant. 2)'])
