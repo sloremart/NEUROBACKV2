@@ -1691,3 +1691,112 @@ def generar_pdfs_consultas_lote(request):
         "generados": len(resultados["generados"]), "omitidos": len(resultados["omitidos"]),
         "errores": len(resultados["errores"]), "detalle": resultados,
     }, status=200)
+
+
+# Historias clínicas de PROCEDIMIENTOS (neurología) — ufuncional = 10
+# ---------------------------------------------------------------------------
+# Mismo mecanismo que las consultas: HistoriaClinicaGeneral con ImpHC=1.
+# hcingres.tipo_histo = '07' identifica los procedimientos neurológicos.
+#
+# Endpoints:
+#   GET /api/v2/gedocumental/generar-pdf-procedimiento/?estudio=34633[&force=1]
+#   GET /api/v2/gedocumental/generar-pdfs-procedimientos/?fecha_inicio=YYYY-MM-DD&fecha_fin=YYYY-MM-DD[&force=1]
+# ---------------------------------------------------------------------------
+
+TIPOS_HC_PROCEDIMIENTO = ("07",)
+
+
+def _estudios_procedimiento_por_fecha(fecha_inicio: str, fecha_fin: str) -> list:
+    """
+    con_estudio de los procedimientos neurológicos (ufuncional = 10, SEDE 01) del rango
+    de fechas con historia clínica CERRADA (hcingres.estado = 'C', tipo_histo = '07').
+    """
+    marcadores = ", ".join(["%s"] * len(TIPOS_HC_PROCEDIMIENTO))
+    with connections["zeussalud"].cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT DISTINCT sm.con_estudio
+            FROM sis_maes sm
+            JOIN hcingres h ON h.con_estudio = sm.con_estudio
+            WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
+              AND sm.id_sede = 2
+              AND sm.estado = 'A'
+              AND sm.ufuncional = 10
+              AND h.estado = 'C'
+              AND LTRIM(RTRIM(h.tipo_histo)) IN ({marcadores})
+            ORDER BY sm.con_estudio
+            """,
+            [fecha_inicio, fecha_fin, *TIPOS_HC_PROCEDIMIENTO],
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+
+@api_view(["GET"])
+def generar_pdf_procedimiento(request):
+    """
+    Genera (o regenera con force=1) la historia clínica de UN procedimiento neurológico como RESULTADO.
+
+    GET /api/v2/gedocumental/generar-pdf-procedimiento/?estudio=34633
+    GET /api/v2/gedocumental/generar-pdf-procedimiento/?estudio=34633&force=1
+    """
+    try:
+        estudio = int(request.GET.get("estudio", "").strip())
+    except (ValueError, AttributeError):
+        return JsonResponse({"success": False, "detail": "El parámetro 'estudio' debe ser numérico."}, status=400)
+    force = request.GET.get("force", "0") == "1"
+
+    puede, motivo = _puede_generar_resultado(estudio, force)
+    if not puede:
+        return JsonResponse({"success": True, "detail": f"Estudio {estudio}: {motivo}; no se generó.",
+                             "regenerado": False}, status=200)
+    try:
+        pdf_bytes = _fetch_pdf_consulta(estudio)
+    except Exception as e:
+        return JsonResponse({"success": False, "detail": f"Error al obtener el PDF de SIESA: {e}"}, status=502)
+
+    ruta_relativa, _, nombre = _guardar_pdf(estudio, pdf_bytes)
+    _registrar_en_bd(estudio, nombre, ruta_relativa)
+    return JsonResponse({"success": True, "detail": f"Procedimiento {estudio} generado.",
+                         "archivo": nombre, "ruta": ruta_relativa, "regenerado": force}, status=201)
+
+
+@api_view(["GET"])
+def generar_pdfs_procedimientos_lote(request):
+    """
+    Genera en lote las historias clínicas de procedimientos neurológicos (ufuncional = 10).
+
+    Query params:
+      - fecha_inicio: YYYY-MM-DD
+      - fecha_fin:    YYYY-MM-DD
+      - force:        1 para regenerar los que ya tienen RESULTADO del sistema
+    """
+    fecha_inicio = request.GET.get("fecha_inicio")
+    fecha_fin    = request.GET.get("fecha_fin")
+    force        = request.GET.get("force", "0") == "1"
+    if not fecha_inicio or not fecha_fin:
+        return JsonResponse({"success": False, "detail": "Se requieren 'fecha_inicio' y 'fecha_fin'."}, status=400)
+
+    try:
+        estudios = _estudios_procedimiento_por_fecha(fecha_inicio, fecha_fin)
+    except Exception as e:
+        return JsonResponse({"success": False, "detail": f"Error al consultar Zeus: {e}"}, status=500)
+
+    resultados = {"generados": [], "omitidos": [], "errores": []}
+    for con_estudio in estudios:
+        puede, motivo = _puede_generar_resultado(con_estudio, force)
+        if not puede:
+            resultados["omitidos"].append({"estudio": con_estudio, "motivo": motivo})
+            continue
+        try:
+            pdf_bytes = _fetch_pdf_consulta(con_estudio)
+            ruta_relativa, _, nombre = _guardar_pdf(con_estudio, pdf_bytes)
+            _registrar_en_bd(con_estudio, nombre, ruta_relativa)
+            resultados["generados"].append(con_estudio)
+        except Exception as e:
+            resultados["errores"].append({"estudio": con_estudio, "error": str(e)})
+
+    return JsonResponse({
+        "success": True, "total": len(estudios),
+        "generados": len(resultados["generados"]), "omitidos": len(resultados["omitidos"]),
+        "errores": len(resultados["errores"]), "detalle": resultados,
+    }, status=200)

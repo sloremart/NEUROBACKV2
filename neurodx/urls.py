@@ -48,7 +48,7 @@ from gedocumental.views import (
 from gedocumental.utils.codigoentidad import obtener_hallazgos
 from gedocumental.views_ia import hallazgos_ia, bandeja_cuentas_medicas
 from gedocumental.views_demanda_inducida import demanda_inducida_view, consultar_autorizacion_view
-from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote, debug_siesa_login, generar_pdf_enfermeria, generar_pdfs_enfermeria_lote, generar_pdf_consulta, generar_pdfs_consultas_lote, ver_pdf_orden
+from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote, debug_siesa_login, generar_pdf_enfermeria, generar_pdfs_enfermeria_lote, generar_pdf_consulta, generar_pdfs_consultas_lote, ver_pdf_orden, generar_pdf_procedimiento, generar_pdfs_procedimientos_lote
 
 # =============================================================================
 # MÓDULO: Auth  →  api/v2/auth/
@@ -105,9 +105,11 @@ gedocumental_urls = [
     path('debug-siesa/',             debug_siesa_login,          name='v2-debug-siesa'),
     path('generar-pdf-enfermeria/',  generar_pdf_enfermeria,       name='v2-generar-pdf-enfermeria'),
     path('generar-pdfs-enfermeria/', generar_pdfs_enfermeria_lote, name='v2-generar-pdfs-enfermeria'),
-    path('generar-pdf-consulta/',    generar_pdf_consulta,         name='v2-generar-pdf-consulta'),
-    path('generar-pdfs-consultas/',  generar_pdfs_consultas_lote,  name='v2-generar-pdfs-consultas'),
-    path('ver-pdf-orden/',           ver_pdf_orden,                name='v2-ver-pdf-orden'),
+    path('generar-pdf-consulta/',        generar_pdf_consulta,             name='v2-generar-pdf-consulta'),
+    path('generar-pdfs-consultas/',      generar_pdfs_consultas_lote,      name='v2-generar-pdfs-consultas'),
+    path('generar-pdf-procedimiento/',   generar_pdf_procedimiento,        name='v2-generar-pdf-procedimiento'),
+    path('generar-pdfs-procedimientos/', generar_pdfs_procedimientos_lote, name='v2-generar-pdfs-procedimientos'),
+    path('ver-pdf-orden/',               ver_pdf_orden,                    name='v2-ver-pdf-orden'),
 ]
 
 # =============================================================================
