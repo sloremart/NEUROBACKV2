@@ -2866,11 +2866,13 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             ''', base_params)
             filtros_empresas = [r[0] for r in cursor.fetchall() if r[0]]
 
-            # 8. KPI: cantidad de servicios prestados (líneas sis_deta) y pacientes únicos.
+            # 8. KPI: cantidad de servicios prestados, pacientes únicos y totales filtrados.
             cursor.execute(f'''
                 SELECT
-                    SUM(sd.cantidad)                     AS cantidad_servicios,
-                    COUNT(DISTINCT sm.autoid)            AS total_pacientes
+                    SUM(sd.cantidad)                                AS cantidad_servicios,
+                    COUNT(DISTINCT sm.autoid)                       AS total_pacientes,
+                    COUNT(DISTINCT sm.autoid)                       AS total_estudios,
+                    SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))  AS total_valor
                 FROM sis_maes sm
                 JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN contratos c    ON c.codigo    = sm.contrato
@@ -2881,6 +2883,8 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             row_kpis_extra = cursor.fetchone()
             cantidad_servicios = int(row_kpis_extra[0]) if row_kpis_extra and row_kpis_extra[0] else 0
             total_pacientes    = int(row_kpis_extra[1]) if row_kpis_extra and row_kpis_extra[1] else 0
+            kpi_total_estudios = int(row_kpis_extra[2]) if row_kpis_extra and row_kpis_extra[2] else 0
+            kpi_total_valor    = round(float(row_kpis_extra[3] or 0)) if row_kpis_extra else 0
 
         # Procesar cartera
         _labels  = {'asegurada': 'Cartera Asegurada', 'por_radicar': 'Facturado por Radicar',
@@ -2896,8 +2900,8 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             'fecha_inicio': str(fecha_inicio),
             'fecha_fin':    str(fecha_fin),
             'kpis': {
-                'total_valor':         sum(v['valor']    for v in cartera_acc.values()),
-                'total_estudios':      sum(v['estudios'] for v in cartera_acc.values()),
+                'total_valor':         kpi_total_valor,
+                'total_estudios':      kpi_total_estudios,
                 'total_contratos':     len(rows_contratos),
                 'total_medicos':       len(rows_medicos),
                 'cantidad_servicios':  cantidad_servicios,
