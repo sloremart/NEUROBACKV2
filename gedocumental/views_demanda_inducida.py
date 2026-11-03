@@ -557,7 +557,12 @@ def consultar_autorizacion_view(request):
         return JsonResponse(resultado)
 
     except urllib.error.HTTPError as e:
-        return JsonResponse({"success": False, "error": f"Error {e.code} del servicio"}, status=502)
+        try:
+            err_body = json.loads(e.read().decode())
+            err_msg  = err_body.get("error") or err_body.get("message") or f"Error {e.code} del servicio"
+        except Exception:
+            err_msg = f"Error {e.code} del servicio"
+        return JsonResponse({"success": False, "error": err_msg}, status=502)
     except urllib.error.URLError as e:
         return JsonResponse({"success": False, "error": f"Servicio no disponible: {e.reason}"}, status=503)
     except Exception as e:
