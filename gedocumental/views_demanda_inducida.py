@@ -128,14 +128,64 @@ def detectar_eps_bot(nombre_entidad: str) -> str | None:
 
 @require_GET
 def demanda_inducida_view(request):
-    # Fechas como date (no texto): SQL Server no depende del formato de fecha de la sesión (dmy/mdy)
+    """Proxy al servicio standalone de demanda inducida (appdemandainducida)."""
     try:
-        fecha_desde = date.fromisoformat(request.GET.get("fecha_desde", "").strip() or "0001-01-01")
-        fecha_hasta = date.fromisoformat(request.GET.get("fecha_hasta", "").strip() or "0001-01-01")
-    except ValueError:
-        return JsonResponse({"error": "Las fechas deben tener el formato AAAA-MM-DD."}, status=400)
-    fecha_desde = None if fecha_desde == date.min else fecha_desde
-    fecha_hasta = None if fecha_hasta == date.min else fecha_hasta + timedelta(days=1)
+        req = urllib.request.Request(
+            f"{DEMANDA_WEB_URL}/api/ordenes",
+            headers={"Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = json.loads(resp.read().decode())
+    except Exception as e:
+        return JsonResponse({"error": f"No se pudo conectar con el servicio de demanda inducida: {e}"}, status=503)
+
+    rows = raw.get("data") or []
+    data = []
+    for r in rows:
+        archivos = r.get("ValEpsArchivos") or []
+        for arch in archivos:
+            url = arch.get("url_descarga", "")
+            if url.startswith("/api/"):
+                arch["url_descarga"] = DEMANDA_WEB_URL + url
+
+        estado_cita = (r.get("EstadoCita") or "").strip()
+        fecha_cita  = (r.get("FechaCita") or "").strip()
+        tiene_cita  = estado_cita == "CITA_AGENDADA" or bool(fecha_cita)
+
+        id_zeus   = str(r.get("Id") or "")
+        nro_orden = id_zeus.split("-")[0] if "-" in id_zeus else id_zeus
+
+        data.append({
+            "Id":                 id_zeus,
+            "NroOrden":           nro_orden,
+            "NroAdmision":        "",
+            "Fecha":              (r.get("Fecha") or "").strip(),
+            "Paciente":           (r.get("Paciente") or "").strip(),
+            "Documento":          r.get("Documento") or "",
+            "Telefono":           r.get("Telefono") or "",
+            "Entidad":            r.get("Entidad") or "",
+            "EpsBot":             r.get("EpsBotCodigo") or "",
+            "Cups":               r.get("Cups") or "",
+            "Orden":              r.get("Orden") or "",
+            "Observacion":        r.get("Observacion") or "",
+            "Medico":             (r.get("Medico") or "").strip(),
+            "Estado":             r.get("Estado") or "PENDIENTE",
+            "ValEpsEstado":       r.get("ValEpsEstado") or "",
+            "ValEpsAutorizacion": r.get("ValEpsAutorizacion") or "",
+            "ValEpsVigencia":     r.get("ValEpsVigencia") or "",
+            "ValEpsMensaje":      r.get("ValEpsMensaje") or "",
+            "ValEpsArchivos":     archivos,
+            "TieneCita":          tiene_cita,
+            "FechaCita":          fecha_cita,
+            "EstadoCita":         estado_cita,
+            "ObservacionGestion": r.get("ObservacionGestion") or "",
+        })
+
+    return JsonResponse({"data": data})
+
+
+# ── Mantener el código legacy por si se necesita rollback ──────────────────────
+def _demanda_inducida_view_legacy(request):
 
     try:
         with connections['zeussalud'].cursor() as cursor:
@@ -405,95 +455,38 @@ def _vigencia_expirada(fecha_vigencia_str: str) -> bool:
 @require_POST
 def consultar_autorizacion_view(request):
     """
-    Proxy al RPA Hub con persistencia en BD.
-    Flujo: buscar en tabla → si existe y no venció, devolver → si no, llamar RPA y guardar.
+    Proxy al servicio standalone de demanda inducida para validar EPS.
+    Requiere id_zeus en el body (= campo Id de la orden, formato {NroOrden}-{Cups}).
     """
-    from gedocumental.models import AutorizacionRPA
-
     try:
-        body = json.loads(request.body)
-        eps         = body.get("eps", "")
-        doc_tipo    = body.get("doc_tipo", "CC")
-        doc_num     = (body.get("doc_num", "") or "").replace(" ", "")
-        cups        = (body.get("cups", "") or "").strip()
-        fecha_orden = (body.get("fecha_orden", "") or "").strip()[:10]
+        body    = json.loads(request.body)
+        id_zeus = (body.get("id_zeus") or "").strip()
 
-        if not eps or not doc_num:
-            return JsonResponse({"success": False, "error": "eps y doc_num son requeridos"}, status=400)
+        if not id_zeus:
+            return JsonResponse({"success": False, "error": "id_zeus es requerido"}, status=400)
 
-        # 1. Buscar en base de datos
-        try:
-            registro = AutorizacionRPA.objects.get(eps=eps, doc_num=doc_num)
-            # Solo devolver si no es ERROR y la vigencia no ha expirado
-            if registro.status not in ("ERROR", "ERROR_CREDENCIALES") and \
-               not _vigencia_expirada(registro.fecha_vigencia):
-                datos = dict(registro.datos_completos or {})
-                datos["_from_db"] = True
-                archivos_db = list(datos.get("archivos") or datos.get("archivos_descargados") or [])
-                for arch in archivos_db:
-                    url = arch.get("url_descarga", "")
-                    if url.startswith("/api/"):
-                        arch["url_descarga"] = DEMANDA_WEB_URL + url
-                datos["ValEpsArchivos"] = archivos_db
-                # Aplicar cruce CUPS si se especificó
-                if cups:
-                    cruce = _cruzar_resultado_bot_con_cups(datos, cups, fecha_orden)
-                    datos.update(cruce)
-                return JsonResponse({"success": True, "data": datos})
-            # Si venció o fue error → re-consultar (continúa abajo)
-        except AutorizacionRPA.DoesNotExist:
-            pass
-
-        # 2. Llamar al RPA Hub (pasar cups_esperado y fecha_minima para filtrado temprano)
-        payload = json.dumps({
-            "eps": eps, "doc_tipo": doc_tipo, "doc_num": doc_num,
-            "headless": True, "cups_esperado": cups, "fecha_minima": fecha_orden
-        }).encode()
+        payload = json.dumps({"visual": False}).encode()
         req = urllib.request.Request(
-            f"{RPA_HUB_URL}/api/validar",
+            f"{DEMANDA_WEB_URL}/api/validar_eps/{id_zeus}",
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=90) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             resultado = json.loads(resp.read().decode())
 
-        # 3. Guardar el resultado RAW en BD (keyed por eps+doc_num, sin filtro CUPS)
-        datos = resultado.get("data") or resultado
-        if isinstance(datos, dict) and datos.get("status") not in (None, ""):
-            AutorizacionRPA.objects.update_or_create(
-                eps=eps,
-                doc_num=doc_num,
-                defaults={
-                    "status":           datos.get("status", ""),
-                    "num_autorizacion": datos.get("num_autorizacion") or "",
-                    "fecha_vigencia":   datos.get("fecha_vigencia") or "",
-                    "servicio":         datos.get("servicio") or "",
-                    "cups":             datos.get("cups") or "",
-                    "mensaje":          datos.get("mensaje") or "",
-                    "datos_completos":  datos,
-                    "fecha_consulta":   timezone.now(),
-                },
-            )
-
-        # 4. Inyectar ValEpsArchivos con URLs absolutas
-        datos_resp = resultado.get("data") if isinstance(resultado, dict) else resultado
-        if isinstance(datos_resp, dict):
-            archivos_raw = list(datos_resp.get("archivos") or datos_resp.get("archivos_descargados") or [])
-            for arch in archivos_raw:
-                url = arch.get("url_descarga", "")
-                if url.startswith("/api/"):
-                    arch["url_descarga"] = DEMANDA_WEB_URL + url
-            datos_resp["ValEpsArchivos"] = archivos_raw
-
-        # 5. Aplicar cruce CUPS sobre el resultado antes de retornar
-        if isinstance(datos_resp, dict) and cups:
-            cruce = _cruzar_resultado_bot_con_cups(datos_resp, cups, fecha_orden)
-            datos_resp.update(cruce)
+        archivos = resultado.get("archivos") or []
+        for arch in archivos:
+            url = arch.get("url_descarga", "")
+            if url.startswith("/api/"):
+                arch["url_descarga"] = DEMANDA_WEB_URL + url
+        resultado["archivos"] = archivos
 
         return JsonResponse(resultado)
 
+    except urllib.error.HTTPError as e:
+        return JsonResponse({"success": False, "error": f"Error {e.code} del servicio"}, status=502)
     except urllib.error.URLError as e:
-        return JsonResponse({"success": False, "error": f"RPA Hub no disponible: {e.reason}"}, status=503)
+        return JsonResponse({"success": False, "error": f"Servicio no disponible: {e.reason}"}, status=503)
     except Exception as e:
         return JsonResponse({"success": False, "error": str(e)}, status=500)
