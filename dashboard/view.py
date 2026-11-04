@@ -2691,8 +2691,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
         servicio_params: list = []
         if servicio_filter:
             servicio_clause = (
-                " AND LTRIM(RTRIM(COALESCE(uf.descripcion,"
-                " CAST(sm.ufuncional AS VARCHAR(10)), 'Sin servicio'))) = %s"
+                " AND LTRIM(RTRIM(ISNULL(st.nombre, 'Sin servicio'))) = %s"
             )
             servicio_params = [servicio_filter]
 
@@ -2752,7 +2751,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                 FROM sis_maes sm
                 JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN contratos c    ON c.codigo    = sm.contrato
-                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                LEFT JOIN sis_tipo st    ON st.fuente   = sd.fuente_tips
                 LEFT JOIN sis_empre se   ON se.codigo  = sm.EPSPaciente
                 WHERE {base_where}{extra_clause}
                 GROUP BY LEFT(CONVERT(varchar(20), sm.fecha_ing, 120), 7)
@@ -2769,7 +2768,7 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                 FROM sis_maes sm
                 JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN contratos c    ON c.codigo = sm.contrato
-                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                LEFT JOIN sis_tipo st    ON st.fuente = sd.fuente_tips
                 LEFT JOIN sis_empre se   ON se.codigo = sm.EPSPaciente
                 WHERE {base_where}{extra_clause}
                 GROUP BY LTRIM(RTRIM(ISNULL(c.nombre, CAST(sm.contrato AS VARCHAR(20)))))
@@ -2780,18 +2779,16 @@ class DashboardFacturacionRegularDetalladaView(APIView):
             # 4. Por servicio (donut)
             cursor.execute(f'''
                 SELECT
-                    LTRIM(RTRIM(COALESCE(uf.descripcion,
-                        CAST(sm.ufuncional AS VARCHAR(10)), 'Sin servicio'))) AS servicio,
-                    COUNT(DISTINCT sm.con_estudio)                     AS estudios,
-                    SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))     AS valor
+                    LTRIM(RTRIM(ISNULL(st.nombre, 'Sin servicio'))) AS servicio,
+                    COUNT(DISTINCT sm.con_estudio)                   AS estudios,
+                    SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))   AS valor
                 FROM sis_maes sm
                 JOIN sis_deta sd ON sd.estudio = sm.con_estudio
-                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
-                LEFT JOIN contratos c     ON c.codigo = sm.contrato
-                LEFT JOIN sis_empre se    ON se.codigo = sm.EPSPaciente
+                LEFT JOIN sis_tipo st  ON st.fuente = sd.fuente_tips
+                LEFT JOIN contratos c  ON c.codigo  = sm.contrato
+                LEFT JOIN sis_empre se ON se.codigo = sm.EPSPaciente
                 WHERE {base_where}{extra_clause}
-                GROUP BY LTRIM(RTRIM(COALESCE(uf.descripcion,
-                    CAST(sm.ufuncional AS VARCHAR(10)), 'Sin servicio')))
+                GROUP BY LTRIM(RTRIM(ISNULL(st.nombre, 'Sin servicio')))
                 ORDER BY estudios DESC
             ''', base_params + extra_params)
             rows_servicios = cursor.fetchall()
@@ -2804,9 +2801,9 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                     SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))     AS valor
                 FROM sis_maes sm
                 JOIN sis_deta sd ON sd.estudio = sm.con_estudio
-                LEFT JOIN Medicos m       ON m.codigo = sm.cod_medico
-                LEFT JOIN contratos c     ON c.codigo = sm.contrato
-                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                LEFT JOIN Medicos m       ON m.codigo  = sm.cod_medico
+                LEFT JOIN contratos c     ON c.codigo  = sm.contrato
+                LEFT JOIN sis_tipo st     ON st.fuente = sd.fuente_tips
                 LEFT JOIN sis_empre se    ON se.codigo = sm.EPSPaciente
                 WHERE {base_where}{extra_clause}
                 GROUP BY LTRIM(RTRIM(COALESCE(m.nombre, 'Sin médico')))
@@ -2826,8 +2823,8 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                 FROM sis_maes sm
                 JOIN sis_deta sd ON sd.estudio = sm.con_estudio
                 LEFT JOIN sis_proc sp ON LTRIM(RTRIM(sp.cups)) = LTRIM(RTRIM(sd.cups))
-                LEFT JOIN contratos c    ON c.codigo = sm.contrato
-                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                LEFT JOIN contratos c    ON c.codigo  = sm.contrato
+                LEFT JOIN sis_tipo st    ON st.fuente = sd.fuente_tips
                 LEFT JOIN sis_empre se   ON se.codigo = sm.EPSPaciente
                 WHERE {base_where}{extra_clause}
                 GROUP BY
@@ -2840,10 +2837,10 @@ class DashboardFacturacionRegularDetalladaView(APIView):
 
             # 7. Opciones de filtro (sobre el rango completo, sin filtros activos)
             cursor.execute(f'''
-                SELECT DISTINCT LTRIM(RTRIM(COALESCE(uf.descripcion,
-                    CAST(sm.ufuncional AS VARCHAR(10)), 'Sin servicio')))
+                SELECT DISTINCT LTRIM(RTRIM(ISNULL(st.nombre, 'Sin servicio')))
                 FROM sis_maes sm
-                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                JOIN sis_deta sd ON sd.estudio = sm.con_estudio
+                LEFT JOIN sis_tipo st ON st.fuente = sd.fuente_tips
                 WHERE {base_where}
                 ORDER BY 1
             ''', base_params)
@@ -2876,9 +2873,9 @@ class DashboardFacturacionRegularDetalladaView(APIView):
                     SUM(ISNULL(sd.vlr_servicio * sd.cantidad, 0))  AS total_valor
                 FROM sis_maes sm
                 JOIN sis_deta sd ON sd.estudio = sm.con_estudio
-                LEFT JOIN contratos c    ON c.codigo    = sm.contrato
-                LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
-                LEFT JOIN sis_empre se   ON se.codigo   = sm.EPSPaciente
+                LEFT JOIN contratos c ON c.codigo  = sm.contrato
+                LEFT JOIN sis_tipo st ON st.fuente = sd.fuente_tips
+                LEFT JOIN sis_empre se ON se.codigo = sm.EPSPaciente
                 WHERE {base_where}{extra_clause}
             ''', base_params + extra_params)
             row_kpis_extra = cursor.fetchone()
