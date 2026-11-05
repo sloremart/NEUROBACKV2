@@ -340,6 +340,49 @@ class TranscripcionTablaTests(SimpleTestCase):
         self.assertEqual((r['tipo'], llamadas), ('SOPORTES', 1))
 
 
+class CantidadPorCupsTests(SimpleTestCase):
+    """Caso 33030: dos autorizaciones en un PDF ('CANTIDAD 2' para 930860, 'CANTIDAD 8' para 891509)."""
+    ADM = dict(ADMISION, paciente='ARNOLDO ROJAS', identificacion='CC 17313342', cups=[
+        '891509 - NEUROCONDUCCIÓN (CADA NERVIO) 8 NERVIOS (cant. 1)',
+        '930860 - ELECTROMIOGRAFÍA EN CADA EXTREMIDAD (UNO O MÁS MÚSCULOS) (cant. 2)'])
+
+    def _llamar(self, cantidades, tipo='AUTORIZACION', adm=None):
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        revision = {
+            "nombre_documento": "ARNOLDO ROJAS", "identificacion_documento": "17313342",
+            "paciente_coincide": "SI", "procedimientos_coinciden": "SI", "firma_paciente": "NO_APLICA",
+            "tipo": "OK", "descripcion": "Documento correcto", "cantidades_documento": cantidades,
+        }
+        client = mock.MagicMock()
+        client.chat.completions.create.return_value = mock.MagicMock(
+            choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(revision)))],
+            usage=mock.MagicMock(prompt_tokens=1000, completion_tokens=100))
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            return _llamar_openai('', ['img'], tipo, adm or self.ADM)
+
+    def test_cantidad_anotada_distinta_a_zeus(self):
+        r = self._llamar('930860:2; 891509:8')
+        self.assertEqual(r['tipo'], 'AUTORIZACION')
+        self.assertEqual(r['descripcion'], 'Cantidad autorizada en el documento es 8, se esperaba 1 para el '
+                                           'procedimiento 891509.')
+        # Se corrige en Zeus: la reverificación lo cierra; si no, sigue abierto
+        corregida = dict(self.ADM, cups=[self.ADM['cups'][0].replace('(cant. 1)', '(cant. 8)'), self.ADM['cups'][1]])
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', r['descripcion'], corregida)[0], CORREGIDO)
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', r['descripcion'], self.ADM))
+
+    def test_cantidades_iguales_u_otro_documento(self):
+        self.assertEqual(self._llamar('930860:2; 891509-8:1')['tipo'], 'OK')
+        self.assertEqual(self._llamar('')['tipo'], 'OK')
+        self.assertEqual(self._llamar('930860:2; 891509:8', tipo='ORDEN')['tipo'], 'OK')
+
+    def test_mismo_cups_en_dos_autorizaciones_se_suma(self):
+        from gedocumental.services.ai_revision import _cantidades_distintas_zeus
+        self.assertEqual(_cantidades_distintas_zeus('930860:1; 930860:1', self.ADM), [])
+        self.assertEqual(_cantidades_distintas_zeus('930860:1', self.ADM), [('930860', 1, 2)])
+
+
 class MismoPacienteSoportesTests(SimpleTestCase):
     """Caso 34505: la IA marca SOPORTES 'Paciente no corresponde' con el mismo nombre en documento y admisión."""
     ADM = dict(ADMISION, paciente='DANNA SOFIA GOMEZ MELGAREJO', identificacion='TI 1122928591')

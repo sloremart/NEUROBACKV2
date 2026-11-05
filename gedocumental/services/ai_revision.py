@@ -151,6 +151,7 @@ aunque la primera ya haya fallado:
   "procedimientos_coinciden": "SI | NO | NO_APLICA",
   "firma_paciente": "SI | NO | NO_APLICA   (solo COMPROBANTE; en otros documentos NO_APLICA)",
   "cantidad_anotada": "<solo AUTORIZACION: el número de la anotación u observación de cantidad que está FUERA de la tabla (ej. 'CANTIDAD 2' al pie), o '' si no hay>",
+  "cantidades_documento": "<solo AUTORIZACION: 'CUPS:cantidad' de CADA procedimiento autorizado, separados por ';' (ej. '930860:2; 891509:8'). Si la autorización trae anotación 'CANTIDAD N' fuera de la tabla, N es la cantidad de su procedimiento; si el PDF trae varias autorizaciones (una por página), cada anotación es la de SU autorización. Sin anotación, la columna Cantidad. '' en otros documentos>",
   "estudio_documento": {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
   "estudio_admision":  {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
   "recaudo": {"requiere_pago": "SI | NO | NO_INDICA", "tipo_cobro": "CUOTA_MODERADORA | COPAGO | NO_INDICA",
@@ -698,6 +699,17 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             and _solo_motivo_paciente(resultado.get("descripcion")) is False):
         logger.info("%s: soporte del paciente, se descarta '%s'", tipo_documento, resultado.get("descripcion"))
         resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_soporte=True)
+
+    # Cantidad autorizada de cada CUPS (la anotación "CANTIDAD N" de cada autorización) frente a Zeus: la IA
+    # la transcribe y el sistema compara, porque con varias autorizaciones en un PDF la IA no lo nota sola
+    if ((tipo_documento or '').upper() == 'AUTORIZACION' and resultado["tipo"] == "OK"
+            and resultado.get("paciente_coincide") != "NO"):
+        distintas = _cantidades_distintas_zeus(resultado.get("cantidades_documento"), datos_admision)
+        if distintas:
+            logger.info("AUTORIZACION: cantidad distinta a Zeus %s", distintas)
+            resultado.update(tipo="AUTORIZACION", ajuste_cantidad_cups=True, descripcion="; ".join(
+                f"Cantidad autorizada en el documento es {doc}, se esperaba {zeus} para el procedimiento {cups}"
+                for cups, doc, zeus in distintas) + ".")
 
     _coherencia_tipo_descripcion(resultado)
     return resultado
@@ -1295,12 +1307,8 @@ def _cantidad_documento_en_zeus(descripcion, datos_admision: dict) -> bool:
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
     if not _solo_motivo_cantidad(d):
         return False
-    por_cups = {}
-    for c in datos_admision.get('cups') or []:
-        m = re.search(r'^\s*(\S+)\s*-.*\(cant\.\s*(\d+)\)', str(c))
-        if m:
-            por_cups[m.group(1).upper()] = por_cups.get(m.group(1).upper(), 0) + int(m.group(2))
-    pares = re.findall(r'(?<!\d)(\d{1,3})(?![\d.,]\d)[^;]{0,40}?se esperaba(?:n)?\s+(\d{1,3})([^;]*)', d)
+    por_cups = _cantidades_por_cups(datos_admision)
+    pares =re.findall(r'(?<!\d)(\d{1,3})(?![\d.,]\d)[^;]{0,40}?se esperaba(?:n)?\s+(\d{1,3})([^;]*)', d)
     if not pares or not por_cups:
         return False
     for doc, _, resto in pares:
@@ -1311,6 +1319,32 @@ def _cantidad_documento_en_zeus(descripcion, datos_admision: dict) -> bool:
         elif len(por_cups) != 1 or int(doc) not in por_cups.values():
             return False
     return True
+
+
+def _cantidades_por_cups(datos_admision: dict) -> dict:
+    """{CUPS: cantidad total en la admisión} (suma las filas repetidas del mismo CUPS)."""
+    import re
+    por_cups = {}
+    for c in datos_admision.get('cups') or []:
+        m = re.search(r'^\s*(\S+)\s*-.*\(cant\.\s*(\d+)\)', str(c))
+        if m:
+            por_cups[m.group(1).upper()] = por_cups.get(m.group(1).upper(), 0) + int(m.group(2))
+    return por_cups
+
+
+def _cantidades_distintas_zeus(cantidades_documento, datos_admision: dict) -> list:
+    """
+    [(cups, cantidad_documento, cantidad_zeus)] de los CUPS que están en la autorización y en la admisión con
+    distinta cantidad ('930860:2; 891509:8' frente a 891509 cant. 1). Los CUPS que no están en ambos los
+    revisa la verificación de procedimientos.
+    """
+    import re
+    por_cups = _cantidades_por_cups(datos_admision)
+    documento = {}   # el mismo CUPS en dos autorizaciones del PDF se suma
+    for cups, cantidad in re.findall(r'(\d{6})(?:-\d{1,2})?\s*[:=]\s*(\d{1,3})(?!\d)', str(cantidades_documento or '')):
+        documento[cups] = documento.get(cups, 0) + int(cantidad)
+    return [(cups, cantidad, por_cups[cups]) for cups, cantidad in documento.items()
+            if cups in por_cups and cantidad > 0 and cantidad != por_cups[cups]]
 
 
 def _cantidades_zeus(datos_admision: dict) -> list:
