@@ -89,6 +89,7 @@ def get_tecnicos(request):
                     u.email
                 FROM usuario u
                 WHERE u.email LIKE '%neuroelectrodx%'
+                  AND u.status = '1'
                   AND (
                       u.nombre LIKE '%AMAYA%'
                       OR u.nombre LIKE '%MORENO%'
