@@ -26,11 +26,14 @@ from django.db.models import Max, Min
 
 from gedocumental.models import ArchivoFacturacion, RevisionIA
 from gedocumental.services.ai_revision import (
-    TIPOS_SIN_REVISION_IA, obtener_contexto_admision, reverificar_recaudo_con_zeus, revisar_archivo,
+    TIPOS_SIN_LLAMADA_IA, TIPOS_SIN_REVISION_IA, obtener_contexto_admision, reverificar_recaudo_con_zeus,
+    revisar_archivo,
 )
 from gedocumental.services.reverificacion import reverificar_hallazgos_sin_ia
 
 TIPO = 'RESULTADO'
+# Minutos desde la carga antes de revisar un documento sin revisión IA (la revisión del cargue va primero)
+MINUTOS_GRACIA = 15
 
 
 class Command(BaseCommand):
@@ -51,7 +54,43 @@ class Command(BaseCommand):
         self.stdout.write(f"Hallazgos de recaudo corregidos en SIESA: {reverificar_recaudo_con_zeus()}")
         if not o['solo_faltantes']:
             self._revisar_resultados(o['dias'], o['limite'])
+            self._revisar_sin_revision(o['dias'], o['limite'])
         self._registrar_faltantes(o['ventana_faltantes'])
+
+    # ── 1b. Documentos subidos que quedaron sin revisión IA ──────────────────
+    def _revisar_sin_revision(self, dias, limite):
+        """
+        Archivos cargados por los usuarios que no tienen revisión IA (la IA estaba apagada, sin clave, o la
+        llamada falló al subirlos): se revisan aquí para que ninguno quede sin revisar. Se espera
+        MINUTOS_GRACIA para no repetir la revisión que se hace al subir el archivo.
+        """
+        ahora = datetime.now()
+        pendientes = (
+            ArchivoFacturacion.objects.exclude(Tipo__in=[TIPO, *TIPOS_SIN_LLAMADA_IA])
+            .filter(FechaCreacionArchivo__gte=ahora - timedelta(days=dias),
+                    FechaCreacionArchivo__lte=ahora - timedelta(minutes=MINUTOS_GRACIA),
+                    RevisionesIA__isnull=True)
+            .order_by('-FechaCreacionArchivo')   # primero lo recién subido
+        )
+        total = pendientes.count()
+        api_key = getattr(settings, 'OPENAI_API_KEY', '')
+        if total and not (getattr(settings, 'REVISAR_CON_IA', True) and api_key):
+            self.stderr.write(self.style.ERROR(
+                f"ALERTA: {total} documentos sin revisión IA y la IA está "
+                f"{'APAGADA (REVISAR_CON_IA=False)' if api_key else 'SIN OPENAI_API_KEY'}"))
+            return
+        self.stdout.write(f"Documentos sin revisión IA: {total}")
+        resumen, contextos = {}, {}
+        for a in pendientes[:limite]:
+            if a.Admision_id not in contextos:
+                contextos[a.Admision_id] = obtener_contexto_admision(a.Admision_id)
+            res = revisar_archivo(a, contextos[a.Admision_id])
+            tipo = res['tipo'] if res else 'OMITIDO'
+            resumen[tipo] = resumen.get(tipo, 0) + 1
+            self.stdout.write(f"  {a.Admision_id} {a.Tipo} {tipo}")
+            self.stdout.flush()
+        if resumen:
+            self.stdout.write(f"Resumen documentos sin revisión: {resumen}")
 
     # ── 1. Revisión IA de RESULTADOS nuevos o regenerados ────────────────────
     def _revisar_resultados(self, dias, limite):
