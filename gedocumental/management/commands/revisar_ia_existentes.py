@@ -12,7 +12,10 @@ Por defecto omite los archivos que ya tienen alguna revisión IA.
 Cada archivo es una llamada a OpenAI: use --limite para controlar el costo.
 """
 
+import gc
+
 from django.core.management.base import BaseCommand, CommandError
+from django.db import reset_queries
 
 from gedocumental.models import ArchivoFacturacion, RevisionIA
 from gedocumental.services.ai_revision import TIPOS_SIN_LLAMADA_IA, obtener_contexto_admision, revisar_archivo
@@ -80,8 +83,13 @@ class Command(BaseCommand):
         resumen = {}
         entrada = salida = llamadas = 0
         for a in archivos:
+            # Proceso largo: con DEBUG=True Django guarda cada consulta SQL en memoria hasta que el proceso
+            # muere por falta de memoria (salida 137). Se limpian, y se conserva solo el contexto de la
+            # admisión actual (los archivos vienen ordenados por admisión).
+            reset_queries()
             if a.Admision_id not in contextos:
-                contextos[a.Admision_id] = obtener_contexto_admision(a.Admision_id)
+                contextos = {a.Admision_id: obtener_contexto_admision(a.Admision_id)}
+                gc.collect()
             res = revisar_archivo(a, contextos[a.Admision_id])
             if res:
                 tok = res.get('tokens') or [0, 0]
