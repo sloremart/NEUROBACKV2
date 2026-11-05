@@ -54,6 +54,9 @@ MAX_LADO_IMAGEN = 2000
 TIPOS_CON_FIRMA = ('COMPROBANTE',)
 # Tipos de documento que NO se revisan con IA (Programación de Pagos: facturas de proveedor)
 TIPOS_SIN_REVISION_IA = ('FACTURAPROVEEDOR',)
+# Tipos que no se mandan a la IA: además de los anteriores, la FACTURA (la genera SIESA; nada la valida y
+# la pre-auditoría no la tiene en cuenta)
+TIPOS_SIN_LLAMADA_IA = TIPOS_SIN_REVISION_IA + ('FACTURA',)
 # Soportes que trae el paciente (historias clínicas, adicionales): solo se valida que sean del paciente
 TIPOS_SOLO_PACIENTE = ('HCLINICA', 'HCNEURO', 'ADICIONALES')
 
@@ -1620,8 +1623,8 @@ def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
     no bloquea el flujo de Cuentas Médicas.
     """
 
-    # Documentos de otros módulos (facturas de proveedor) no se revisan
-    if (archivo_obj.Tipo or '').upper() in TIPOS_SIN_REVISION_IA:
+    # Facturas (de SIESA o de proveedor) no se revisan
+    if (archivo_obj.Tipo or '').upper() in TIPOS_SIN_LLAMADA_IA:
         return None
 
     # Interruptor de emergencia — si REVISAR_CON_IA = False en settings, no hace nada
