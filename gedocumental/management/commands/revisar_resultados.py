@@ -30,6 +30,9 @@ from gedocumental.services.ai_revision import (
     _ia_disponible, revisar_archivo,
 )
 from gedocumental.services.reverificacion import reverificar_hallazgos_sin_ia
+from gedocumental.views_siesa import (
+    SinLecturaError, _fetch_pdf_siesa, _guardar_pdf, _registrar_en_bd, _copiar_a_examenes,
+)
 
 TIPO = 'RESULTADO'
 # Minutos desde la carga antes de revisar un documento sin revisión IA (la revisión del cargue va primero)
@@ -45,6 +48,8 @@ class Command(BaseCommand):
         parser.add_argument('--ventana-faltantes', type=int, default=60,
                             help="Busca resultados faltantes en admisiones con documentos de los últimos N días")
         parser.add_argument('--solo-faltantes', action='store_true')
+        parser.add_argument('--dias-siesa', type=int, default=7,
+                            help="Días hacia atrás para buscar RESULTADOS de imagen posiblemente incompletos")
 
     def handle(self, *args, **o):
         # 0. Hallazgos que ya no aplican: corregidos en ZeusSalud o mal leídos por la IA (sin IA)
@@ -53,9 +58,77 @@ class Command(BaseCommand):
                           f"(PDF releídos {r['pdf_leidos']}, escaneados que requieren IA {r['requieren_ia']})")
         self.stdout.write(f"Hallazgos de recaudo corregidos en SIESA: {reverificar_recaudo_con_zeus()}")
         if not o['solo_faltantes']:
+            self._regenerar_incompletos_siesa(o['dias_siesa'])
             self._revisar_resultados(o['dias'], o['limite'])
             self._revisar_sin_revision(o['dias'], o['limite'])
         self._registrar_faltantes(o['ventana_faltantes'])
+
+    # ── 0. Regenerar RESULTADOS de imagen generados con informe incompleto ───
+    def _regenerar_incompletos_siesa(self, dias):
+        """
+        Detecta RESULTADOS de estudios de imagen (CUPS 87/88/92) cuyo informe
+        en detalleshc no tiene 'ATENDIDO POR:' (señal de que el médico no había
+        terminado de dictar cuando se generó el PDF) y los regenera desde SIESA.
+        """
+        desde = datetime.now() - timedelta(days=dias)
+
+        # IDs de admisiones con RESULTADO ya registrado en gedocumental
+        admisiones_con_resultado = list(
+            ArchivoFacturacion.objects.filter(Tipo=TIPO, FechaCreacionArchivo__gte=desde)
+            .values_list('Admision_id', flat=True)
+            .distinct()
+        )
+        if not admisiones_con_resultado:
+            self.stdout.write("Regeneración SIESA: sin RESULTADOS recientes que verificar.")
+            return
+
+        # Buscar los que tienen informe incompleto en detalleshc
+        placeholders = ', '.join(['%s'] * len(admisiones_con_resultado))
+        with connections['zeussalud'].cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT sd.estudio, MIN(sd.id) AS siesa_id
+                FROM sis_deta sd
+                WHERE sd.estudio IN ({placeholders})
+                  AND LEFT(sd.cups, 2) IN ('87', '88', '92')
+                  AND EXISTS (
+                      SELECT 1 FROM detalleshc dh
+                      WHERE dh.estudio = sd.estudio
+                        AND (
+                            dh.campo1 IS NULL
+                            OR dh.campo1 NOT LIKE '%ATENDIDO POR:%'
+                        )
+                  )
+                GROUP BY sd.estudio
+                ORDER BY sd.estudio
+                """,
+                admisiones_con_resultado,
+            )
+            incompletos = cursor.fetchall()
+
+        self.stdout.write(f"RESULTADOS imagen con informe incompleto (sin 'ATENDIDO POR:'): {len(incompletos)}")
+        regenerados = errores = sin_lectura = 0
+
+        for estudio, siesa_id in incompletos:
+            try:
+                pdf_bytes = _fetch_pdf_siesa(estudio, siesa_id)
+                ruta_relativa, ruta_absoluta, nombre = _guardar_pdf(estudio, pdf_bytes)
+                _registrar_en_bd(estudio, nombre, ruta_relativa)
+                _copiar_a_examenes(ruta_absoluta, nombre)
+                regenerados += 1
+                self.stdout.write(f"  Regenerado: {estudio}")
+            except SinLecturaError:
+                sin_lectura += 1
+                self.stdout.write(f"  {estudio}: aún sin lectura completa en SIESA")
+            except Exception as e:
+                errores += 1
+                self.stdout.write(f"  {estudio}: error — {e}")
+            self.stdout.flush()
+
+        self.stdout.write(
+            f"Regeneración completada — regenerados: {regenerados} | "
+            f"aún incompletos en SIESA: {sin_lectura} | errores: {errores}"
+        )
 
     # ── 1b. Documentos subidos que quedaron sin revisión IA ──────────────────
     def _revisar_sin_revision(self, dias, limite):
