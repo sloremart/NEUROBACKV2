@@ -1107,3 +1107,42 @@ class DatosOrdenPacienteTests(SimpleTestCase):
         f = self._faltantes(zona='', zona_rips=None, id_cargo='9999')
         self.assertEqual(set(f), {'Zona territorial', 'Ocupación'})
         self.assertIn('Ocupación', self._faltantes(id_cargo=None))
+
+
+class AlertasTelegramTests(SimpleTestCase):
+    def setUp(self):
+        from gedocumental.services import alertas
+        self.alertas = alertas
+        self.registro = os.path.join(tempfile.mkdtemp(), 'alertas.json')
+        p1 = mock.patch.object(alertas, 'REGISTRO_ENVIOS', self.registro)
+        p2 = mock.patch.dict(os.environ, {'TELEGRAM_BOT_TOKEN': 't', 'TELEGRAM_CHAT_ID': '1, 2'})
+        p3 = mock.patch('requests.post', return_value=mock.MagicMock(ok=True))
+        p1.start(), p2.start()
+        self.post = p3.start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_una_alerta_cada_seis_horas(self):
+        self.assertTrue(self.alertas.alertar('x', 'IA apagada'))
+        self.assertEqual(self.post.call_count, 2)   # un mensaje por chat
+        self.assertFalse(self.alertas.alertar('x', 'IA apagada'))
+        self.assertTrue(self.alertas.alertar('y', 'otra'))
+
+    def test_clasifica_errores_de_openai(self):
+        class AuthenticationError(Exception):
+            pass
+        class RateLimitError(Exception):
+            pass
+        self.alertas.alertar_error_openai(AuthenticationError("Error code: 401 - invalid_api_key"))
+        self.alertas.alertar_error_openai(RateLimitError("Error code: 429 - {'code': 'insufficient_quota'}"))
+        self.alertas.alertar_error_openai(RateLimitError("Error code: 429 - rate limit reached"))  # pasajero
+        textos = [c.kwargs['json']['text'] for c in self.post.call_args_list]
+        self.assertEqual(len(textos), 4)
+        self.assertIn('inválida', textos[0])
+        self.assertIn('saldo', textos[2])
+
+    def test_ia_apagada_avisa(self):
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _ia_disponible
+        with override_settings(REVISAR_CON_IA=False):
+            self.assertFalse(_ia_disponible())
+        self.assertIn('APAGADA', self.post.call_args.kwargs['json']['text'])

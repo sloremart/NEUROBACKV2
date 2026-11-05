@@ -1628,13 +1628,9 @@ def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
         return None
 
     # Interruptor de emergencia — si REVISAR_CON_IA = False en settings, no hace nada
-    if not getattr(settings, 'REVISAR_CON_IA', True):
+    if not _ia_disponible():
         return None
-
     api_key = getattr(settings, 'OPENAI_API_KEY', '') or os.environ.get('OPENAI_API_KEY', '')
-    if not api_key:
-        logger.info("Revisión IA omitida: OPENAI_API_KEY no configurada")
-        return None
 
     # Obtener la ruta absoluta del archivo en disco
     try:
@@ -1655,6 +1651,8 @@ def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
         resultado = analizar_documento(ruta_absoluta, archivo_obj.Tipo, datos_admision)
     except Exception as exc:
         logger.error("Error al llamar a OpenAI para archivo %s: %s", archivo_obj.IdArchivo, exc)
+        from gedocumental.services.alertas import alertar_error_openai
+        alertar_error_openai(exc)
         return None
     if resultado is None:
         return None
@@ -1705,6 +1703,20 @@ def _registrar_revision(archivo_obj, resultado: dict) -> None:
         logger.error("Error guardando revisión IA del archivo %s: %s", archivo_obj.IdArchivo, exc)
 
 
+def _ia_disponible() -> bool:
+    """True si la IA está encendida y con clave; si no, avisa por Telegram (una vez cada pocas horas)."""
+    from gedocumental.services.alertas import IA_APAGADA, IA_SIN_CLAVE, alertar
+    if not getattr(settings, 'REVISAR_CON_IA', True):
+        alertar(IA_APAGADA, "La revisión IA está APAGADA (REVISAR_CON_IA=False): los documentos que se suben "
+                            "no se están revisando.")
+        return False
+    if not (getattr(settings, 'OPENAI_API_KEY', '') or os.environ.get('OPENAI_API_KEY', '')):
+        alertar(IA_SIN_CLAVE, "La revisión IA no tiene OPENAI_API_KEY configurada: los documentos que se suben "
+                              "no se están revisando.")
+        return False
+    return True
+
+
 def revisar_en_segundo_plano(archivo_ids, consecutivo) -> bool:
     """
     Lanza la revisión IA de los archivos en un hilo aparte, para que la subida responda
@@ -1714,9 +1726,7 @@ def revisar_en_segundo_plano(archivo_ids, consecutivo) -> bool:
     import threading
     from django.db import close_old_connections, transaction
 
-    if not getattr(settings, 'REVISAR_CON_IA', True):
-        return False
-    if not (getattr(settings, 'OPENAI_API_KEY', '') or os.environ.get('OPENAI_API_KEY', '')):
+    if not _ia_disponible():
         return False
     ids = list(archivo_ids)
     if not ids:

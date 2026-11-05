@@ -27,7 +27,7 @@ from django.db.models import Max, Min
 from gedocumental.models import ArchivoFacturacion, RevisionIA
 from gedocumental.services.ai_revision import (
     TIPOS_SIN_LLAMADA_IA, TIPOS_SIN_REVISION_IA, obtener_contexto_admision, reverificar_recaudo_con_zeus,
-    revisar_archivo,
+    _ia_disponible, revisar_archivo,
 )
 from gedocumental.services.reverificacion import reverificar_hallazgos_sin_ia
 
@@ -73,11 +73,8 @@ class Command(BaseCommand):
             .order_by('-FechaCreacionArchivo')   # primero lo recién subido
         )
         total = pendientes.count()
-        api_key = getattr(settings, 'OPENAI_API_KEY', '')
-        if total and not (getattr(settings, 'REVISAR_CON_IA', True) and api_key):
-            self.stderr.write(self.style.ERROR(
-                f"ALERTA: {total} documentos sin revisión IA y la IA está "
-                f"{'APAGADA (REVISAR_CON_IA=False)' if api_key else 'SIN OPENAI_API_KEY'}"))
+        if total and not _ia_disponible():   # avisa por Telegram si está apagada o sin clave
+            self.stderr.write(self.style.ERROR(f"ALERTA: {total} documentos sin revisión IA y la IA no está disponible"))
             return
         self.stdout.write(f"Documentos sin revisión IA: {total}")
         resumen, contextos = {}, {}
