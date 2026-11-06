@@ -418,6 +418,25 @@ class RelecturaNombreTests(SimpleTestCase):
         self.assertEqual(llamadas, 1)
 
 
+class ProcedimientoCambiadoEnZeusTests(SimpleTestCase):
+    """Caso 34416: la admisión pasó de RM de cerebro a RM de columna cervical (883210) en SIESA."""
+    NUEVO = dict(ADMISION, cups=['883210 - RESONANCIA MAGNÉTICA DE COLUMNA CERVICAL SIMPLE (cant. 1)'])
+    VIEJO = dict(ADMISION, cups=['883101 - RESONANCIA MAGNÉTICA DE CEREBRO (cant. 1)'])
+    AUT = ("Procedimiento no coincide: documento 'resonancia magnÉtica de columna cervical simple', "
+           "admisión 'resonancia magnética de cerebro'.")
+    ORD = ("Procedimientos no coinciden: documento incluye 'CONSULTA DE CONTROL' y 'RESONANCIA CERVICAL', "
+           "admisión esperaba 'RESONANCIA MAGNÉTICA DE CEREBRO'.")
+
+    def test_detecta_el_cambio(self):
+        from gedocumental.services.reverificacion import procedimiento_cambio_en_zeus as cambio
+        self.assertTrue(cambio(self.AUT, self.NUEVO))
+        self.assertTrue(cambio(self.ORD, self.NUEVO))
+        self.assertFalse(cambio(self.AUT, self.VIEJO))
+        self.assertFalse(cambio(self.ORD, self.VIEJO))
+        # Con otro motivo (paciente, vencida...) no se toca
+        self.assertFalse(cambio("Autorización vencida; admisión 'resonancia magnética de cerebro'.", self.NUEVO))
+
+
 class NombreRepetidoTests(SimpleTestCase):
     """Caso 35159: paciente con un solo nombre; la orden lo repite como segundo nombre."""
     ADM = dict(ADMISION, paciente='MARIANGEL GARZON SANCHEZ', identificacion='CC 1118206724')

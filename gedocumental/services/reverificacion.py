@@ -254,6 +254,36 @@ def _solo_paciente(leido):
                         f"la diferencia de escritura ('{leido}') no es hallazgo.")
 
 
+# Palabras genéricas de un procedimiento que no lo distinguen de otro
+_PALABRAS_GENERICAS = {'RESONANCIA', 'MAGNETICA', 'TOMOGRAFIA', 'COMPUTADA', 'COMPUTARIZADA', 'RADIOGRAFIA',
+                       'ECOGRAFIA', 'ESTUDIO', 'CONSULTA', 'CONTROL', 'PRIMERA', 'SEGUIMIENTO', 'ESPECIALISTA',
+                       'SIMPLE', 'CONTRASTE', 'CON', 'SIN', 'POR', 'DEL', 'LOS', 'LAS', 'PARA', 'VEZ'}
+
+
+def procedimiento_cambio_en_zeus(descripcion: str, datos_admision: dict) -> bool:
+    """
+    True si el hallazgo de procedimiento se hizo contra un procedimiento que la admisión YA NO tiene en Zeus
+    ("admisión 'resonancia magnética de cerebro'" y hoy la admisión es 883210 RM de columna cervical): se
+    cambió en SIESA y el archivo debe revisarse de nuevo contra los datos actuales.
+    """
+    d = descripcion or ''
+    citado = re.findall(r"admisi[oó]n(?:\s+esperaba)?\s*'([^']+)'", d, re.IGNORECASE)
+    cups = datos_admision.get('cups') or []
+    if not citado or not cups or not _solo_motivo_procedimiento(d):
+        return False
+    actual = set(re.findall(r'[a-z]+', _plano(' '.join(str(c) for c in cups))))
+    for texto in citado:
+        codigos = _codigos_cups(texto)
+        if codigos:   # cita un código: cambió si ya no está en la admisión
+            if codigos & {c for x in cups for c in _codigos_cups(str(x).split(' - ')[0])}:
+                return False
+            continue
+        distintivas = [w for w in re.findall(r'[a-z]+', _plano(texto)) if len(w) >= 4 and w.upper() not in _PALABRAS_GENERICAS]
+        if not distintivas or any(w in actual for w in distintivas):
+            return False
+    return True
+
+
 def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict,
                      texto: str | None = None, firma: bool | None = None,
                      autorizacion: dict | None = None, otras: list | None = None) -> tuple[str, str] | None:

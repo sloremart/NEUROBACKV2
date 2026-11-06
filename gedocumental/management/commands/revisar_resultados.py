@@ -17,6 +17,7 @@ Uso:
   python manage.py revisar_resultados --solo-faltantes # no llama a OpenAI
 """
 
+import re
 from datetime import datetime, timedelta
 
 from django.conf import settings
@@ -61,6 +62,7 @@ class Command(BaseCommand):
             self._regenerar_incompletos_siesa(o['dias_siesa'])
             self._revisar_resultados(o['dias'], o['limite'])
             self._revisar_sin_revision(o['dias'], o['limite'])
+            self._revisar_procedimiento_cambiado(o['limite'])
         self._registrar_faltantes(o['ventana_faltantes'])
         self._registrar_sin_autorizacion(o['ventana_faltantes'])
 
@@ -130,6 +132,36 @@ class Command(BaseCommand):
             f"Regeneración completada — regenerados: {regenerados} | "
             f"aún incompletos en SIESA: {sin_lectura} | errores: {errores}"
         )
+
+    # ── 1c. Hallazgos de procedimiento cuando la admisión se cambió en SIESA ─
+    def _revisar_procedimiento_cambiado(self, limite):
+        """
+        Hallazgo "Procedimiento no coincide ... admisión 'X'" y la admisión ya no tiene X en Zeus (se cambió el
+        procedimiento en SIESA): se revisa de nuevo el archivo con IA contra los datos actuales. Si ya cuadra, el
+        hallazgo queda CORREGIDO; si no, REEMPLAZADO por el nuevo.
+        """
+        from gedocumental.services.reverificacion import procedimiento_cambio_en_zeus
+
+        if not _ia_disponible():
+            return
+        pendientes = (RevisionIA.objects.filter(Resuelta=False, IdArchivo__isnull=False)
+                      .exclude(TipoHallazgo='OK').select_related('IdArchivo').order_by('-Fecha'))
+        contextos, revisados, resumen = {}, 0, {}
+        for h in pendientes:
+            if revisados >= limite:
+                break
+            if not re.search(r"admisi[oó]n(?:\s+esperaba)?\s*'", h.Descripcion or '', re.IGNORECASE):
+                continue
+            if h.AdmisionId not in contextos:
+                contextos[h.AdmisionId] = obtener_contexto_admision(h.AdmisionId)
+            if not procedimiento_cambio_en_zeus(h.Descripcion, contextos[h.AdmisionId]):
+                continue
+            res = revisar_archivo(h.IdArchivo, contextos[h.AdmisionId])
+            revisados += 1
+            tipo = res['tipo'] if res else 'OMITIDO'
+            resumen[tipo] = resumen.get(tipo, 0) + 1
+            self.stdout.write(f"  {h.AdmisionId} {h.TipoDocumento} procedimiento cambiado en SIESA → {tipo}")
+        self.stdout.write(f"Hallazgos de procedimiento cambiado en SIESA revisados de nuevo: {revisados} {resumen or ''}")
 
     # ── 1b. Documentos subidos que quedaron sin revisión IA ──────────────────
     def _revisar_sin_revision(self, dias, limite):
