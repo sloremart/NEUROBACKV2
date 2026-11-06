@@ -1001,6 +1001,10 @@ def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
         # Sin nombre legible: solo el número de documento decide
         return bool(id_adm and id_doc == id_adm)
     doc = _separar_pegadas(doc, adm)
+    # Nombre repetido para llenar el segundo nombre ("MARIANGEL MARIANGEL GARZON SANCHEZ" de una paciente
+    # con un solo nombre): es formato del documento, no otra persona ni error de ortografía
+    if len(set(adm)) == len(adm):
+        doc = list(dict.fromkeys(doc))
     if len(doc) < 2 or not adm:
         return False
     disponibles = list(adm)

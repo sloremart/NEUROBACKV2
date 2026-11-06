@@ -383,6 +383,21 @@ class CantidadPorCupsTests(SimpleTestCase):
         self.assertEqual(_cantidades_distintas_zeus('930860:1', self.ADM), [('930860', 1, 2)])
 
 
+class NombreRepetidoTests(SimpleTestCase):
+    """Caso 35159: paciente con un solo nombre; la orden lo repite como segundo nombre."""
+    ADM = dict(ADMISION, paciente='MARIANGEL GARZON SANCHEZ', identificacion='CC 1118206724')
+
+    def test_nombre_repetido_es_la_misma_persona(self):
+        from gedocumental.services.ai_revision import _mismo_paciente
+        doc = {'nombre_documento': 'MARIANGEL MARIANGEL GARZON SANCHEZ', 'identificacion_documento': '1118206724'}
+        self.assertTrue(_mismo_paciente(doc, self.ADM))
+        desc = ("Nombre del usuario incorrecto: documento 'MARIANGEL MARIANGEL GARZON SANCHEZ', "
+                "admisión 'MARIANGEL GARZON SANCHEZ'.")
+        self.assertEqual(evaluar_hallazgo('ORDEN', desc, self.ADM)[0], CORREGIDO)
+        # Otro nombre distinto sigue siendo hallazgo
+        self.assertFalse(_mismo_paciente(dict(doc, nombre_documento='MARIANGEL LUCIA GARZON SANCHEZ'), self.ADM))
+
+
 class MismoPacienteSoportesTests(SimpleTestCase):
     """Caso 34505: la IA marca SOPORTES 'Paciente no corresponde' con el mismo nombre en documento y admisión."""
     ADM = dict(ADMISION, paciente='DANNA SOFIA GOMEZ MELGAREJO', identificacion='TI 1122928591')
