@@ -59,7 +59,42 @@ CAMPOS_SQL = """
     f"(SELECT TOP 1 v.Valor FROM VariablesDinamicasEntidadesRegistros v "
     f"WHERE v.IdPaciente = sm.autoid AND v.IdVariableDinamicaEntidad = {variable} ORDER BY v.Id DESC)"
     for variable in (VARIABLE_MEDICO_ORDENA, VARIABLE_IPS_ORDENA, VARIABLE_FECHA_ORDENAMIENTO,
-                     VARIABLE_NIVEL_EDUCATIVO))
+                     VARIABLE_NIVEL_EDUCATIVO)) + """,
+    sm.contrato,
+    CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0')
+              OR EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
+                         AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0'))
+         THEN 1 ELSE 0 END
+"""
+
+# Número de autorización: Zeus no marca qué contratos lo exigen (todos dicen "ControlNumero"), así que se
+# decide con los datos: lo exigen los contratos en que casi todas las admisiones recientes lo tienen
+# (Capital Salud, Sanitas Evento, Salud Total...). FOMAG, Sanitas MRC, particulares, convenios IPS o SOAT
+# nunca lo llevan y no se marcan. Un contrato nuevo entra solo cuando sus admisiones empiezan a traerlo.
+DIAS_CONTRATOS_AUTORIZACION = 90
+PORCENTAJE_CONTRATO_CON_AUTORIZACION = 80
+MINIMO_ADMISIONES_CONTRATO = 5
+_contratos_autorizacion = {'hasta': 0.0, 'codigos': None}
+
+SQL_CONTRATOS_CON_AUTORIZACION = """
+    SELECT sm.contrato
+    FROM sis_maes sm
+    WHERE sm.fecha_ing >= DATEADD(day, -%s, GETDATE())
+    GROUP BY sm.contrato
+    HAVING COUNT(*) >= %s
+       AND 100.0 * SUM(CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0') THEN 1 ELSE 0 END)
+           / COUNT(*) >= %s
+"""
+
+
+def contratos_con_autorizacion(cursor) -> set:
+    """Códigos de contrato que exigen número de autorización (se recalcula cada hora)."""
+    import time
+    if _contratos_autorizacion['codigos'] is None or time.time() > _contratos_autorizacion['hasta']:
+        cursor.execute(SQL_CONTRATOS_CON_AUTORIZACION, [DIAS_CONTRATOS_AUTORIZACION, MINIMO_ADMISIONES_CONTRATO,
+                                                        PORCENTAJE_CONTRATO_CON_AUTORIZACION])
+        _contratos_autorizacion.update(codigos={fila[0] for fila in cursor.fetchall()}, hasta=time.time() + 3600)
+    return _contratos_autorizacion['codigos']
 
 
 def _fecha(valor):
@@ -86,6 +121,7 @@ def validar_datos_pacientes_bulk(consecutivos) -> dict:
     resultados = {}
     try:
         with connections['zeussalud'].cursor() as cursor:
+            requieren = contratos_con_autorizacion(cursor)
             for i in range(0, len(ids), 500):
                 bloque = ids[i:i + 500]
                 marcadores = ', '.join(['%s'] * len(bloque))
@@ -95,20 +131,21 @@ def validar_datos_pacientes_bulk(consecutivos) -> dict:
                     bloque,
                 )
                 for fila in cursor.fetchall():
-                    resultados[int(fila[0])] = _evaluar(fila[1:])
+                    resultados[int(fila[0])] = _evaluar(fila[1:], requieren)
     except Exception as exc:
         logger.warning("No se pudo validar datos de pacientes: %s", exc)
     return resultados
 
 
-def _evaluar(fila) -> dict:
+def _evaluar(fila, contratos_autorizacion=frozenset()) -> dict:
     (tipo_id, num_id, nombre, apellido, fecha_naci, sexo,
      identidad, orientacion, etnia, comunidad,
      discapacidad,
      cod_dep, cod_muni, pais_res, nacionalidad,
      direccion, telefono, celular,
      zona, zona_rips_raw, id_cargo,
-     fecha_ing, medico_ordena, ips_ordena, fecha_ordenamiento, nivel_educativo) = fila
+     fecha_ing, medico_ordena, ips_ordena, fecha_ordenamiento, nivel_educativo,
+     contrato, tiene_autorizacion) = fila
 
     faltantes = []
 
@@ -147,6 +184,10 @@ def _evaluar(fila) -> dict:
         falta("Ocupación", "Registrada como 'no se tiene información'")
     if _entero(nivel_educativo) not in range(1, 14):
         falta("Nivel educativo", "Sin diligenciar")
+
+    # Número de autorización (en la admisión o en sus servicios), en los contratos que lo exigen
+    if contrato in contratos_autorizacion and not tiene_autorizacion:
+        falta("Número de autorización", "Sin diligenciar en la admisión")
 
     # Datos de la orden (formulario de la admisión)
     if not _txt(medico_ordena):

@@ -1109,9 +1109,9 @@ class DatosOrdenPacienteTests(SimpleTestCase):
                     direccion='CALLE 6 # 26-30', telefono='3102677920', celular='',
                     zona='01', zona_rips='U', id_cargo='9998',
                     fecha_ing=datetime(2026, 10, 21), medico='DRA KARINA GONZALES', ips='SANITAS DE LA 36',
-                    fecha_orden='2026/10/21', nivel='3')
+                    fecha_orden='2026/10/21', nivel='3', contrato=15, tiene_autorizacion=1)
         fila.update(cambios)
-        return {f['campo']: f['motivo'] for f in _evaluar(tuple(fila.values()))['faltantes']}
+        return {f['campo']: f['motivo'] for f in _evaluar(tuple(fila.values()), {15, 4})['faltantes']}
 
     def test_completo(self):
         self.assertEqual(self._faltantes(), {})
@@ -1124,6 +1124,12 @@ class DatosOrdenPacienteTests(SimpleTestCase):
         self.assertEqual(self._faltantes(fecha_orden='2026/09/22'), {})
         self.assertIn('Posterior al ingreso', self._faltantes(fecha_orden='2029/09/11')['Fecha de ordenamiento'])
         self.assertEqual(self._faltantes(fecha_orden='22/09')['Fecha de ordenamiento'], 'Fecha no válida')
+
+    def test_numero_de_autorizacion(self):
+        # Contrato que lo exige (Capital Salud = 15) sin número: hallazgo
+        self.assertEqual(self._faltantes(tiene_autorizacion=0), {'Número de autorización': 'Sin diligenciar en la admisión'})
+        # Contrato que no lo lleva (FOMAG = 21, particular...): no se marca
+        self.assertEqual(self._faltantes(tiene_autorizacion=0, contrato=21), {})
 
     def test_zona_territorial_y_ocupacion(self):
         self.assertEqual(self._faltantes(zona=None, zona_rips='R'), {})
