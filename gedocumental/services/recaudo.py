@@ -183,6 +183,12 @@ def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
                                                 or (valor_doc == 0 and (requiere != 'SI' or cobertura
                                                                         or porcentaje_doc == 0))))
     if sin_pago:
+        if (not exonerado and z["empresa"] in EMPRESAS_SANITAS and tipo_doc == 'COPAGO' and cp > TOLERANCIA_PESOS
+                and any(abs(cp - z["valor_servicios"] * p / 100) <= TOLERANCIA_PESOS for p in COPAGO_SANITAS.values())):
+            # La autorización dice "Copago" y lo cobrado es justo un porcentaje de Sanitas (11.5/17.3/23 %) del
+            # valor de los servicios: la IA leyó mal el pantallazo ("Recaudo de pago: 0.173" partido por el
+            # salto de página), no es un cobro indebido
+            return ('INFORMACION', notas[0]) if notas else None
         if cobrado > TOLERANCIA_PESOS:
             motivo = "una alerta de exoneración" if exonerado else "que no requiere pago"
             return 'RECAUDO', "; ".join([f"Se recaudó {cobrado_txt}, pero la autorización indica {motivo}"] + notas)

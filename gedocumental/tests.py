@@ -1081,6 +1081,14 @@ class RecaudoTests(SimpleTestCase):
         r = self._verificar({'requiere_pago': 'NO', 'valor': '0', 'porcentaje': '0'}, copago=15400.0)
         self.assertIn('no requiere pago', r[1])
 
+    def test_copago_sanitas_leido_como_sin_pago(self):
+        # Caso 34617: "Copago", "Recaudo de pago: 0.173" partido por el salto de página; la IA leyó valor 0
+        doc = {'requiere_pago': 'NO', 'tipo_cobro': 'COPAGO', 'valor': '0.0', 'porcentaje': '0.0'}
+        rm = dict(servicios=[('RESONANCIA MAGNETICA DE CEREBRO', 472919.0)], valor_servicios=472919.0)
+        self.assertIsNone(self._verificar(doc, copago=81815.0, **rm))
+        # Lo cobrado no es un porcentaje de Sanitas: sí es hallazgo
+        self.assertIn('no requiere pago', self._verificar(doc, copago=50000.0, **rm)[1])
+
     def test_cuota_moderadora_con_recaudo_y_porcentaje_cero(self):
         # Caso 34409 (Sanitas): "Cuota Moderadora", "Recaudo de pago: 0", "Porcentaje Copago: 0.0"
         doc = {'requiere_pago': 'SI', 'tipo_cobro': 'CUOTA_MODERADORA', 'valor': '0', 'porcentaje': '0.0',
