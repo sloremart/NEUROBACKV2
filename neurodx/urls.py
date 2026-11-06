@@ -47,7 +47,7 @@ from gedocumental.views import (
 )
 from gedocumental.utils.codigoentidad import obtener_hallazgos
 from gedocumental.views_ia import hallazgos_ia, bandeja_cuentas_medicas
-from gedocumental.views_demanda_inducida import demanda_inducida_view, consultar_autorizacion_view
+from gedocumental.views_demanda_inducida import demanda_inducida_view, consultar_autorizacion_view, guardar_gestion_llamada
 from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote, debug_siesa_login, generar_pdf_enfermeria, generar_pdfs_enfermeria_lote, generar_pdf_consulta, generar_pdfs_consultas_lote, ver_pdf_orden, generar_pdf_procedimiento, generar_pdfs_procedimientos_lote
 
 # =============================================================================
@@ -99,6 +99,7 @@ gedocumental_urls = [
     # ── Demanda Inducida ──────────────────────────────────────────────────────
     path('demanda-inducida/',                                     demanda_inducida_view,        name='v2-demanda-inducida'),
     path('consultar-autorizacion/',                               consultar_autorizacion_view,  name='v2-consultar-autorizacion'),
+    path('demanda-gestion/',                                      guardar_gestion_llamada,      name='v2-demanda-gestion'),
     # ── Generación PDFs desde SIESA (reemplaza el flujo Antares) ─────────────
     path('generar-pdf-siesa/',       generar_pdf_siesa,          name='v2-generar-pdf-siesa'),
     path('generar-pdfs-siesa/',      generar_pdfs_siesa_lote,    name='v2-generar-pdfs-siesa-lote'),
@@ -122,6 +123,7 @@ urlpatterns = [
     path('api/v2/programacionpagos/',   include('programacionpagos.urls')),
     path('api/v2/dashboard/',           include('dashboard.urls')),
     path('api/v2/estudios-sueno/',      include('estudiossueno.urls')),
+    path('api/v2/gestion-facturacion/', include('controlfacturacion.urls')),
     # ── Endpoints legacy (sin prefijo gedocumental/) ─────────────────────────
     path('api/v2/descargar/<int:id_archivo>/',        downloadFile,                            name='v2-descargar-legacy'),
     path('api/v2/agregar_observacion_sin_archivo/',   AgregarObservacionSinArchivoView.as_view(), name='v2-obs-sin-archivo'),

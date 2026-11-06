@@ -140,6 +140,15 @@ def demanda_inducida_view(request):
         return JsonResponse({"error": f"No se pudo conectar con el servicio de demanda inducida: {e}"}, status=503)
 
     rows = raw.get("data") or []
+
+    # Cargar observaciones de gestión guardadas localmente
+    from gedocumental.models import GestionLlamadaDemanda
+    orden_ids = [str(r.get("Id") or "") for r in rows if r.get("Id")]
+    gestion_map = {
+        g.orden_id: g
+        for g in GestionLlamadaDemanda.objects.filter(orden_id__in=orden_ids)
+    }
+
     data = []
     for r in rows:
         archivos = r.get("ValEpsArchivos") or []
@@ -179,6 +188,9 @@ def demanda_inducida_view(request):
             "FechaCita":          fecha_cita,
             "EstadoCita":         estado_cita,
             "ObservacionGestion": r.get("ObservacionGestion") or "",
+            # Gestión de llamada guardada localmente
+            "GestionLlamada":     gestion_map[id_zeus].observacion if id_zeus in gestion_map else "",
+            "NotaGestion":        gestion_map[id_zeus].nota        if id_zeus in gestion_map else "",
         })
 
     # Enriquecer con citas de ZeusSalud:
@@ -567,3 +579,39 @@ def consultar_autorizacion_view(request):
         return JsonResponse({"success": False, "error": f"Servicio no disponible: {e.reason}"}, status=503)
     except Exception as e:
         return JsonResponse({"success": False, "error": str(e)}, status=500)
+
+
+@csrf_exempt
+def guardar_gestion_llamada(request):
+    """
+    POST /api/v2/demanda-gestion/
+    Body JSON: { "orden_id": "...", "observacion": "NO_CONTESTO", "nota": "..." }
+    Guarda o actualiza la gestión de llamada para esa orden.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Método no permitido"}, status=405)
+    try:
+        body = json.loads(request.body)
+    except Exception:
+        return JsonResponse({"error": "JSON inválido"}, status=400)
+
+    orden_id = (body.get("orden_id") or "").strip()
+    if not orden_id:
+        return JsonResponse({"error": "orden_id requerido"}, status=400)
+
+    from gedocumental.models import GestionLlamadaDemanda
+    usuario = request.user if request.user.is_authenticated else None
+
+    obj, _ = GestionLlamadaDemanda.objects.get_or_create(orden_id=orden_id)
+    obj.observacion = body.get("observacion", obj.observacion)
+    obj.nota        = body.get("nota", obj.nota)
+    obj.usuario     = usuario
+    obj.save()
+
+    return JsonResponse({
+        "ok": True,
+        "orden_id":    obj.orden_id,
+        "observacion": obj.observacion,
+        "nota":        obj.nota,
+        "fecha":       obj.fecha.isoformat() if obj.fecha else None,
+    })

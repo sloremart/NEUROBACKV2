@@ -246,3 +246,36 @@ class AutorizacionRPA(models.Model):
 
     def __str__(self):
         return f"{self.eps} | {self.doc_num} | {self.status}"
+
+
+class GestionLlamadaDemanda(models.Model):
+    """
+    Seguimiento de llamadas de demanda inducida por orden.
+    orden_id = campo Id de la orden (ej. '12345-678').
+    """
+    OPCIONES = [
+        ("",                                "— Sin gestión —"),
+        ("NO_CONTESTO",                     "Llamó — No contestó"),
+        ("BUZON_VOZ",                       "Llamó — Buzón de voz"),
+        ("AGENDO_CITA",                     "Llamó — Agendó cita ✓"),
+        ("CITA_OTRO_LUGAR",                 "Llamó — Tiene cita en otro lugar"),
+        ("NO_QUISO",                        "Llamó — No quiso aceptar"),
+        ("DESPUES",                         "Llamó — Dijo que llamará después"),
+        ("NUMERO_INCORRECTO",               "Número incorrecto / No existe"),
+        ("NO_LOCALIZABLE",                  "Paciente no localizable"),
+        ("CITA_REALIZADA",                  "Cita ya realizada"),
+    ]
+
+    orden_id      = models.CharField(max_length=100, unique=True, db_index=True)
+    observacion   = models.CharField(max_length=50, choices=OPCIONES, default="", blank=True)
+    nota          = models.TextField(blank=True, default="")
+    fecha         = models.DateTimeField(auto_now=True)
+    usuario       = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
+    )
+
+    class Meta:
+        db_table = "demanda_gestion_llamada"
+
+    def __str__(self):
+        return f"{self.orden_id} → {self.observacion}"

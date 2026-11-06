@@ -1,4 +1,48 @@
 from django.db import models
+from django.conf import settings
+
+
+class CasoGestion(models.Model):
+    BANDEJA_CHOICES = [
+        ('realizados',  'Realizados sin factura'),
+        ('radicados',   'Facturados sin radicar'),
+        ('devoluciones','Devoluciones EPS'),
+    ]
+    ESTADO_CHOICES = [
+        ('pendiente',   'Pendiente'),
+        ('en_gestion',  'En gestión'),
+        ('resuelto',    'Resuelto'),
+    ]
+
+    admision_id          = models.IntegerField(db_index=True)
+    bandeja              = models.CharField(max_length=20, choices=BANDEJA_CHOICES, db_index=True)
+    estado               = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='pendiente')
+    responsable          = models.ForeignKey(
+                               settings.AUTH_USER_MODEL, null=True, blank=True,
+                               on_delete=models.SET_NULL, related_name='casos_gestion'
+                           )
+    fecha_ingreso_bandeja = models.DateTimeField(auto_now_add=True)
+    fecha_resolucion      = models.DateTimeField(null=True, blank=True)
+    usuario_resolvio      = models.ForeignKey(
+                               settings.AUTH_USER_MODEL, null=True, blank=True,
+                               on_delete=models.SET_NULL, related_name='casos_resueltos'
+                           )
+    numero_radicado       = models.CharField(max_length=100, blank=True, default='')
+    fecha_radicado        = models.DateField(null=True, blank=True)
+    usuario_radico        = models.ForeignKey(
+                               settings.AUTH_USER_MODEL, null=True, blank=True,
+                               on_delete=models.SET_NULL, related_name='casos_radicados'
+                           )
+    motivo_devolucion     = models.TextField(blank=True, default='')
+    observacion           = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'gestion_caso'
+        unique_together = [('admision_id', 'bandeja')]
+        ordering = ['-fecha_ingreso_bandeja']
+
+    def __str__(self):
+        return f"{self.bandeja} · {self.admision_id} · {self.estado}"
 
 
 class DetalleFactura(models.Model):
