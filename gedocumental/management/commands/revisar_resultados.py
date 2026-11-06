@@ -272,11 +272,12 @@ class Command(BaseCommand):
             ArchivoFacturacion.objects.filter(Admision_id__in=cargues, Tipo='AUTORIZACION')
             .values('Admision_id').annotate(u=Min('Usuario_id')).values_list('Admision_id', 'u')
         )
-        sin = admisiones_sin_autorizacion(cargues)
         abiertos = RevisionIA.objects.filter(IdArchivo__isnull=True, TipoHallazgo='AUTORIZACION', Resuelta=False,
                                              Descripcion__startswith=SIN_AUTORIZACION)
-        # Ya tienen número (o ya no se trabajan): se cierran
-        cerrados = abiertos.exclude(AdmisionId__in=sin).filter(AdmisionId__in=cargues).update(
+        # Los abiertos se verifican siempre, aunque la admisión ya esté fuera de la ventana
+        sin = admisiones_sin_autorizacion(set(cargues) | set(abiertos.values_list('AdmisionId', flat=True)))
+        # Ya tienen número en SIESA: se cierran
+        cerrados = abiertos.exclude(AdmisionId__in=sin).update(
             Resuelta=True, Resolucion='CORREGIDO', FechaResolucion=ahora,
             NotaResolucion='El número de autorización ya está diligenciado en SIESA.')
         ya = set(abiertos.values_list('AdmisionId', flat=True))
@@ -285,7 +286,7 @@ class Command(BaseCommand):
             UsuarioId=quien_autorizacion.get(adm) or cargues[adm]['usuario'],
             TipoHallazgo='AUTORIZACION', Modo='sistema', Resuelta=False,
             Descripcion=f"{SIN_AUTORIZACION}: diligencie el número de autorización de la EPS en la admisión.",
-        ) for adm in sin - ya]
+        ) for adm in (sin & set(cargues)) - ya]
         RevisionIA.objects.bulk_create(nuevos)
         self.stdout.write(f"Sin número de autorización en SIESA: {len(nuevos)} nuevos | {len(ya)} ya registrados | "
                           f"{cerrados} corregidos")
