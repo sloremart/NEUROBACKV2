@@ -20,7 +20,7 @@ paciente en VariablesDinamicasEntidadesRegistros y lo sobrescribe en cada admisi
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from django.db import connections
 
@@ -76,10 +76,17 @@ PORCENTAJE_CONTRATO_CON_AUTORIZACION = 80
 MINIMO_ADMISIONES_CONTRATO = 5
 _contratos_autorizacion = {'hasta': 0.0, 'codigos': None}
 
+# Contratos que nunca llevan número de autorización, digan lo que digan los datos
+CONTRATOS_SIN_AUTORIZACION = ('MRC', 'PARTICULAR')
+# Solo admisiones recientes: las antiguas que reciben documentos (radicación) no se marcan
+DIAS_ADMISION_AUTORIZACION = 60
+
 SQL_CONTRATOS_CON_AUTORIZACION = """
     SELECT sm.contrato
     FROM sis_maes sm
+    JOIN contratos co ON co.codigo = sm.contrato
     WHERE sm.fecha_ing >= DATEADD(day, -%s, GETDATE())
+      AND UPPER(co.alias) NOT LIKE '%%MRC%%' AND UPPER(co.alias) NOT LIKE '%%PARTICULAR%%'
     GROUP BY sm.contrato
     HAVING COUNT(*) >= %s
        AND 100.0 * SUM(CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0') THEN 1 ELSE 0 END)
@@ -90,23 +97,33 @@ SQL_CONTRATOS_CON_AUTORIZACION = """
 SIN_AUTORIZACION = "No cuenta con número de autorización en SIESA"
 
 
-def admisiones_sin_autorizacion(consecutivos) -> set:
-    """Admisiones de contratos que exigen número de autorización y no lo tienen en SIESA."""
+def estado_autorizacion(consecutivos) -> dict:
+    """
+    {admisión: 'SIN' | 'CON' | 'NO_APLICA'}: SIN = contrato que exige número de autorización, admisión de los
+    últimos DIAS_ADMISION_AUTORIZACION días y sin número en SIESA; NO_APLICA = MRC, particular, contrato que no
+    la usa o admisión antigua.
+    """
     ids = [int(c) for c in consecutivos]
-    sin = set()
+    estados = {}
+    limite = datetime.now() - timedelta(days=DIAS_ADMISION_AUTORIZACION)
     with connections['zeussalud'].cursor() as cursor:
         requieren = contratos_con_autorizacion(cursor)
         for i in range(0, len(ids), 500):
             bloque = ids[i:i + 500]
             cursor.execute(
-                f"""SELECT sm.con_estudio, sm.contrato FROM sis_maes sm
-                    WHERE sm.con_estudio IN ({', '.join(['%s'] * len(bloque))})
-                      AND ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') IN ('', '0')
-                      AND NOT EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
-                                      AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0'))""",
+                f"""SELECT sm.con_estudio, sm.contrato, sm.fecha_ing,
+                         CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0')
+                                   OR EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
+                                              AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0'))
+                              THEN 1 ELSE 0 END
+                    FROM sis_maes sm WHERE sm.con_estudio IN ({', '.join(['%s'] * len(bloque))})""",
                 bloque)
-            sin.update(int(e) for e, contrato in cursor.fetchall() if contrato in requieren)
-    return sin
+            for estudio, contrato, fecha_ing, tiene in cursor.fetchall():
+                if contrato not in requieren or not fecha_ing or fecha_ing < limite:
+                    estados[int(estudio)] = 'NO_APLICA'
+                else:
+                    estados[int(estudio)] = 'CON' if tiene else 'SIN'
+    return estados
 
 
 def contratos_con_autorizacion(cursor) -> set:
@@ -208,7 +225,8 @@ def _evaluar(fila, contratos_autorizacion=frozenset()) -> dict:
         falta("Nivel educativo", "Sin diligenciar")
 
     # Número de autorización (en la admisión o en sus servicios), en los contratos que lo exigen
-    if contrato in contratos_autorizacion and not tiene_autorizacion:
+    reciente = fecha_ing is None or fecha_ing >= datetime.now() - timedelta(days=DIAS_ADMISION_AUTORIZACION)
+    if contrato in contratos_autorizacion and not tiene_autorizacion and reciente:
         falta(SIN_AUTORIZACION, "Diligenciar el número de autorización de la EPS en la admisión")
 
     # Datos de la orden (formulario de la admisión)

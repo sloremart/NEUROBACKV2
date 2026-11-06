@@ -259,7 +259,7 @@ class Command(BaseCommand):
         SIESA" a cargo de quien cargó la autorización (o el primer documento) de la admisión, para que salga
         en su bandeja de Hallazgos IA. Se cierra como CORREGIDO cuando el número se diligencia en SIESA.
         """
-        from gedocumental.services.validacion_paciente import SIN_AUTORIZACION, admisiones_sin_autorizacion
+        from gedocumental.services.validacion_paciente import SIN_AUTORIZACION, estado_autorizacion
 
         ahora = datetime.now()
         cargues = {
@@ -275,11 +275,15 @@ class Command(BaseCommand):
         abiertos = RevisionIA.objects.filter(IdArchivo__isnull=True, TipoHallazgo='AUTORIZACION', Resuelta=False,
                                              Descripcion__startswith=SIN_AUTORIZACION)
         # Los abiertos se verifican siempre, aunque la admisión ya esté fuera de la ventana
-        sin = admisiones_sin_autorizacion(set(cargues) | set(abiertos.values_list('AdmisionId', flat=True)))
-        # Ya tienen número en SIESA: se cierran
-        cerrados = abiertos.exclude(AdmisionId__in=sin).update(
+        estados = estado_autorizacion(set(cargues) | set(abiertos.values_list('AdmisionId', flat=True)))
+        sin = {adm for adm, e in estados.items() if e == 'SIN'}
+        # Ya tienen número en SIESA → CORREGIDO; MRC, particular o admisión antigua → DESCARTADO (no aplica)
+        cerrados = abiertos.filter(AdmisionId__in=[a for a, e in estados.items() if e == 'CON']).update(
             Resuelta=True, Resolucion='CORREGIDO', FechaResolucion=ahora,
             NotaResolucion='El número de autorización ya está diligenciado en SIESA.')
+        cerrados += abiertos.filter(AdmisionId__in=[a for a, e in estados.items() if e == 'NO_APLICA']).update(
+            Resuelta=True, Resolucion='DESCARTADO', FechaResolucion=ahora,
+            NotaResolucion='No aplica: contrato sin número de autorización (MRC, particular...) o admisión antigua.')
         ya = set(abiertos.values_list('AdmisionId', flat=True))
         nuevos = [RevisionIA(
             IdArchivo=None, AdmisionId=adm, TipoDocumento='AUTORIZACION',

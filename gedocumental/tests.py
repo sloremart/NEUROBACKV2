@@ -1126,10 +1126,17 @@ class DatosOrdenPacienteTests(SimpleTestCase):
         self.assertEqual(self._faltantes(fecha_orden='22/09')['Fecha de ordenamiento'], 'Fecha no válida')
 
     def test_numero_de_autorizacion(self):
+        from datetime import datetime
+        hoy = dict(fecha_ing=datetime.now(), fecha_orden=f"{datetime.now():%Y/%m/%d}")
         # Contrato que lo exige (Capital Salud = 15) sin número: hallazgo
-        self.assertEqual(list(self._faltantes(tiene_autorizacion=0)), ['No cuenta con número de autorización en SIESA'])
+        self.assertEqual(list(self._faltantes(tiene_autorizacion=0, **hoy)),
+                         ['No cuenta con número de autorización en SIESA'])
         # Contrato que no lo lleva (FOMAG = 21, particular...): no se marca
-        self.assertEqual(self._faltantes(tiene_autorizacion=0, contrato=21), {})
+        self.assertEqual(self._faltantes(tiene_autorizacion=0, contrato=21, **hoy), {})
+        # Admisión antigua (radicación de documentos meses después): no se marca
+        from datetime import datetime
+        self.assertEqual(self._faltantes(tiene_autorizacion=0, fecha_ing=datetime(2026, 1, 10),
+                                         fecha_orden='2026/01/10'), {})
 
     def test_zona_territorial_y_ocupacion(self):
         self.assertEqual(self._faltantes(zona=None, zona_rips='R'), {})
