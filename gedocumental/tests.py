@@ -383,6 +383,41 @@ class CantidadPorCupsTests(SimpleTestCase):
         self.assertEqual(_cantidades_distintas_zeus('930860:1', self.ADM), [('930860', 1, 2)])
 
 
+class RelecturaNombreTests(SimpleTestCase):
+    """Caso 35228: escaneado 'RIVEROS URREA CARLOS ISAIAS'; la IA leyó 'RIVERA CARLOS ISAIAS'."""
+    ADM = dict(ADMISION, paciente='CARLOS ISAIAS RIVEROS URREA', identificacion='CC 86080536')
+
+    def _llamar(self, relectura, imagenes=('img',)):
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        revision = {"nombre_documento": "RIVERA CARLOS ISAIAS", "identificacion_documento": "86080536",
+                    "paciente_coincide": "SI", "procedimientos_coinciden": "SI", "firma_paciente": "NO_APLICA",
+                    "tipo": "OK", "descripcion": "Documento correcto"}
+
+        def respuesta(contenido):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
+                                  usage=mock.MagicMock(prompt_tokens=1000, completion_tokens=50))
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [respuesta(revision), respuesta({"nombre": relectura})]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            return _llamar_openai('', list(imagenes), 'ORDEN', self.ADM), client.chat.completions.create.call_count
+
+    def test_relectura_con_el_nombre_de_zeus(self):
+        r, llamadas = self._llamar("RIVEROS URREA CARLOS ISAIAS")
+        self.assertEqual((r['tipo'], llamadas, r['llamadas']), ('OK', 2, 2))
+        self.assertTrue(r['ajuste_relectura_nombre'])
+
+    def test_relectura_confirma_el_error(self):
+        r, llamadas = self._llamar("RIVERA CARLOS ISAIAS")
+        self.assertEqual((r['tipo'], llamadas), ('INFORMACION', 2))
+        self.assertIn('Nombre del usuario incorrecto', r['descripcion'])
+
+    def test_pdf_digital_no_relee(self):
+        r, llamadas = self._llamar("RIVEROS URREA CARLOS ISAIAS", imagenes=())
+        self.assertEqual(llamadas, 1)
+
+
 class NombreRepetidoTests(SimpleTestCase):
     """Caso 35159: paciente con un solo nombre; la orden lo repite como segundo nombre."""
     ADM = dict(ADMISION, paciente='MARIANGEL GARZON SANCHEZ', identificacion='CC 1118206724')

@@ -379,6 +379,35 @@ def _transcribir_procedimientos(client, modelo: str, imagenes: list[str]) -> tup
     return str(procedimientos), tokens
 
 
+PROMPT_RELEER_NOMBRE = (
+    "Transcribe LETRA POR LETRA el nombre completo del PACIENTE tal como está escrito en el documento (campo "
+    "\"Paciente\", \"Nombre del paciente\" o DATOS DEL PACIENTE), con TODOS sus nombres y apellidos, sin corregir "
+    "ni omitir ninguno. No tomes al médico, al acompañante ni a quien imprime. Responde en JSON: "
+    '{"nombre": "<nombre completo del paciente>"}'
+)
+
+
+def _releer_nombre(client, modelo: str, imagenes: list[str]) -> tuple[str, list]:
+    """Consulta corta: solo el nombre del paciente del documento escaneado. Devuelve (nombre, [tokens])."""
+    contenido = [{"type": "text", "text": "Documento escaneado: ver imágenes adjuntas."}]
+    contenido += [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"}}
+                  for img in imagenes]
+    try:
+        respuesta = client.chat.completions.create(
+            model=modelo,
+            messages=[{"role": "system", "content": PROMPT_RELEER_NOMBRE}, {"role": "user", "content": contenido}],
+            response_format={"type": "json_object"},
+            max_tokens=60,
+            temperature=0,
+        )
+        uso = getattr(respuesta, 'usage', None)
+        tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
+        return str(json.loads(respuesta.choices[0].message.content).get("nombre") or ''), tokens
+    except Exception as exc:
+        logger.warning("No se pudo releer el nombre del paciente: %s", exc)
+        return '', [0, 0]
+
+
 def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_admision: dict,
                    _reintento: bool = False, _contenido=None, firma_detectada: bool | None = None) -> dict:
     """
@@ -558,6 +587,7 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     # y "no se leyó el nombre" (la IA a veces toma "RESULTADO" o "PACIENTE" como si fuera el nombre).
     # Si la IA aceptó el paciente pero el nombre del documento (PDF digital o escaneado) tiene letras
     # distintas a las de la admisión, es "nombre mal escrito".
+    tipo_ia, descripcion_ia = resultado["tipo"], resultado.get("descripcion")
     if (resultado.get("paciente_coincide") == "SI" and (tipo_documento or '').upper() != 'RESULTADO'
             and (_nombre_en_texto(resultado.get("nombre_documento"), texto)
                  or (imagenes and len([t for t in _tokens_nombre(resultado.get("nombre_documento"))
@@ -614,6 +644,23 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         # La IA aceptó el paciente (o no lo marcó) pero igual escribió "Paciente no corresponde" con el mismo nombre
         logger.info("Mismo paciente: se descarta '%s'", resultado.get("descripcion"))
         resultado.update(tipo="OK", descripcion="Documento correcto", paciente_coincide="SI")
+
+    # Escaneado con "nombre mal escrito": puede ser una mala lectura de la imagen (RIVERA por RIVEROS, y sin
+    # URREA, caso 35228). Se pide solo el nombre (consulta corta); si la relectura es el nombre de Zeus, no hay error.
+    if (imagenes and not _reintento and resultado.get("paciente_coincide") == "NOMBRE_MAL_ESCRITO"
+            and not _nombre_en_texto(resultado.get("nombre_documento"), texto)):
+        nombre, tokens = _releer_nombre(client, modelo, imagenes)
+        resultado["tokens"] = [a + b for a, b in zip(resultado["tokens"], tokens)]
+        resultado["llamadas"] = resultado.get("llamadas", 1) + 1
+        if nombre and _mismo_paciente({'nombre_documento': nombre,
+                                       'identificacion_documento': resultado.get('identificacion_documento')},
+                                      datos_admision):
+            logger.info("Relectura del nombre '%s' coincide con Zeus: se descarta '%s'", nombre,
+                        resultado.get("descripcion"))
+            otro_motivo = tipo_ia != "OK" and not _solo_motivo_paciente(descripcion_ia)
+            resultado.update(tipo=tipo_ia if otro_motivo else "OK",
+                             descripcion=descripcion_ia if otro_motivo else "Documento correcto",
+                             paciente_coincide="SI", nombre_documento=nombre, ajuste_relectura_nombre=True)
 
     # Mismo código CUPS en el documento y en la admisión: el procedimiento coincide, aunque la
     # descripción esté escrita distinto ("...TITULACION DE DISPOSITIVO MEDICO" vs "...DE CPAP NASAL").
