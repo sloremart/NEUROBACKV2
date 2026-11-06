@@ -62,6 +62,7 @@ class Command(BaseCommand):
             self._revisar_resultados(o['dias'], o['limite'])
             self._revisar_sin_revision(o['dias'], o['limite'])
         self._registrar_faltantes(o['ventana_faltantes'])
+        self._registrar_sin_autorizacion(o['ventana_faltantes'])
 
     # ── 0. Regenerar RESULTADOS de imagen generados con informe incompleto ───
     def _regenerar_incompletos_siesa(self, dias):
@@ -249,3 +250,42 @@ class Command(BaseCommand):
             f"Resultados faltantes (> {dias_espera} días): {len(nuevos)} nuevos | "
             f"{len(ya_registradas)} ya registrados | revisadas {len(admisiones)} admisiones"
         )
+
+    # ── 3. Admisiones sin número de autorización en SIESA ────────────────────
+    def _registrar_sin_autorizacion(self, ventana):
+        """
+        En los contratos que exigen autorización (validacion_paciente.contratos_con_autorizacion; no aplica a
+        particulares, FOMAG, Sanitas MRC...), registra el hallazgo "No cuenta con número de autorización en
+        SIESA" a cargo de quien cargó la autorización (o el primer documento) de la admisión, para que salga
+        en su bandeja de Hallazgos IA. Se cierra como CORREGIDO cuando el número se diligencia en SIESA.
+        """
+        from gedocumental.services.validacion_paciente import SIN_AUTORIZACION, admisiones_sin_autorizacion
+
+        ahora = datetime.now()
+        cargues = {
+            r['Admision_id']: r for r in
+            ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO, *TIPOS_SIN_REVISION_IA])
+            .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'), usuario=Min('Usuario_id'))
+            .filter(primer__gte=ahora - timedelta(days=ventana))
+        }
+        quien_autorizacion = dict(
+            ArchivoFacturacion.objects.filter(Admision_id__in=cargues, Tipo='AUTORIZACION')
+            .values('Admision_id').annotate(u=Min('Usuario_id')).values_list('Admision_id', 'u')
+        )
+        sin = admisiones_sin_autorizacion(cargues)
+        abiertos = RevisionIA.objects.filter(IdArchivo__isnull=True, TipoHallazgo='AUTORIZACION', Resuelta=False,
+                                             Descripcion__startswith=SIN_AUTORIZACION)
+        # Ya tienen número (o ya no se trabajan): se cierran
+        cerrados = abiertos.exclude(AdmisionId__in=sin).filter(AdmisionId__in=cargues).update(
+            Resuelta=True, Resolucion='CORREGIDO', FechaResolucion=ahora,
+            NotaResolucion='El número de autorización ya está diligenciado en SIESA.')
+        ya = set(abiertos.values_list('AdmisionId', flat=True))
+        nuevos = [RevisionIA(
+            IdArchivo=None, AdmisionId=adm, TipoDocumento='AUTORIZACION',
+            UsuarioId=quien_autorizacion.get(adm) or cargues[adm]['usuario'],
+            TipoHallazgo='AUTORIZACION', Modo='sistema', Resuelta=False,
+            Descripcion=f"{SIN_AUTORIZACION}: diligencie el número de autorización de la EPS en la admisión.",
+        ) for adm in sin - ya]
+        RevisionIA.objects.bulk_create(nuevos)
+        self.stdout.write(f"Sin número de autorización en SIESA: {len(nuevos)} nuevos | {len(ya)} ya registrados | "
+                          f"{cerrados} corregidos")

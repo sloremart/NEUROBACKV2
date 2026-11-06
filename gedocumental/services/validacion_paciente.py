@@ -87,6 +87,28 @@ SQL_CONTRATOS_CON_AUTORIZACION = """
 """
 
 
+SIN_AUTORIZACION = "No cuenta con número de autorización en SIESA"
+
+
+def admisiones_sin_autorizacion(consecutivos) -> set:
+    """Admisiones de contratos que exigen número de autorización y no lo tienen en SIESA."""
+    ids = [int(c) for c in consecutivos]
+    sin = set()
+    with connections['zeussalud'].cursor() as cursor:
+        requieren = contratos_con_autorizacion(cursor)
+        for i in range(0, len(ids), 500):
+            bloque = ids[i:i + 500]
+            cursor.execute(
+                f"""SELECT sm.con_estudio, sm.contrato FROM sis_maes sm
+                    WHERE sm.con_estudio IN ({', '.join(['%s'] * len(bloque))})
+                      AND ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') IN ('', '0')
+                      AND NOT EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
+                                      AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0'))""",
+                bloque)
+            sin.update(int(e) for e, contrato in cursor.fetchall() if contrato in requieren)
+    return sin
+
+
 def contratos_con_autorizacion(cursor) -> set:
     """Códigos de contrato que exigen número de autorización (se recalcula cada hora)."""
     import time
@@ -187,7 +209,7 @@ def _evaluar(fila, contratos_autorizacion=frozenset()) -> dict:
 
     # Número de autorización (en la admisión o en sus servicios), en los contratos que lo exigen
     if contrato in contratos_autorizacion and not tiene_autorizacion:
-        falta("Número de autorización", "Sin diligenciar en la admisión")
+        falta(SIN_AUTORIZACION, "Diligenciar el número de autorización de la EPS en la admisión")
 
     # Datos de la orden (formulario de la admisión)
     if not _txt(medico_ordena):

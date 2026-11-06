@@ -1127,7 +1127,7 @@ class DatosOrdenPacienteTests(SimpleTestCase):
 
     def test_numero_de_autorizacion(self):
         # Contrato que lo exige (Capital Salud = 15) sin número: hallazgo
-        self.assertEqual(self._faltantes(tiene_autorizacion=0), {'Número de autorización': 'Sin diligenciar en la admisión'})
+        self.assertEqual(list(self._faltantes(tiene_autorizacion=0)), ['No cuenta con número de autorización en SIESA'])
         # Contrato que no lo lleva (FOMAG = 21, particular...): no se marca
         self.assertEqual(self._faltantes(tiene_autorizacion=0, contrato=21), {})
 
