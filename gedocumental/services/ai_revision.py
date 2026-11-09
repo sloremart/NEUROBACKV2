@@ -1830,9 +1830,19 @@ def reverificar_recaudo_con_zeus() -> int:
         except Exception as exc:
             logger.warning("No se pudo reverificar el recaudo del hallazgo %s: %s", h.IdRevision, exc)
             continue
-        if nuevo:
-            continue
         partes = (h.Descripcion or '').split(' | ')
+        if nuevo:
+            # Sigue habiendo un problema de recaudo, pero puede ser otro (ej. se dejó de validar el tipo de
+            # afiliado y queda la diferencia de valor): la descripción se actualiza al motivo vigente
+            solo_recaudo = h.TipoHallazgo in ('RECAUDO', 'INFORMACION') and len(partes) == 1
+            descripcion = nuevo[1] if solo_recaudo else ' | '.join(partes[:-1] + [nuevo[1]])
+            if descripcion != h.Descripcion:
+                h.Descripcion = descripcion
+                if solo_recaudo:
+                    h.TipoHallazgo = nuevo[0]
+                h.save(update_fields=['Descripcion', 'TipoHallazgo'])
+                logger.info("Hallazgo %s: recaudo actualizado a '%s'", h.IdRevision, descripcion)
+            continue
         if h.TipoHallazgo in ('RECAUDO', 'INFORMACION') and len(partes) == 1:
             h.Resuelta = True
             h.Resolucion = 'CORREGIDO'

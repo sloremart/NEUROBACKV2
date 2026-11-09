@@ -1259,3 +1259,26 @@ class ParticularSinValidacionTests(SimpleTestCase):
         desc = "Paciente no corresponde: documento 'HECTURIEL BALDERRAMA', admisión 'HECTURIEL RODRIGUEZ GONZALES'."
         self.assertEqual(evaluar_hallazgo('ORDEN', desc, self.ADM)[0], DESCARTADO)
         self.assertIsNone(evaluar_hallazgo('ORDEN', desc, dict(self.ADM, contrato='SANITAS EVENTO CONTRIBUTIVO')))
+
+
+class RecaudoDescripcionVigenteTests(SimpleTestCase):
+    """Caso 34368: el hallazgo de tipo de afiliado se actualiza al motivo de recaudo que sigue vigente."""
+
+    def _correr(self, descripcion, tipo, nuevo):
+        from gedocumental.services import ai_revision
+        h = SimpleNamespace(IdRevision=1, AdmisionId=34368, TipoHallazgo=tipo, Descripcion=descripcion,
+                            DatosRecaudo='{"porcentaje": "11.5"}', save=mock.MagicMock())
+        qs = mock.MagicMock()
+        qs.exclude.return_value = [h]
+        with mock.patch('gedocumental.models.RevisionIA.objects.filter', return_value=qs), \
+                mock.patch.object(recaudo, 'verificar_recaudo', return_value=nuevo):
+            ai_revision.reverificar_recaudo_con_zeus()
+        return h
+
+    def test_texto_viejo_se_reemplaza(self):
+        nuevo = ('RECAUDO', 'Valor recaudado distinto: copago $122.600; debía ser copago de $142.581')
+        h = self._correr('Tipo de afiliado en Zeus beneficiario, la autorización dice cotizante', 'INFORMACION', nuevo)
+        self.assertEqual((h.TipoHallazgo, h.Descripcion), nuevo)
+        # Con otro motivo de la IA, solo se cambia la parte del recaudo
+        h = self._correr('Autorización vencida | Tipo de afiliado en Zeus beneficiario', 'AUTORIZACION', nuevo)
+        self.assertEqual((h.TipoHallazgo, h.Descripcion), ('AUTORIZACION', 'Autorización vencida | ' + nuevo[1]))
