@@ -758,7 +758,8 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     # la transcribe y el sistema compara, porque con varias autorizaciones en un PDF la IA no lo nota sola
     if ((tipo_documento or '').upper() == 'AUTORIZACION' and resultado["tipo"] == "OK"
             and resultado.get("paciente_coincide") != "NO"):
-        distintas = _cantidades_distintas_zeus(resultado.get("cantidades_documento"), datos_admision)
+        distintas = _cantidades_distintas_zeus(resultado.get("cantidades_documento"), datos_admision,
+                                               resultado.get("cantidad_anotada"))
         if distintas:
             logger.info("AUTORIZACION: cantidad distinta a Zeus %s", distintas)
             resultado.update(tipo="AUTORIZACION", ajuste_cantidad_cups=True, descripcion="; ".join(
@@ -1390,7 +1391,7 @@ def _cantidades_por_cups(datos_admision: dict) -> dict:
     return por_cups
 
 
-def _cantidades_distintas_zeus(cantidades_documento, datos_admision: dict) -> list:
+def _cantidades_distintas_zeus(cantidades_documento, datos_admision: dict, cantidad_anotada='') -> list:
     """
     [(cups, cantidad_documento, cantidad_zeus)] de los CUPS que están en la autorización y en la admisión con
     distinta cantidad ('930860:2; 891509:8' frente a 891509 cant. 1). Los CUPS que no están en ambos los
@@ -1401,8 +1402,11 @@ def _cantidades_distintas_zeus(cantidades_documento, datos_admision: dict) -> li
     documento = {}   # el mismo CUPS en dos autorizaciones del PDF se suma
     for cups, cantidad in re.findall(r'(\d{6})(?:-\d{1,2})?\s*[:=]\s*(\d{1,3})(?!\d)', str(cantidades_documento or '')):
         documento[cups] = documento.get(cups, 0) + int(cantidad)
+    # La anotación "CANTIDAD N" prevalece sobre la tabla: si la IA la leyó y es la cantidad de Zeus, ese CUPS
+    # está bien aunque en cantidades_documento haya puesto la de la tabla (caso 35215: tabla 1, "CANTIDAD 2")
+    anotadas = {int(n) for n in re.findall(r'\d{1,3}', str(cantidad_anotada or ''))}
     return [(cups, cantidad, por_cups[cups]) for cups, cantidad in documento.items()
-            if cups in por_cups and cantidad > 0 and cantidad != por_cups[cups]]
+            if cups in por_cups and cantidad > 0 and cantidad != por_cups[cups] and por_cups[cups] not in anotadas]
 
 
 def _cantidades_zeus(datos_admision: dict) -> list:

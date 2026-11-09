@@ -378,6 +378,15 @@ class CantidadPorCupsTests(SimpleTestCase):
         self.assertEqual(self._llamar('')['tipo'], 'OK')
         self.assertEqual(self._llamar('930860:2; 891509:8', tipo='ORDEN')['tipo'], 'OK')
 
+    def test_anotacion_igual_a_zeus_prevalece_sobre_la_tabla(self):
+        # Caso 35215: tabla 1, "CANTIDAD 2" al pie, Zeus 2; la IA puso la de la tabla en cantidades_documento
+        from gedocumental.services.ai_revision import _cantidades_distintas_zeus
+        adm = dict(ADMISION, cups=['954626 - POTENCIALES EVOCADOS AUDITIVOS (cant. 2)'])
+        self.assertEqual(_cantidades_distintas_zeus('954626:1', adm, 'CANTIDAD 2'), [])
+        self.assertEqual(_cantidades_distintas_zeus('954626:1', adm, ''), [('954626', 1, 2)])
+        # 33030: la anotación (8) no es la de Zeus (1): sigue siendo hallazgo
+        self.assertEqual(_cantidades_distintas_zeus('930860:2; 891509:8', self.ADM, '8'), [('891509', 8, 1)])
+
     def test_mismo_cups_en_dos_autorizaciones_se_suma(self):
         from gedocumental.services.ai_revision import _cantidades_distintas_zeus
         self.assertEqual(_cantidades_distintas_zeus('930860:1; 930860:1', self.ADM), [])
