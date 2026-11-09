@@ -1291,3 +1291,23 @@ class RecaudoDescripcionVigenteTests(SimpleTestCase):
         # Con otro motivo de la IA, solo se cambia la parte del recaudo
         h = self._correr('Autorización vencida | Tipo de afiliado en Zeus beneficiario', 'AUTORIZACION', nuevo)
         self.assertEqual((h.TipoHallazgo, h.Descripcion), ('AUTORIZACION', 'Autorización vencida | ' + nuevo[1]))
+
+
+class SinDiferenciasTests(SimpleTestCase):
+    """Caso 35625 / 35237: la IA marca hallazgo comparando datos iguales."""
+
+    def test_comparaciones_iguales(self):
+        from gedocumental.services.ai_revision import _sin_diferencias
+        for d in ("Cantidad autorizada incorrecta: documento 'CANTIDAD 2', admisión 'CANTIDAD 2'; procedimientos no "
+                  "coinciden: documento '930860, 891509', admisión '930860, 891509'.",
+                  "Paciente coincide: documento 'ROMERO_MORENO,GLADYS_', admisión 'GLADYS ROMERO MORENO'."):
+            self.assertTrue(_sin_diferencias(d), d)
+            self.assertEqual(evaluar_hallazgo('AUTORIZACION', d, ADMISION)[0], DESCARTADO)
+
+    def test_diferencia_real_u_otro_motivo(self):
+        from gedocumental.services.ai_revision import _sin_diferencias
+        for d in ("Cantidad autorizada incorrecta: documento 'CANTIDAD 8', admisión 'CANTIDAD 1'.",
+                  "Procedimiento no coincide: documento '883101', admisión '883210'.",
+                  "Paciente coincide: documento 'GLADYS ROMERO', admisión 'GLADYS ROMERO'. Autorización vencida.",
+                  "Autorización vencida."):
+            self.assertFalse(_sin_diferencias(d), d)

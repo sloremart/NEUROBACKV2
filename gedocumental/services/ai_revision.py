@@ -766,6 +766,11 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                 f"Cantidad autorizada en el documento es {doc}, se esperaba {zeus} para el procedimiento {cups}"
                 for cups, doc, zeus in distintas) + ".")
 
+    # La IA marcó hallazgo pero sus comparaciones dicen lo mismo en documento y admisión
+    if resultado["tipo"] != "OK" and _sin_diferencias(resultado.get("descripcion")):
+        logger.info("Hallazgo sin diferencias: se descarta '%s'", resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_sin_diferencias=True)
+
     _coherencia_tipo_descripcion(resultado)
     return resultado
 
@@ -1260,6 +1265,32 @@ def _solo_motivo_procedimiento(descripcion) -> bool:
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
     sobre_procedimiento = re.search(r'procedimiento|cups|estudio|servicio|no se especifica|no incluye|no aparece', d)
     return bool(sobre_procedimiento and not re.search(_OTROS_MOTIVOS, d))
+
+
+def _sin_diferencias(descripcion) -> bool:
+    """
+    True si el hallazgo solo compara datos IGUALES: en cada "documento 'X', admisión 'Y'" X e Y tienen las mismas
+    palabras (sin importar orden, mayúsculas, tildes ni signos) y no hay otro motivo fuera de esas comparaciones.
+    Ej. "Cantidad autorizada incorrecta: documento 'CANTIDAD 2', admisión 'CANTIDAD 2'; procedimientos no
+    coinciden: documento '930860, 891509', admisión '930860, 891509'" o "Paciente coincide: documento
+    'ROMERO_MORENO,GLADYS_', admisión 'GLADYS ROMERO MORENO'".
+    """
+    import re
+    import unicodedata
+
+    def palabras(t):
+        t = unicodedata.normalize('NFKD', t or '').encode('ascii', 'ignore').decode().lower()
+        return sorted(re.findall(r'[a-z0-9]+', t))
+
+    d = str(descripcion or '')
+    pares = re.findall(r"documento\s*'([^']*)'\s*,?\s*(?:y\s+)?(?:la\s+)?admisi[oó]n\s*'([^']*)'", d, re.IGNORECASE)
+    if not pares or any(not palabras(doc) or palabras(doc) != palabras(adm) for doc, adm in pares):
+        return False
+    # Cada frase debe ser una de esas comparaciones; una frase sin comparación es otro motivo
+    for frase in re.split(r'[;.|]\s+|[;|]', d):
+        if frase.strip(' .') and not re.search(r"documento\s*'[^']*'", frase, re.IGNORECASE):
+            return False
+    return True
 
 
 _OTROS_MOTIVOS = (r'vencid|vigencia|caducad|numero de autorizacion|sin numero|no cuenta con numero|'
