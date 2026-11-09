@@ -74,8 +74,11 @@ def datos_recaudo_zeus(estudio: int) -> dict | None:
             fila = cursor.fetchone()
             if not fila:
                 return None
-            cursor.execute("SELECT LTRIM(RTRIM(descripcion)), ISNULL(total, 0) FROM sis_deta WHERE estudio = %s",
-                           [estudio])
+            # Solo los PROCEDIMIENTOS: SIESA liquida el copago sobre ellos, no sobre los artículos (medio de
+            # contraste, jeringas, catéter...). Caso 34368: 11.5 % de 494.400 + 571.468 = 122.600 cobrado
+            cursor.execute(
+                "SELECT LTRIM(RTRIM(descripcion)), ISNULL(total, 0) FROM sis_deta WHERE estudio = %s "
+                "AND ISNULL(LTRIM(RTRIM(TipoItem)), 'Procedimiento') IN ('Procedimiento', '')", [estudio])
             servicios = [(d or '', float(t or 0)) for d, t in cursor.fetchall()]
             cursor.execute(
                 "SELECT UPPER(LTRIM(RTRIM(descripcion))), SUM(valor) FROM pagos "
