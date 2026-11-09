@@ -1088,10 +1088,12 @@ class RecaudoTests(SimpleTestCase):
         doc = {'requiere_pago': 'SI', 'categoria': 'B', 'tipo_afiliado': 'COTIZANTE'}
         self.assertIsNone(self._verificar(doc, copago=17300.0))
         self.assertIsNone(self._verificar(doc, copago=17300.0, contrato='SANITAS EVENTO CONTRIBUTIVO'))
-        # Otra EPS sí se valida
+        # Por ahora tampoco en otras EPS; con VALIDAR_TIPO_AFILIADO vuelve a marcarse fuera de Sanitas
         doc = {'requiere_pago': 'NO', 'tipo_afiliado': 'COTIZANTE'}
-        r = self._verificar(doc, empresa='EPS002', contrato='SALUD TOTAL CONTRIBUTIVO')
-        self.assertIn('Tipo de afiliado en Zeus beneficiario', r[1])
+        otra = dict(empresa='EPS002', contrato='SALUD TOTAL CONTRIBUTIVO')
+        self.assertIsNone(self._verificar(doc, **otra))
+        with mock.patch.object(recaudo, 'VALIDAR_TIPO_AFILIADO', True):
+            self.assertIn('Tipo de afiliado en Zeus beneficiario', self._verificar(doc, **otra)[1])
 
     def test_no_se_recaudo(self):
         r = self._verificar({'requiere_pago': 'SI', 'categoria': 'A'}, consultas=[True])

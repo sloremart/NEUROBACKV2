@@ -33,6 +33,7 @@ PORCENTAJE_COPAGO_MAXIMO = 50.0
 # Zeus TipoAfiliado: 1 Cotizante, 2 Beneficiario, 3 Sustituto de pensión, 4 Pensionado
 AFILIADO_ZEUS = {1: 'COTIZANTE', 2: 'BENEFICIARIO', 3: 'COTIZANTE', 4: 'COTIZANTE'}
 
+VALIDAR_TIPO_AFILIADO = False
 TOLERANCIA_PESOS = 100   # SIESA redondea el copago a la centena
 
 
@@ -168,7 +169,9 @@ def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
         afiliado_doc = ''
     afiliado = afiliado_doc if afiliado_doc in ('COTIZANTE', 'BENEFICIARIO') else z["afiliado_zeus"]
     notas = []
-    if (afiliado_doc in ('COTIZANTE', 'BENEFICIARIO') and z["afiliado_zeus"]
+    # Por ahora no se marca como hallazgo la diferencia de tipo de afiliado (cotizante/beneficiario) entre la
+    # autorización y Zeus en ninguna EPS (VALIDAR_TIPO_AFILIADO = True para volver a activarlo)
+    if (VALIDAR_TIPO_AFILIADO and afiliado_doc in ('COTIZANTE', 'BENEFICIARIO') and z["afiliado_zeus"]
             and afiliado_doc != z["afiliado_zeus"]):
         notas.append(f"Tipo de afiliado en Zeus {z['afiliado_zeus'].lower()}, la autorización dice "
                      f"{afiliado_doc.lower()}")
