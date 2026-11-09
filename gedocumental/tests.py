@@ -1313,3 +1313,32 @@ class SinDiferenciasTests(SimpleTestCase):
                   "Paciente coincide: documento 'GLADYS ROMERO', admisión 'GLADYS ROMERO'. Autorización vencida.",
                   "Autorización vencida."):
             self.assertFalse(_sin_diferencias(d), d)
+
+
+class OrdenManuscritaTests(SimpleTestCase):
+    """Caso 19671: orden escrita a mano; la IA leyó 'MARIO CAICEDO' por 'Antonio Caicedo'."""
+    ADM = dict(ADMISION, paciente='FERNANDO ANTONIO CAICEDO FLOREZ', identificacion='CC 79262907')
+
+    def _llamar(self, manuscrito, tipo='ORDEN'):
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        revision = {"nombre_documento": "MARIO CAICEDO", "identificacion_documento": "",
+                    "paciente_coincide": "NO", "procedimientos_coinciden": "SI", "firma_paciente": "NO_APLICA",
+                    "manuscrito": manuscrito, "tipo": "INFORMACION",
+                    "descripcion": "Paciente no corresponde: documento 'MARIO CAICEDO', admisión 'FERNANDO ANTONIO CAICEDO FLOREZ'."}
+        client = mock.MagicMock()
+        client.chat.completions.create.return_value = mock.MagicMock(
+            choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(revision)))],
+            usage=mock.MagicMock(prompt_tokens=1000, completion_tokens=50))
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            return _llamar_openai('', ['img'], tipo, self.ADM)
+
+    def test_orden_manuscrita_no_tiene_hallazgos(self):
+        r = self._llamar('SI')
+        self.assertEqual(r['tipo'], 'OK')
+        self.assertTrue(r['ajuste_manuscrita'])
+
+    def test_impresa_u_otro_documento_se_valida(self):
+        self.assertEqual(self._llamar('NO')['tipo'], 'INFORMACION')
+        self.assertEqual(self._llamar('SI', tipo='AUTORIZACION')['tipo'], 'INFORMACION')

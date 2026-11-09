@@ -153,6 +153,7 @@ aunque la primera ya haya fallado:
   "procedimientos_documento": "<TODOS los CUPS/procedimientos que trae el documento, con su código, sin omitir ninguna fila de la tabla (revisa hasta la última), o 'no aplica'>",
   "procedimientos_coinciden": "SI | NO | NO_APLICA",
   "firma_paciente": "SI | NO | NO_APLICA   (solo COMPROBANTE; en otros documentos NO_APLICA)",
+  "manuscrito": "SI | NO   (SI si el nombre del paciente o los procedimientos están ESCRITOS A MANO, como una fórmula u orden manuscrita; NO si están impresos o digitados)",
   "cantidad_anotada": "<solo AUTORIZACION: el número de la anotación u observación de cantidad que está FUERA de la tabla (ej. 'CANTIDAD 2' al pie), o '' si no hay>",
   "cantidades_documento": "<solo AUTORIZACION: 'CUPS:cantidad' de CADA procedimiento autorizado, separados por ';' (ej. '930860:2; 891509:8'). Si la autorización trae anotación 'CANTIDAD N' fuera de la tabla, N es la cantidad de su procedimiento; si el PDF trae varias autorizaciones (una por página), cada anotación es la de SU autorización. Sin anotación, la columna Cantidad. '' en otros documentos>",
   "estudio_documento": {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
@@ -765,6 +766,14 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             resultado.update(tipo="AUTORIZACION", ajuste_cantidad_cups=True, descripcion="; ".join(
                 f"Cantidad autorizada en el documento es {doc}, se esperaba {zeus} para el procedimiento {cups}"
                 for cups, doc, zeus in distintas) + ".")
+
+    # ORDEN escrita a mano: la letra del especialista no se lee bien (nombre, procedimiento, fecha); cualquier
+    # hallazgo de ese documento se descarta (caso 19671: "Antonio Caicedo" leído como "MARIO CAICEDO")
+    if ((tipo_documento or '').upper() == 'ORDEN' and resultado["tipo"] != "OK"
+            and str(resultado.get("manuscrito") or '').strip().upper() == 'SI'):
+        logger.info("ORDEN manuscrita: se descarta '%s'", resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto (orden manuscrita: no se valida)",
+                         paciente_coincide="SI", ajuste_manuscrita=True)
 
     # La IA marcó hallazgo pero sus comparaciones dicen lo mismo en documento y admisión
     if resultado["tipo"] != "OK" and _sin_diferencias(resultado.get("descripcion")):
