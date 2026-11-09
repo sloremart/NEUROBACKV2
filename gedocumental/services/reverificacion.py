@@ -33,7 +33,7 @@ from gedocumental.services.ai_revision import (
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE,
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada,
-    _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular,
+    _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular,
     _tokens_nombre, _NO_SON_NOMBRE,
     obtener_contexto_admision,
 )
@@ -296,6 +296,8 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     No toca la base de datos.
     """
     d = (descripcion or '').strip()
+    if d and _es_particular(datos_admision):
+        return DESCARTADO, "Admisión particular: sus documentos no se validan (el examen se toma con o sin orden)."
     if not d or ' | ' in d:
         return None   # varios motivos en un hallazgo: no se cierra por uno solo
     tipo = (tipo_documento or '').upper()

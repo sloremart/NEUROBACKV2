@@ -1682,6 +1682,14 @@ def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
     if (archivo_obj.Tipo or '').upper() in TIPOS_SIN_LLAMADA_IA:
         return None
 
+    # PARTICULAR: el paciente se toma el examen con o sin orden (incluso una orden manuscrita); sus documentos
+    # no se validan. Se registra OK sin llamar a la IA (sin costo) para que no quede como pendiente de revisión.
+    if _es_particular(datos_admision):
+        resultado = {"tipo": "OK", "descripcion": "Documento correcto (admisión particular: no se valida)",
+                     "modo": "sistema"}
+        _registrar_revision(archivo_obj, resultado)
+        return resultado
+
     # Interruptor de emergencia — si REVISAR_CON_IA = False en settings, no hace nada
     if not _ia_disponible():
         return None

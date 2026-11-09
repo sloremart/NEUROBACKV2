@@ -255,8 +255,12 @@ class Command(BaseCommand):
             for i in range(0, len(sin_resultado), 500):
                 bloque = sin_resultado[i:i + 500]
                 marcadores = ', '.join(['%s'] * len(bloque))
+                # Las admisiones particulares no se validan: sin hallazgo de reporte faltante
                 cursor.execute(
-                    f"SELECT con_estudio, fecha_ing FROM sis_maes WHERE con_estudio IN ({marcadores})", bloque)
+                    f"""SELECT sm.con_estudio, sm.fecha_ing FROM sis_maes sm
+                        LEFT JOIN contratos co ON co.codigo = sm.contrato
+                        WHERE sm.con_estudio IN ({marcadores})
+                          AND UPPER(ISNULL(co.alias, '')) NOT LIKE '%%PARTICULAR%%'""", bloque)
                 fecha_ingreso.update({int(e): f for e, f in cursor.fetchall() if f})
 
         nuevos = []

@@ -238,8 +238,9 @@ class ParticularTests(SimpleTestCase):
     def test_eps_u_otro_motivo_se_mantiene(self):
         eps = dict(self.ADM, entidad='PARTICULAR 10% DESCUENTO', contrato='CAPITAL SALUD SUBSIDIADO')
         self.assertIsNone(evaluar_hallazgo('ORDEN', self.DESC, eps))
-        self.assertIsNone(evaluar_hallazgo('ORDEN', self.DESC + " Orden vencida.", self.ADM))
-        self.assertIsNone(evaluar_hallazgo('RESULTADO', self.DESC, self.ADM))
+        # Particular: ningún hallazgo se mantiene (orden vencida, resultado...), no se validan sus documentos
+        self.assertEqual(evaluar_hallazgo('ORDEN', self.DESC + " Orden vencida.", self.ADM)[0], DESCARTADO)
+        self.assertEqual(evaluar_hallazgo('RESULTADO', self.DESC, self.ADM)[0], DESCARTADO)
 
 
 class CostoIATests(SimpleTestCase):
@@ -1238,3 +1239,23 @@ class AlertasTelegramTests(SimpleTestCase):
         with override_settings(REVISAR_CON_IA=False):
             self.assertFalse(_ia_disponible())
         self.assertIn('APAGADA', self.post.call_args.kwargs['json']['text'])
+
+
+class ParticularSinValidacionTests(SimpleTestCase):
+    """Caso 34600: particular con orden manuscrita; sus documentos no se validan."""
+    ADM = dict(ADMISION, paciente='HECTURIEL RODRIGUEZ GONZALES', contrato='PARTICULAR TARIFA PLENA')
+
+    def test_no_llama_a_la_ia(self):
+        from gedocumental.services import ai_revision
+        archivo = SimpleNamespace(Tipo='ORDEN', IdArchivo=1, Admision_id=34600)
+        with mock.patch.object(ai_revision, '_registrar_revision') as registrar, \
+                mock.patch.object(ai_revision, 'analizar_documento') as analizar:
+            r = ai_revision.revisar_archivo(archivo, self.ADM)
+        analizar.assert_not_called()
+        registrar.assert_called_once()
+        self.assertEqual(r['tipo'], 'OK')
+
+    def test_hallazgos_abiertos_se_descartan(self):
+        desc = "Paciente no corresponde: documento 'HECTURIEL BALDERRAMA', admisión 'HECTURIEL RODRIGUEZ GONZALES'."
+        self.assertEqual(evaluar_hallazgo('ORDEN', desc, self.ADM)[0], DESCARTADO)
+        self.assertIsNone(evaluar_hallazgo('ORDEN', desc, dict(self.ADM, contrato='SANITAS EVENTO CONTRIBUTIVO')))
