@@ -1300,7 +1300,9 @@ class SinDiferenciasTests(SimpleTestCase):
         from gedocumental.services.ai_revision import _sin_diferencias
         for d in ("Cantidad autorizada incorrecta: documento 'CANTIDAD 2', admisión 'CANTIDAD 2'; procedimientos no "
                   "coinciden: documento '930860, 891509', admisión '930860, 891509'.",
-                  "Paciente coincide: documento 'ROMERO_MORENO,GLADYS_', admisión 'GLADYS ROMERO MORENO'."):
+                  "Paciente coincide: documento 'ROMERO_MORENO,GLADYS_', admisión 'GLADYS ROMERO MORENO'.",
+                  "Paciente coincide: documento 'ROMERO_MORENO,GLADYS_', admisión 'GLADYS ROMERO MORENO'. "
+                  "Documento correcto."):
             self.assertTrue(_sin_diferencias(d), d)
             self.assertEqual(evaluar_hallazgo('AUTORIZACION', d, ADMISION)[0], DESCARTADO)
 

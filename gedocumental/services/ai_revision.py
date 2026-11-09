@@ -1287,8 +1287,12 @@ def _sin_diferencias(descripcion) -> bool:
     if not pares or any(not palabras(doc) or palabras(doc) != palabras(adm) for doc, adm in pares):
         return False
     # Cada frase debe ser una de esas comparaciones; una frase sin comparación es otro motivo
+    # (salvo las que solo confirman que está bien: "Documento correcto", "Sin observaciones", "Todo coincide")
+    neutra = re.compile(r'^(?:el\s+)?(?:documento\s+)?(?:es\s+)?correct[oa]s?$|^sin\s+(?:observaciones|hallazgos)$|'
+                        r'^todo\s+(?:coincide|correcto)$|^(?:los\s+datos\s+)?coinciden?$', re.IGNORECASE)
     for frase in re.split(r'[;.|]\s+|[;|]', d):
-        if frase.strip(' .') and not re.search(r"documento\s*'[^']*'", frase, re.IGNORECASE):
+        frase = frase.strip(' .')
+        if frase and not neutra.match(frase) and not re.search(r"documento\s*'[^']*'", frase, re.IGNORECASE):
             return False
     return True
 
