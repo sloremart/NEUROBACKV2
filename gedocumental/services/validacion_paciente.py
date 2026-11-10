@@ -10,6 +10,8 @@ No usa IA: compara cada campo contra los catálogos que usa Zeus para RIPS
   - ZonaTerritorial:                     '01' Urbana, '02' Rural (RDA)
   - zona:                                'U' / 'R' (la que usan los RIPS de spFEVRIPS); basta con una de las dos
   - id_cargo (CIUO):  ocupación; 9998 = hogar/estudiante/jubilado... es válido, 9999 = "no se tiene información"
+  - cargo:            texto de la ocupación; la pantalla de citas de SIESA lo guarda aquí y puede dejar id_cargo
+                      vacío: basta con que uno de los dos esté diligenciado
 
 Datos de la orden (VariablesDinamicasEntidades del formulario de admisión; Zeus guarda UN valor por
 paciente en VariablesDinamicasEntidadesRegistros y lo sobrescribe en cada admisión):
@@ -53,7 +55,7 @@ CAMPOS_SQL = """
     sp.discapacidad,
     sp.cod_dep, sp.cod_muni, sp.codPaisResidencia, sp.IdPais,
     sp.direccion, sp.telefono, sp.celular,
-    sp.ZonaTerritorial, sp.zona, sp.id_cargo,
+    sp.ZonaTerritorial, sp.zona, sp.id_cargo, sp.cargo,
     sm.fecha_ing,
 """ + ",\n".join(
     f"(SELECT TOP 1 v.Valor FROM VariablesDinamicasEntidadesRegistros v "
@@ -182,7 +184,7 @@ def _evaluar(fila, contratos_autorizacion=frozenset()) -> dict:
      discapacidad,
      cod_dep, cod_muni, pais_res, nacionalidad,
      direccion, telefono, celular,
-     zona, zona_rips_raw, id_cargo,
+     zona, zona_rips_raw, id_cargo, cargo,
      fecha_ing, medico_ordena, ips_ordena, fecha_ordenamiento, nivel_educativo,
      contrato, tiene_autorizacion) = fila
 
@@ -217,10 +219,12 @@ def _evaluar(fila, contratos_autorizacion=frozenset()) -> dict:
         falta("Zona territorial", "Sin diligenciar (Urbana / Rural)")
     if _entero(discapacidad) not in range(1, 9):
         falta("Discapacidad", "Sin diligenciar")
-    if not _txt(id_cargo):
-        falta("Ocupación", "Sin código de ocupación (CIUO)")
-    elif _txt(id_cargo) == '9999':
+    # Ocupación: el código (id_cargo) o el texto (cargo, el que guarda la pantalla de citas)
+    sin_informacion = _txt(id_cargo) == '9999' or 'NO SE TIENE' in _txt(cargo).upper()
+    if sin_informacion:
         falta("Ocupación", "Registrada como 'no se tiene información'")
+    elif not _txt(id_cargo) and not _txt(cargo):
+        falta("Ocupación", "Sin diligenciar")
     if _entero(nivel_educativo) not in range(1, 14):
         falta("Nivel educativo", "Sin diligenciar")
 

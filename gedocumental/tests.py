@@ -1173,7 +1173,7 @@ class DatosOrdenPacienteTests(SimpleTestCase):
                     fecha_naci=datetime(2010, 6, 23), sexo='F', identidad=2, orientacion=None, etnia=7,
                     comunidad='', discapacidad=8, cod_dep='50', cod_muni='001', pais_res='170', nacionalidad=170,
                     direccion='CALLE 6 # 26-30', telefono='3102677920', celular='',
-                    zona='01', zona_rips='U', id_cargo='9998',
+                    zona='01', zona_rips='U', id_cargo='9998', cargo='',
                     fecha_ing=datetime(2026, 10, 21), medico='DRA KARINA GONZALES', ips='SANITAS DE LA 36',
                     fecha_orden='2026/10/21', nivel='3', contrato=15, tiene_autorizacion=1)
         fila.update(cambios)
@@ -1203,6 +1203,12 @@ class DatosOrdenPacienteTests(SimpleTestCase):
         from datetime import datetime
         self.assertEqual(self._faltantes(tiene_autorizacion=0, fecha_ing=datetime(2026, 1, 10),
                                          fecha_orden='2026/01/10'), {})
+
+    def test_ocupacion_solo_en_texto(self):
+        # Caso 35306: la pantalla de citas guardó la ocupación en 'cargo' y dejó id_cargo vacío
+        self.assertEqual(self._faltantes(id_cargo='', cargo='Jubilado, desempleado, ama de casa, estudiante, de'), {})
+        self.assertIn('Ocupación', self._faltantes(id_cargo='', cargo=''))
+        self.assertIn('Ocupación', self._faltantes(id_cargo='', cargo='En los casos en que no se tiene esta información'))
 
     def test_zona_territorial_y_ocupacion(self):
         self.assertEqual(self._faltantes(zona=None, zona_rips='R'), {})
