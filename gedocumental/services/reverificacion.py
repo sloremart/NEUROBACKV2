@@ -31,7 +31,7 @@ from datetime import timedelta
 from gedocumental.services.ai_revision import (
     MAX_PAGINAS_LEER, MIN_CARACTERES_TEXTO, TIPOS_SIN_REVISION_IA, _buscar_palabra, _codigos_cups,
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _mismo_codigo_cups, _mismo_paciente,
-    _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE,
+    _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE, TIPOS_NO_REVISADOS,
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada,
     _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _sin_diferencias,
     _tokens_nombre, _NO_SON_NOMBRE,
@@ -296,6 +296,8 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     No toca la base de datos.
     """
     d = (descripcion or '').strip()
+    if d and (tipo_documento or '').upper() in TIPOS_NO_REVISADOS:
+        return DESCARTADO, "Los soportes ADICIONALES no se revisan."
     if d and _es_particular(datos_admision):
         return DESCARTADO, "Admisión particular: sus documentos no se validan (el examen se toma con o sin orden)."
     if d and ' | ' not in d and _sin_diferencias(d):

@@ -56,7 +56,9 @@ TIPOS_CON_FIRMA = ('COMPROBANTE',)
 TIPOS_SIN_REVISION_IA = ('FACTURAPROVEEDOR',)
 # Tipos que no se mandan a la IA: además de los anteriores, la FACTURA (la genera SIESA; nada la valida y
 # la pre-auditoría no la tiene en cuenta)
-TIPOS_SIN_LLAMADA_IA = TIPOS_SIN_REVISION_IA + ('FACTURA',)
+# Soportes ADICIONALES: no se revisan (ni paciente ni nada); no generan hallazgos ni cuentan para la pre-auditoría
+TIPOS_NO_REVISADOS = ('ADICIONALES',)
+TIPOS_SIN_LLAMADA_IA = TIPOS_SIN_REVISION_IA + ('FACTURA',) + TIPOS_NO_REVISADOS
 # Soportes que trae el paciente (historias clínicas, adicionales): solo se valida que sean del paciente
 TIPOS_SOLO_PACIENTE = ('HCLINICA', 'HCNEURO', 'ADICIONALES')
 
@@ -1071,7 +1073,15 @@ def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
     # con un solo nombre): es formato del documento, no otra persona ni error de ortografía
     if len(set(adm)) == len(adm):
         doc = list(dict.fromkeys(doc))
-    if len(doc) < 2 or not adm:
+    # Nombre del servicio pegado al nombre del paciente (autorizaciones con el nombre en dos campos:
+    # "MIREYA FISICA Y REHABILITACION 1A VEZ CONSUL"): se quitan las palabras del procedimiento
+    servicio = set(_tokens_nombre(' '.join(str(c) for c in (datos_admision.get('cups') or []))))
+    del_servicio = [t for t in doc if t not in adm and (
+        t in servicio or (len(t) >= 4 and any(s.startswith(t) for s in servicio)))]
+    pegado_servicio = len(del_servicio) >= 2
+    if pegado_servicio:
+        doc = [t for t in doc if t not in del_servicio]
+    if not adm or not doc or (len(doc) < 2 and not pegado_servicio):
         return False
     disponibles = list(adm)
     for i, palabra in enumerate(doc):

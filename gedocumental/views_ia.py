@@ -20,7 +20,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from gedocumental.models import RevisionIA
-from gedocumental.services.ai_revision import TIPOS_SIN_REVISION_IA, _reparar_texto
+from gedocumental.services.ai_revision import TIPOS_NO_REVISADOS, TIPOS_SIN_REVISION_IA, _reparar_texto
 from gedocumental.views import get_admisiones_zeus_bulk
 
 
@@ -173,8 +173,8 @@ def bandeja_cuentas_medicas(request):
             pendientes_cm = pendientes_cm.filter(FechaCreacionArchivo__date__gte=p['fecha_inicio'])
         if p.get('fecha_fin'):
             pendientes_cm = pendientes_cm.filter(FechaCreacionArchivo__date__lte=p['fecha_fin'])
-        # Documentos que se pre-auditan (todo menos la FACTURA)
-        evaluados = pendientes_cm.exclude(Tipo='FACTURA')
+        # Documentos que se pre-auditan (todo menos la FACTURA y los ADICIONALES, que no se revisan)
+        evaluados = pendientes_cm.exclude(Tipo__in=['FACTURA', *TIPOS_NO_REVISADOS])
 
         por_admision = {
             r['Admision_id']: r for r in pendientes_cm.values('Admision_id').annotate(
@@ -191,7 +191,7 @@ def bandeja_cuentas_medicas(request):
         # que es para la coordinación médica)
         ia_pendientes = dict(
             RevisionIA.objects.filter(AdmisionId__in=ids, Resuelta=False, IdArchivo__isnull=False)
-            .exclude(TipoHallazgo='OK')
+            .exclude(TipoHallazgo='OK').exclude(TipoDocumento__in=TIPOS_NO_REVISADOS)
             .values('AdmisionId').annotate(n=Count('IdRevision')).values_list('AdmisionId', 'n')
         )
         ia_revisados = dict(

@@ -462,6 +462,30 @@ class NombreRepetidoTests(SimpleTestCase):
         self.assertFalse(_mismo_paciente(dict(doc, nombre_documento='MARIANGEL LUCIA GARZON SANCHEZ'), self.ADM))
 
 
+class AdicionalesNoSeRevisanTests(SimpleTestCase):
+    """Caso 35274: los soportes ADICIONALES no se revisan; el nombre del servicio pegado al del paciente."""
+    ADM = dict(ADMISION, paciente='MIREYA MERCHAN REYES', identificacion='CC 40417054',
+               cups=['890264 - CONSULTA DE PRIMERA VEZ POR ESPECIALISTA EN MEDICINA FISICA Y REHABILITACION'])
+    DESC = ("Paciente no corresponde: documento 'MIREYA FISICA Y REHABILITACION 1A VEZ CONSUL', "
+            "admisión 'MIREYA MERCHAN REYES'.")
+
+    def test_adicionales_no_llaman_a_la_ia(self):
+        from gedocumental.services.ai_revision import TIPOS_SIN_LLAMADA_IA
+        self.assertIn('ADICIONALES', TIPOS_SIN_LLAMADA_IA)
+
+    def test_hallazgo_de_adicionales_se_descarta(self):
+        self.assertEqual(evaluar_hallazgo('ADICIONALES', self.DESC, self.ADM)[0], DESCARTADO)
+
+    def test_nombre_del_servicio_pegado_no_es_otro_paciente(self):
+        from gedocumental.services.ai_revision import _mismo_paciente
+        doc = {'nombre_documento': 'MIREYA FISICA Y REHABILITACION 1A VEZ CONSUL', 'identificacion_documento': ''}
+        self.assertTrue(_mismo_paciente(doc, self.ADM))
+        # Otro nombre de pila con el servicio pegado sigue siendo otra persona
+        self.assertFalse(_mismo_paciente(dict(doc, nombre_documento='LUCIA FISICA Y REHABILITACION 1A VEZ'), self.ADM))
+        # Sin servicio pegado, un solo nombre no basta
+        self.assertFalse(_mismo_paciente(dict(doc, nombre_documento='MIREYA'), self.ADM))
+
+
 class MismoPacienteSoportesTests(SimpleTestCase):
     """Caso 34505: la IA marca SOPORTES 'Paciente no corresponde' con el mismo nombre en documento y admisión."""
     ADM = dict(ADMISION, paciente='DANNA SOFIA GOMEZ MELGAREJO', identificacion='TI 1122928591')
