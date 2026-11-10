@@ -372,7 +372,9 @@ class Command(BaseCommand):
             val = validaciones.get(adm)
             if val is None:
                 continue   # Zeus no respondió: no se decide nada
-            campos = [f['campo'] for f in val['faltantes'] if f['obligatorio'] and f['campo'] != SIN_AUTORIZACION]
+            # Con el motivo cuando no es solo "sin diligenciar" (ej. "Fecha de ordenamiento: Posterior al ingreso")
+            campos = [f['campo'] if str(f['motivo']).startswith('Sin diligenciar') else f"{f['campo']} ({f['motivo']})"
+                      for f in val['faltantes'] if f['obligatorio'] and f['campo'] != SIN_AUTORIZACION]
             h = abiertos.get(adm)
             if not campos or adm in particulares:
                 if h:
