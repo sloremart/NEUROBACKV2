@@ -390,6 +390,42 @@ PROMPT_RELEER_NOMBRE = (
 )
 
 
+PROMPT_RELEER_CANTIDAD = (
+    "En esta autorización de servicios, busca una anotación de cantidad que esté FUERA de la tabla de servicios "
+    "(ej. \"CANTIDAD 8\" al pie, escrita a mano, con sello o en observaciones). No tomes la columna \"Cantidad\" "
+    "de la tabla. Responde en JSON: {\"cantidad_anotada\": \"<el número, o '' si no hay anotación>\"}"
+)
+
+
+def _releer_cantidad(client, modelo: str, imagenes: list[str]) -> tuple[str, list]:
+    """Consulta corta: solo la anotación "CANTIDAD N" de la autorización escaneada. Devuelve (número, [tokens])."""
+    contenido = [{"type": "text", "text": "Documento escaneado: ver imágenes adjuntas."}]
+    contenido += [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"}}
+                  for img in imagenes]
+    try:
+        respuesta = client.chat.completions.create(
+            model=modelo,
+            messages=[{"role": "system", "content": PROMPT_RELEER_CANTIDAD}, {"role": "user", "content": contenido}],
+            response_format={"type": "json_object"},
+            max_tokens=30,
+            temperature=0,
+        )
+        uso = getattr(respuesta, 'usage', None)
+        tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
+        return str(json.loads(respuesta.choices[0].message.content).get("cantidad_anotada") or ''), tokens
+    except Exception as exc:
+        logger.warning("No se pudo releer la cantidad anotada: %s", exc)
+        return '', [0, 0]
+
+
+def _anotada_igual_zeus(anotada, datos_admision: dict) -> bool:
+    """La anotación "CANTIDAD N" es la cantidad de Zeus (todos los CUPS de la admisión con la misma cantidad)."""
+    import re
+    zeus = _cantidades_zeus(datos_admision)
+    numeros = set(re.findall(r'\d+', str(anotada or '')))
+    return bool(zeus) and len(set(zeus)) == 1 and len(numeros) == 1 and int(numeros.pop()) == zeus[0]
+
+
 def _releer_nombre(client, modelo: str, imagenes: list[str]) -> tuple[str, list]:
     """Consulta corta: solo el nombre del paciente del documento escaneado. Devuelve (nombre, [tokens])."""
     contenido = [{"type": "text", "text": "Documento escaneado: ver imágenes adjuntas."}]
@@ -768,6 +804,21 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             resultado.update(tipo="AUTORIZACION", ajuste_cantidad_cups=True, descripcion="; ".join(
                 f"Cantidad autorizada en el documento es {doc}, se esperaba {zeus} para el procedimiento {cups}"
                 for cups, doc, zeus in distintas) + ".")
+
+    import re
+    # AUTORIZACION escaneada con hallazgo de cantidad y sin anotación leída: la IA suele tomar la columna de la
+    # tabla (1) y no ver "CANTIDAD 8" al pie (caso 35377). Se pide solo la anotación; si es la de Zeus, no hay error.
+    if ((tipo_documento or '').upper() == 'AUTORIZACION' and imagenes and not _reintento
+            and resultado["tipo"] != "OK" and resultado.get("paciente_coincide") != "NO"
+            and (resultado.get("ajuste_cantidad_cups") or _solo_motivo_cantidad(resultado.get("descripcion")))
+            and not re.findall(r'\d+', str(resultado.get("cantidad_anotada") or ''))):
+        anotada, tokens = _releer_cantidad(client, modelo, imagenes)
+        resultado["tokens"] = [a + b for a, b in zip(resultado.get("tokens") or [0, 0], tokens)]
+        if _anotada_igual_zeus(anotada, datos_admision):
+            logger.info("AUTORIZACION: relectura 'CANTIDAD %s' coincide con Zeus, se descarta '%s'",
+                        anotada, resultado.get("descripcion"))
+            resultado.update(tipo="OK", descripcion="Documento correcto", cantidad_anotada=anotada,
+                             ajuste_cantidad=True)
 
     # ORDEN escrita a mano: la letra del especialista no se lee bien (nombre, procedimiento, fecha); cualquier
     # hallazgo de ese documento se descarta (caso 19671: "Antonio Caicedo" leído como "MARIO CAICEDO")

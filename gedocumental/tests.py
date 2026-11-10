@@ -341,6 +341,37 @@ class TranscripcionTablaTests(SimpleTestCase):
         self.assertEqual((r['tipo'], llamadas), ('SOPORTES', 1))
 
 
+class RelecturaCantidadTests(SimpleTestCase):
+    """Caso 35377: autorización escaneada con 'Cantidad 1' en la tabla y 'CANTIDAD 8' al pie; Zeus tiene 8."""
+    ADM = dict(ADMISION, paciente='WILLIAM ALEXANDER PARAMO HIGUERA', identificacion='CC 1003777397',
+               cups=['891509 - NEUROCONDUCCIÓN (CADA NERVIO) (cant. 8)'])
+
+    def _llamar(self, relectura):
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        revision = {
+            "nombre_documento": "WILLIAM ALEXANDER PARAMO HIGUERA", "identificacion_documento": "1003777397",
+            "paciente_coincide": "SI", "procedimientos_coinciden": "SI", "firma_paciente": "NO_APLICA",
+            "tipo": "AUTORIZACION", "descripcion": "Cantidad autorizada incorrecta: documento '1', admisión '8'.",
+            "cantidad_anotada": "",
+        }
+        def respuesta(contenido):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
+                                  usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [respuesta(revision), respuesta(relectura)]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            return _llamar_openai('', ['img'], 'AUTORIZACION', self.ADM)
+
+    def test_anotacion_igual_a_zeus_no_es_hallazgo(self):
+        self.assertEqual(self._llamar({"cantidad_anotada": "8"})['tipo'], 'OK')
+
+    def test_sin_anotacion_sigue_el_hallazgo(self):
+        self.assertEqual(self._llamar({"cantidad_anotada": ""})['tipo'], 'AUTORIZACION')
+        self.assertEqual(self._llamar({"cantidad_anotada": "3"})['tipo'], 'AUTORIZACION')
+
+
 class CantidadPorCupsTests(SimpleTestCase):
     """Caso 33030: dos autorizaciones en un PDF ('CANTIDAD 2' para 930860, 'CANTIDAD 8' para 891509)."""
     ADM = dict(ADMISION, paciente='ARNOLDO ROJAS', identificacion='CC 17313342', cups=[
