@@ -403,3 +403,285 @@ def actualizar_caso(request, admision_id: int):
 
     caso.save()
     return JsonResponse({'success': True, 'caso_id': caso.pk, 'estado': caso.estado})
+
+
+# ── Represamientos ────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+def represamiento_admisiones(request):
+    """
+    Represamiento en admisiones: admisiones con hallazgos IA sin resolver
+    (RevisionIA.Resuelta=False), agrupado por el admisionista responsable.
+    El filtro de fecha aplica sobre RevisionIA.Fecha (creación del hallazgo),
+    no sobre la fecha de ingreso en Zeus — sin rango muestra todo lo pendiente.
+    """
+    from gedocumental.models import RevisionIA
+    from collections import defaultdict
+
+    # Filtrar hallazgos por fecha de CREACIÓN del hallazgo (opcional)
+    fecha_inicio = request.GET.get('fecha_inicio')
+    fecha_fin    = request.GET.get('fecha_fin')
+
+    hallazgos_filter = {'Resuelta': False}
+    if fecha_inicio:
+        hallazgos_filter['Fecha__date__gte'] = fecha_inicio
+    if fecha_fin:
+        hallazgos_filter['Fecha__date__lte'] = fecha_fin
+
+    # 1. Admisiones con hallazgos IA sin resolver
+    # Se obtiene el usuario desde el archivo (IdArchivo.Usuario) como fuente primaria,
+    # con fallback a UsuarioId (entero copiado al crear la revisión)
+    hallazgos_qs = (
+        RevisionIA.objects
+        .filter(**hallazgos_filter)
+        .values(
+            'AdmisionId', 'TipoHallazgo', 'UsuarioId',
+            'IdArchivo__Usuario__id',
+            'IdArchivo__Usuario__first_name',
+            'IdArchivo__Usuario__last_name',
+            'IdArchivo__Usuario__username',
+        )
+    )
+
+    # Agrupar hallazgos por admision; guardar usuario del archivo o fallback UsuarioId
+    hallazgos_por_admision: dict = {}
+    usuario_por_admision_ia: dict = {}   # {admision_id: {'id': int, 'nombre': str}}
+    for h in hallazgos_qs:
+        aid = h['AdmisionId']
+        hallazgos_por_admision.setdefault(aid, []).append(h['TipoHallazgo'])
+        if aid not in usuario_por_admision_ia:
+            uid   = h['IdArchivo__Usuario__id'] or h['UsuarioId']
+            fname = (h['IdArchivo__Usuario__first_name'] or '').strip()
+            lname = (h['IdArchivo__Usuario__last_name'] or '').strip()
+            uname = (h['IdArchivo__Usuario__username'] or '')
+            nombre = f"{fname} {lname}".strip() or uname or ''
+            usuario_por_admision_ia[aid] = {'id': uid, 'nombre': nombre}
+
+    # Para los que el archivo no tiene usuario pero UsuarioId está definido,
+    # resolvemos el nombre directamente del modelo User
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    ids_sin_nombre = {
+        d['id'] for aid, d in usuario_por_admision_ia.items()
+        if not d['nombre'] and d['id']
+    }
+    if ids_sin_nombre:
+        uid_a_nombre = {
+            u.id: f"{u.first_name} {u.last_name}".strip() or u.username
+            for u in User.objects.filter(id__in=ids_sin_nombre)
+        }
+        for d in usuario_por_admision_ia.values():
+            if not d['nombre'] and d['id'] in uid_a_nombre:
+                d['nombre'] = uid_a_nombre[d['id']]
+    # Último fallback
+    for d in usuario_por_admision_ia.values():
+        if not d['nombre']:
+            d['nombre'] = 'Sin usuario'
+
+    candidatos_con_hallazgo = list(hallazgos_por_admision.keys())
+    if not candidatos_con_hallazgo:
+        return JsonResponse({'data': [], 'totales': {}})
+
+    # 2. Detectar estado de cada admisión (RESULTADO y/o FACTURA cargados)
+    # NO se excluye ninguna: el represamiento muestra todas las pendientes del admisionista
+    archivos_estado = {}
+    for af in (ArchivoFacturacion.objects
+               .filter(Admision_id__in=candidatos_con_hallazgo,
+                       Tipo__in=['RESULTADO', 'FACTURA'])
+               .values('Admision_id', 'Tipo').distinct()):
+        aid = af['Admision_id']
+        if aid not in archivos_estado:
+            archivos_estado[aid] = {'tiene_resultado': False, 'tiene_factura': False}
+        if af['Tipo'] == 'RESULTADO':
+            archivos_estado[aid]['tiene_resultado'] = True
+        else:
+            archivos_estado[aid]['tiene_factura'] = True
+
+    # 3. Obtener datos Zeus para todos los candidatos (sin filtro de fecha de ingreso)
+    zeus = _datos_zeus(candidatos_con_hallazgo)
+    # Solo procesar los que realmente existen en Zeus
+    autoids = [aid for aid in candidatos_con_hallazgo if aid in zeus]
+    if not autoids:
+        return JsonResponse({'data': [], 'totales': {}})
+
+    # 4. Agrupar por usuario
+    grupos: dict = defaultdict(lambda: {
+        'usuario_id': None, 'usuario_nombre': 'Sin usuario',
+        'admisiones': 0, 'valor_total': 0.0,
+        'hallazgos_count': 0,
+        'casos': [],
+    })
+
+    for aid in autoids:
+        z      = zeus.get(aid, {})
+        u      = usuario_por_admision_ia.get(aid, {'id': 0, 'nombre': 'Sin usuario'})
+        uid    = u['id'] or 0
+        key    = uid
+        nombre = u['nombre']
+        estado = archivos_estado.get(aid, {'tiene_resultado': False, 'tiene_factura': False})
+        g = grupos[key]
+        g['usuario_id']     = uid or None
+        g['usuario_nombre'] = nombre
+        g['admisiones']    += 1
+        g['valor_total']   += float(z.get('valor_total') or 0)
+        h = hallazgos_por_admision.get(aid, [])
+        g['hallazgos_count'] += len(h)
+        g['casos'].append({
+            'admision_id':     aid,
+            'con_estudio':     z.get('con_estudio', aid),
+            'paciente':        z.get('paciente', ''),
+            'eps':             z.get('eps', ''),
+            'servicio':        _servicio_nombre(z.get('ufuncional'), z.get('servicio_nombre')),
+            'valor_total':     float(z.get('valor_total') or 0),
+            'fecha_ing':       z.get('fecha_ing').isoformat() if z.get('fecha_ing') else None,
+            'hallazgos':       h,
+            'tiene_resultado': estado['tiene_resultado'],
+            'tiene_factura':   estado['tiene_factura'],
+        })
+
+    for g in grupos.values():
+        g['con_hallazgos'] = sum(1 for c in g['casos'] if c['hallazgos'])
+        g['sin_resultado']  = sum(1 for c in g['casos'] if not c['tiene_resultado'])
+        g['con_resultado']  = sum(1 for c in g['casos'] if c['tiene_resultado'])
+        g['con_factura']    = sum(1 for c in g['casos'] if c['tiene_factura'])
+
+    data = sorted(grupos.values(), key=lambda x: x['valor_total'], reverse=True)
+    total_valor      = sum(g['valor_total'] for g in data)
+    total_admisiones = sum(g['admisiones'] for g in data)
+    total_hallazgos  = sum(g['hallazgos_count'] for g in data)
+
+    return JsonResponse({
+        'data': data,
+        'totales': {
+            'admisiones': total_admisiones,
+            'valor':      total_valor,
+            'hallazgos':  total_hallazgos,
+            'usuarios':   len(data),
+        },
+    })
+
+
+@api_view(['GET'])
+def represamiento_cuentas_medicas(request):
+    """
+    Valor retenido en cuentas médicas: admisiones con FACTURA sin radicar,
+    agrupado por responsable asignado en CasoGestion.
+    Diferencia casos con/sin fecha_radicado.
+    """
+    fecha_inicio = request.GET.get('fecha_inicio')
+    fecha_fin    = request.GET.get('fecha_fin')
+    if not fecha_inicio:
+        from datetime import timedelta
+        fecha_inicio = (date.today() - timedelta(days=90)).isoformat()
+    if not fecha_fin:
+        fecha_fin = date.today().isoformat()
+
+    # 1. Admisiones con FACTURA, sin radicado (misma lógica bandeja 2)
+    con_factura = set(
+        ArchivoFacturacion.objects
+        .filter(Tipo='FACTURA')
+        .exclude(Radicado=True)
+        .values_list('Admision_id', flat=True).distinct()
+    )
+    candidatos = list(con_factura)
+    autoids = _zeus_autoids_en_rango(candidatos, fecha_inicio, fecha_fin, excluir_particulares=True)
+    if not autoids:
+        return JsonResponse({'data': [], 'totales': {}})
+
+    zeus = _datos_zeus(autoids)
+
+    # 2. CasoGestion para responsable y fecha_radicado (cualquier bandeja)
+    casos_map = {
+        c.admision_id: c
+        for c in CasoGestion.objects.filter(admision_id__in=autoids)
+        .select_related('responsable')
+        .order_by('-fecha_ingreso_bandeja')   # más reciente primero
+    }
+
+    # Fallback: si no hay CasoGestion, usar UsuarioCuentasMedicas de la FACTURA
+    facturas_resp = {
+        f.Admision_id: f.UsuarioCuentasMedicas
+        for f in ArchivoFacturacion.objects
+            .filter(Tipo='FACTURA', Admision_id__in=autoids)
+            .select_related('UsuarioCuentasMedicas')
+        if f.UsuarioCuentasMedicas_id
+    }
+
+    # 3. Agrupar por responsable
+    from collections import defaultdict
+    grupos: dict = defaultdict(lambda: {
+        'responsable_id': None, 'responsable_nombre': 'Sin asignar',
+        'admisiones': 0, 'valor_total': 0.0,
+        'con_fecha_radicado': 0, 'sin_fecha_radicado': 0,
+        'dias_promedio': 0.0,
+        'casos': [],
+    })
+
+    dias_acum: dict = defaultdict(list)
+
+    for aid in autoids:
+        z    = zeus.get(aid, {})
+        caso = casos_map.get(aid)
+        if caso and caso.responsable:
+            key    = caso.responsable.id
+            nombre = f"{caso.responsable.first_name} {caso.responsable.last_name}".strip() or caso.responsable.username
+        elif aid in facturas_resp:
+            u      = facturas_resp[aid]
+            key    = u.id
+            nombre = f"{u.first_name} {u.last_name}".strip() or u.username
+        else:
+            key    = 0
+            nombre = 'Sin asignar'
+
+        g = grupos[key]
+        g['responsable_id']     = key or None
+        g['responsable_nombre'] = nombre
+        g['admisiones']        += 1
+        valor = float(z.get('valor_total') or 0)
+        g['valor_total']       += valor
+
+        tiene_fecha = bool(caso and caso.fecha_radicado)
+        if tiene_fecha:
+            g['con_fecha_radicado'] += 1
+        else:
+            g['sin_fecha_radicado'] += 1
+
+        dias = None
+        if caso:
+            dias = (timezone.now() - caso.fecha_ingreso_bandeja).days
+        elif z.get('fecha_ing'):
+            fi = z['fecha_ing']
+            dias = (date.today() - fi).days if isinstance(fi, date) else None
+        if dias is not None:
+            dias_acum[key].append(dias)
+
+        g['casos'].append({
+            'admision_id':    aid,
+            'con_estudio':    z.get('con_estudio', aid),
+            'paciente':       z.get('paciente', ''),
+            'eps':            z.get('eps', ''),
+            'servicio':       _servicio_nombre(z.get('ufuncional'), z.get('servicio_nombre')),
+            'valor_total':    valor,
+            'fecha_ing':      z.get('fecha_ing').isoformat() if z.get('fecha_ing') else None,
+            'fecha_radicado': caso.fecha_radicado.isoformat() if caso and caso.fecha_radicado else None,
+            'numero_radicado':caso.numero_radicado if caso else '',
+            'estado':         caso.estado if caso else 'pendiente',
+            'dias':           dias,
+        })
+
+    for key, g in grupos.items():
+        lista = dias_acum.get(key, [])
+        g['dias_promedio'] = round(sum(lista) / len(lista), 1) if lista else 0
+
+    data = sorted(grupos.values(), key=lambda x: x['valor_total'], reverse=True)
+    total_valor      = sum(g['valor_total'] for g in data)
+    total_admisiones = sum(g['admisiones'] for g in data)
+
+    return JsonResponse({
+        'data': data,
+        'totales': {
+            'admisiones': total_admisiones,
+            'valor':      total_valor,
+            'responsables': len(data),
+        },
+    })

@@ -5,12 +5,16 @@ from .views_gestion import (
     bandeja_devoluciones,
     detalle_caso,
     actualizar_caso,
+    represamiento_admisiones,
+    represamiento_cuentas_medicas,
 )
 
 urlpatterns = [
-    path('realizados/',                    bandeja_realizados,   name='gf-realizados'),
-    path('radicados/',                     bandeja_radicados,    name='gf-radicados'),
-    path('devoluciones/',                  bandeja_devoluciones, name='gf-devoluciones'),
-    path('caso/<int:admision_id>/',        detalle_caso,         name='gf-detalle'),
-    path('caso/<int:admision_id>/actualizar/', actualizar_caso,  name='gf-actualizar'),
+    path('realizados/',                    bandeja_realizados,         name='gf-realizados'),
+    path('radicados/',                     bandeja_radicados,          name='gf-radicados'),
+    path('devoluciones/',                  bandeja_devoluciones,       name='gf-devoluciones'),
+    path('caso/<int:admision_id>/',        detalle_caso,               name='gf-detalle'),
+    path('caso/<int:admision_id>/actualizar/', actualizar_caso,        name='gf-actualizar'),
+    path('represamiento-admisiones/',      represamiento_admisiones,   name='gf-represamiento-admisiones'),
+    path('represamiento-cuentas/',         represamiento_cuentas_medicas, name='gf-represamiento-cuentas'),
 ]
