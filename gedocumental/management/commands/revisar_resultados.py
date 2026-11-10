@@ -38,6 +38,9 @@ from gedocumental.views_siesa import (
 TIPO = 'RESULTADO'
 # Minutos desde la carga antes de revisar un documento sin revisión IA (la revisión del cargue va primero)
 MINUTOS_GRACIA = 15
+# Hallazgo de admisión (sin archivo) por datos del paciente o de la orden incompletos en SIESA
+TIPO_DATOS = 'DATOS_PACIENTE'
+DATOS_INCOMPLETOS = 'Datos del paciente incompletos en SIESA'
 
 
 class Command(BaseCommand):
@@ -65,6 +68,7 @@ class Command(BaseCommand):
             self._revisar_procedimiento_cambiado(o['limite'])
         self._registrar_faltantes(o['ventana_faltantes'])
         self._registrar_sin_autorizacion(o['ventana_faltantes'])
+        self._registrar_datos_incompletos(o['ventana_faltantes'])
 
     # ── 0. Regenerar RESULTADOS de imagen generados con informe incompleto ───
     def _regenerar_incompletos_siesa(self, dias):
@@ -330,3 +334,66 @@ class Command(BaseCommand):
         RevisionIA.objects.bulk_create(nuevos)
         self.stdout.write(f"Sin número de autorización en SIESA: {len(nuevos)} nuevos | {len(ya)} ya registrados | "
                           f"{cerrados} corregidos")
+
+    # ── 4. Datos del paciente / de la orden incompletos en SIESA ─────────────
+    def _registrar_datos_incompletos(self, ventana):
+        """
+        Los faltantes obligatorios de validacion_paciente (ocupación, zona, médico/IPS/fecha que ordena, nivel
+        educativo...) dejan la admisión "con hallazgos" en la bandeja de Cuentas Médicas. Se registran como hallazgo
+        a cargo de quien cargó los documentos, para que le salga en su bandeja de Hallazgos IA; la descripción se
+        actualiza si cambian los campos y se cierra (CORREGIDO) cuando ya están completos en SIESA.
+        No aplica a particulares (sus documentos no se validan) ni al número de autorización (tiene su hallazgo).
+        """
+        from gedocumental.services.validacion_paciente import SIN_AUTORIZACION, validar_datos_pacientes_bulk
+
+        ahora = datetime.now()
+        cargues = {
+            r['Admision_id']: r for r in
+            ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO, *TIPOS_SIN_REVISION_IA])
+            .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'), usuario=Min('Usuario_id'))
+            .filter(primer__gte=ahora - timedelta(days=ventana))
+        }
+        abiertos = {h.AdmisionId: h for h in RevisionIA.objects.filter(
+            IdArchivo__isnull=True, TipoDocumento=TIPO_DATOS, Resuelta=False)}
+        ids = list(set(cargues) | set(abiertos))
+        validaciones = validar_datos_pacientes_bulk(ids)
+        particulares = set()
+        with connections['zeussalud'].cursor() as cursor:
+            for i in range(0, len(ids), 500):
+                bloque = ids[i:i + 500]
+                cursor.execute(
+                    f"""SELECT sm.con_estudio FROM sis_maes sm JOIN contratos co ON co.codigo = sm.contrato
+                        WHERE sm.con_estudio IN ({', '.join(['%s'] * len(bloque))})
+                          AND UPPER(co.alias) LIKE '%%PARTICULAR%%'""", bloque)
+                particulares.update(int(e) for (e,) in cursor.fetchall())
+
+        nuevos, actualizados, cerrados = [], 0, 0
+        for adm in ids:
+            val = validaciones.get(adm)
+            if val is None:
+                continue   # Zeus no respondió: no se decide nada
+            campos = [f['campo'] for f in val['faltantes'] if f['obligatorio'] and f['campo'] != SIN_AUTORIZACION]
+            h = abiertos.get(adm)
+            if not campos or adm in particulares:
+                if h:
+                    h.Resuelta, h.FechaResolucion = True, ahora
+                    h.Resolucion = 'DESCARTADO' if adm in particulares else 'CORREGIDO'
+                    h.NotaResolucion = ('Admisión particular: no se valida.' if adm in particulares
+                                        else 'Los datos ya están completos en SIESA.')
+                    h.save(update_fields=['Resuelta', 'Resolucion', 'FechaResolucion', 'NotaResolucion'])
+                    cerrados += 1
+                continue
+            descripcion = (f"{DATOS_INCOMPLETOS}: {', '.join(campos)}. "
+                           "Actualícelos en la ficha del paciente / admisión en SIESA.")
+            if h:
+                if h.Descripcion != descripcion:
+                    h.Descripcion = descripcion
+                    h.save(update_fields=['Descripcion'])
+                    actualizados += 1
+            elif adm in cargues:
+                nuevos.append(RevisionIA(
+                    IdArchivo=None, AdmisionId=adm, TipoDocumento=TIPO_DATOS, UsuarioId=cargues[adm]['usuario'],
+                    TipoHallazgo='INFORMACION', Modo='sistema', Resuelta=False, Descripcion=descripcion))
+        RevisionIA.objects.bulk_create(nuevos)
+        self.stdout.write(f"Datos del paciente incompletos en SIESA: {len(nuevos)} nuevos | {actualizados} "
+                          f"actualizados | {cerrados} cerrados")
