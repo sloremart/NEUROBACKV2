@@ -427,7 +427,6 @@ def represamiento_admisiones(request):
         hallazgos_filter['Fecha__date__gte'] = fecha_inicio
     if fecha_fin:
         hallazgos_filter['Fecha__date__lte'] = fecha_fin
-
     # 1. Admisiones con hallazgos IA sin resolver
     # Se obtiene el usuario desde el archivo (IdArchivo.Usuario) como fuente primaria,
     # con fallback a UsuarioId (entero copiado al crear la revisión)
@@ -499,10 +498,8 @@ def represamiento_admisiones(request):
 
     # 3. Obtener datos Zeus para todos los candidatos (sin filtro de fecha de ingreso)
     zeus = _datos_zeus(candidatos_con_hallazgo)
-    # Solo procesar los que realmente existen en Zeus
-    autoids = [aid for aid in candidatos_con_hallazgo if aid in zeus]
-    if not autoids:
-        return JsonResponse({'data': [], 'totales': {}})
+    # Mostrar TODAS las admisiones con hallazgos, con o sin datos en Zeus
+    autoids = candidatos_con_hallazgo
 
     # 4. Agrupar por usuario
     grupos: dict = defaultdict(lambda: {
