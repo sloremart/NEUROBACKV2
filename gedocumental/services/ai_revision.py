@@ -1540,6 +1540,18 @@ def _es_particular(datos_admision: dict) -> bool:
     return 'PARTICULAR' in str(datos_admision.get('entidad') or '').upper()
 
 
+def _es_soat(datos_admision: dict) -> bool:
+    """Admisión de una aseguradora SOAT (accidente de tránsito): su 'autorización' es el radicado de SIRAS."""
+    import re
+    texto = f"{datos_admision.get('contrato') or ''} {datos_admision.get('entidad') or ''}".upper()
+    return bool(re.search(r'\bSOAT\b', texto))
+
+
+def _autorizacion_soat(tipo_documento, datos_admision: dict) -> bool:
+    """La AUTORIZACION de una admisión SOAT (radicado SIRAS) se anexa tal cual: no se revisa."""
+    return (tipo_documento or '').upper() == 'AUTORIZACION' and _es_soat(datos_admision)
+
+
 def _procedimiento_libre_particular(tipo_documento, descripcion, datos_admision: dict) -> bool:
     """
     Paciente PARTICULAR: puede tomarse cualquier examen (ej. la orden es una consulta de ortopedia con la
@@ -1795,6 +1807,13 @@ def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
     # no se validan. Se registra OK sin llamar a la IA (sin costo) para que no quede como pendiente de revisión.
     if _es_particular(datos_admision):
         resultado = {"tipo": "OK", "descripcion": "Documento correcto (admisión particular: no se valida)",
+                     "modo": "sistema"}
+        _registrar_revision(archivo_obj, resultado)
+        return resultado
+
+    # SOAT: la autorización es el radicado de SIRAS (no trae paciente ni servicios); se anexa tal cual
+    if _autorizacion_soat(archivo_obj.Tipo, datos_admision):
+        resultado = {"tipo": "OK", "descripcion": "Documento correcto (autorización SOAT: no se valida)",
                      "modo": "sistema"}
         _registrar_revision(archivo_obj, resultado)
         return resultado

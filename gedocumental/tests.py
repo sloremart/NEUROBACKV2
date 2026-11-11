@@ -493,6 +493,34 @@ class NombreRepetidoTests(SimpleTestCase):
         self.assertFalse(_mismo_paciente(dict(doc, nombre_documento='MARIANGEL LUCIA GARZON SANCHEZ'), self.ADM))
 
 
+class AutorizacionSoatTests(SimpleTestCase):
+    """Caso 33369: en SOAT la autorización es el radicado de SIRAS (trae el nombre de quien radica)."""
+    ADM = dict(ADMISION, paciente='CAMILO ANDRES GOMEZ ORJUELA', identificacion='CC 1121846868',
+               entidad='MUNDIAL SOAT', contrato='MUNDIAL SOAT')
+    DESC = ("Paciente no corresponde: documento 'NICOLÁS JESÚS PERDOMO VARGAS', "
+            "admisión 'CAMILO ANDRES GOMEZ ORJUELA'.")
+
+    def test_autorizacion_soat_se_descarta(self):
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM)[0], DESCARTADO)
+
+    def test_otros_documentos_soat_si_se_revisan(self):
+        self.assertIsNone(evaluar_hallazgo('ORDEN', self.DESC, self.ADM))
+
+    def test_solo_soat(self):
+        from gedocumental.services.ai_revision import _autorizacion_soat
+        self.assertTrue(_autorizacion_soat('AUTORIZACION', dict(self.ADM, contrato='', entidad='SEGUROS DEL ESTADO SOAT')))
+        self.assertFalse(_autorizacion_soat('AUTORIZACION', dict(self.ADM, contrato='SANITAS', entidad='SANITAS EPS')))
+
+    def test_no_llama_a_la_ia(self):
+        from gedocumental.services import ai_revision
+        archivo = mock.MagicMock(Tipo='AUTORIZACION')
+        with mock.patch.object(ai_revision, '_registrar_revision') as registrar,                 mock.patch.object(ai_revision, '_llamar_openai') as llamar:
+            r = ai_revision.revisar_archivo(archivo, self.ADM)
+        self.assertEqual(r['tipo'], 'OK')
+        llamar.assert_not_called()
+        registrar.assert_called_once()
+
+
 class AdicionalesNoSeRevisanTests(SimpleTestCase):
     """Caso 35274: los soportes ADICIONALES no se revisan; el nombre del servicio pegado al del paciente."""
     ADM = dict(ADMISION, paciente='MIREYA MERCHAN REYES', identificacion='CC 40417054',
