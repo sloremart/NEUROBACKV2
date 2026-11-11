@@ -131,6 +131,22 @@ def get_tecnicos(request):
                 )
                 rows = cur.fetchall()
                 data = [{"tabla": r[0]} for r in rows]
+            elif request.GET.get("debug") == "5":
+                # Buscar en Medicos por nombre ?q=YESENIA
+                nombre_q = request.GET.get("q", "")
+                cur.execute(
+                    """
+                    SELECT codigo, LTRIM(RTRIM(nombre)) AS nombre,
+                           LTRIM(RTRIM(COALESCE(especialidad,''))) AS especialidad
+                    FROM Medicos
+                    WHERE nombre LIKE %s
+                    ORDER BY nombre
+                    """,
+                    [f"%{nombre_q}%"]
+                )
+                cols = [d[0] for d in cur.description]
+                rows = cur.fetchall()
+                data = [dict(zip(cols, r)) for r in rows]
             elif request.GET.get("debug") == "4":
                 # Ver columnas de la tabla indicada con ?tabla=NombreTabla
                 tabla = request.GET.get("tabla", "personal")
