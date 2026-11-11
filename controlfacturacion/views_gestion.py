@@ -442,18 +442,23 @@ def represamiento_admisiones(request):
         )
     )
 
-    # Agrupar hallazgos por admision; guardar usuario del archivo o fallback UsuarioId
+    # Agrupar hallazgos por admision; usar UsuarioId como fuente primaria
+    # (mismo campo que usa GE Documental para mostrar hallazgos por usuario)
     hallazgos_por_admision: dict = {}
     usuario_por_admision_ia: dict = {}   # {admision_id: {'id': int, 'nombre': str}}
     for h in hallazgos_qs:
         aid = h['AdmisionId']
         hallazgos_por_admision.setdefault(aid, []).append(h['TipoHallazgo'])
         if aid not in usuario_por_admision_ia:
-            uid   = h['IdArchivo__Usuario__id'] or h['UsuarioId']
-            fname = (h['IdArchivo__Usuario__first_name'] or '').strip()
-            lname = (h['IdArchivo__Usuario__last_name'] or '').strip()
-            uname = (h['IdArchivo__Usuario__username'] or '')
-            nombre = f"{fname} {lname}".strip() or uname or ''
+            uid = h['UsuarioId'] or h['IdArchivo__Usuario__id']
+            # Solo usar nombre del archivo si coincide con el usuario primario
+            if uid and uid == h['IdArchivo__Usuario__id']:
+                fname = (h['IdArchivo__Usuario__first_name'] or '').strip()
+                lname = (h['IdArchivo__Usuario__last_name'] or '').strip()
+                uname = (h['IdArchivo__Usuario__username'] or '')
+                nombre = f"{fname} {lname}".strip() or uname or ''
+            else:
+                nombre = ''  # se resuelve abajo desde el modelo User
             usuario_por_admision_ia[aid] = {'id': uid, 'nombre': nombre}
 
     # Para los que el archivo no tiene usuario pero UsuarioId está definido,
