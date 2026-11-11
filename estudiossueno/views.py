@@ -98,6 +98,25 @@ def get_tecnicos(request):
                 cols = [d[0] for d in cur.description]
                 rows = cur.fetchall()
                 data = [dict(zip(cols, r)) for r in rows]
+            elif request.GET.get("debug") == "2":
+                # Buscar por nombre sin filtro de status ni email
+                nombre_q = request.GET.get("q", "")
+                cur.execute(
+                    """
+                    SELECT
+                        LTRIM(RTRIM(u.nombre)) AS nombre,
+                        LTRIM(RTRIM(COALESCE(u.email,''))) AS email,
+                        LTRIM(RTRIM(COALESCE(u.cargo,''))) AS cargo,
+                        u.status
+                    FROM usuario u
+                    WHERE u.nombre LIKE %s
+                    ORDER BY nombre
+                    """,
+                    [f"%{nombre_q}%"]
+                )
+                cols = [d[0] for d in cur.description]
+                rows = cur.fetchall()
+                data = [dict(zip(cols, r)) for r in rows]
             else:
                 cur.execute(
                     """
