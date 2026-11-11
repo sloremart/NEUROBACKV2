@@ -74,23 +74,31 @@ def get_especialistas(request):
         return JsonResponse({"success": False, "detail": str(e)}, status=500)
 
 
+# Códigos de técnicos de sueño confirmados en tabla Medicos de ZeusSalud
+CODIGOS_TECNICOS_SUENO = (36, 47, 48, 55, 56, 70, 78)
+
 @api_view(["GET"])
 def get_tecnicos(request):
     """
-    Técnicos de sueño — personal asistencial en tabla Medicos
-    con especialidad que contenga 'ENFERMERIA'.
+    Técnicos de sueño — lista fija por código en Medicos +
+    Yeimi Márquez (solo existe en usuario, no en Medicos).
+    Para agregar un nuevo técnico: añadir su código a CODIGOS_TECNICOS_SUENO.
     """
     try:
         with connections["zeussalud"].cursor() as cur:
+            codigos_str = ', '.join(str(c) for c in CODIGOS_TECNICOS_SUENO)
             cur.execute(
-                """
-                SELECT
-                    m.codigo,
-                    LTRIM(RTRIM(m.nombre))       AS nombre,
-                    LTRIM(RTRIM(m.especialidad)) AS especialidad
+                f"""
+                SELECT m.codigo, LTRIM(RTRIM(m.nombre)) AS nombre,
+                       LTRIM(RTRIM(m.especialidad)) AS especialidad
                 FROM Medicos m
-                WHERE m.especialidad LIKE '%ENFERMERIA%'
-                ORDER BY m.nombre
+                WHERE m.codigo IN ({codigos_str})
+                UNION ALL
+                SELECT 0, LTRIM(RTRIM(u.nombre)), 'AUXILIAR ENFERMERIA'
+                FROM usuario u
+                WHERE u.nombre LIKE '%YEIMI%MARQUEZ%'
+                  AND u.status = '1'
+                ORDER BY 2
                 """
             )
             rows = cur.fetchall()
