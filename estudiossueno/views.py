@@ -77,25 +77,43 @@ def get_especialistas(request):
 @api_view(["GET"])
 def get_tecnicos(request):
     """
-    Técnicos de sueño — todos los usuarios activos de SIESA con email neuroelectrodx.
+    Técnicos de sueño — usuarios activos de SIESA con email neuroelectrodx.
+    ?debug=1 → muestra TODOS los usuarios activos con nombre/email/cargo para diagnosticar.
     """
     try:
         with connections["zeussalud"].cursor() as cur:
-            cur.execute(
-                """
-                SELECT DISTINCT
-                    LTRIM(RTRIM(u.nombre)) AS nombre,
-                    u.email
-                FROM usuario u
-                WHERE u.email LIKE '%neuroelectrodx%'
-                  AND u.status = '1'
-                ORDER BY nombre
-                """
-            )
-            rows = cur.fetchall()
+            if request.GET.get("debug") == "1":
+                cur.execute(
+                    """
+                    SELECT TOP 300
+                        LTRIM(RTRIM(u.nombre)) AS nombre,
+                        LTRIM(RTRIM(COALESCE(u.email,''))) AS email,
+                        LTRIM(RTRIM(COALESCE(u.cargo,''))) AS cargo,
+                        u.status
+                    FROM usuario u
+                    WHERE u.status = '1'
+                    ORDER BY nombre
+                    """
+                )
+                cols = [d[0] for d in cur.description]
+                rows = cur.fetchall()
+                data = [dict(zip(cols, r)) for r in rows]
+            else:
+                cur.execute(
+                    """
+                    SELECT DISTINCT
+                        LTRIM(RTRIM(u.nombre)) AS nombre,
+                        u.email
+                    FROM usuario u
+                    WHERE u.email LIKE '%neuroelectrodx%'
+                      AND u.status = '1'
+                    ORDER BY nombre
+                    """
+                )
+                rows = cur.fetchall()
+                data = [{"nombre": r[0], "email": r[1]} for r in rows]
 
-        data = [{"nombre": r[0], "email": r[1]} for r in rows]
-        return JsonResponse({"success": True, "data": data})
+        return JsonResponse({"success": True, "data": data, "total": len(data)})
     except Exception as e:
         return JsonResponse({"success": False, "detail": str(e)}, status=500)
 
