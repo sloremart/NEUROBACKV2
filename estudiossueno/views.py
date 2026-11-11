@@ -77,134 +77,26 @@ def get_especialistas(request):
 @api_view(["GET"])
 def get_tecnicos(request):
     """
-    Técnicos de sueño — usuarios activos de SIESA con email neuroelectrodx.
-    ?debug=1 → muestra TODOS los usuarios activos con nombre/email/cargo para diagnosticar.
+    Técnicos de sueño — personal asistencial en tabla Medicos
+    con especialidad que contenga 'ENFERMERIA'.
     """
     try:
         with connections["zeussalud"].cursor() as cur:
-            if request.GET.get("debug") == "1":
-                cur.execute(
-                    """
-                    SELECT TOP 300
-                        LTRIM(RTRIM(u.nombre)) AS nombre,
-                        LTRIM(RTRIM(COALESCE(u.email,''))) AS email,
-                        LTRIM(RTRIM(COALESCE(u.cargo,''))) AS cargo,
-                        u.status
-                    FROM usuario u
-                    WHERE u.status = '1'
-                    ORDER BY nombre
-                    """
-                )
-                cols = [d[0] for d in cur.description]
-                rows = cur.fetchall()
-                data = [dict(zip(cols, r)) for r in rows]
-            elif request.GET.get("debug") == "2":
-                # Buscar por nombre sin filtro de status ni email
-                nombre_q = request.GET.get("q", "")
-                cur.execute(
-                    """
-                    SELECT
-                        LTRIM(RTRIM(u.nombre)) AS nombre,
-                        LTRIM(RTRIM(COALESCE(u.email,''))) AS email,
-                        LTRIM(RTRIM(COALESCE(u.cargo,''))) AS cargo,
-                        u.status
-                    FROM usuario u
-                    WHERE u.nombre LIKE %s
-                    ORDER BY nombre
-                    """,
-                    [f"%{nombre_q}%"]
-                )
-                cols = [d[0] for d in cur.description]
-                rows = cur.fetchall()
-                data = [dict(zip(cols, r)) for r in rows]
-            elif request.GET.get("debug") == "3":
-                # Listar tablas de Zeus que contienen columnas 'servicio' o 'especialidad'
-                cur.execute(
-                    """
-                    SELECT DISTINCT t.TABLE_NAME
-                    FROM INFORMATION_SCHEMA.COLUMNS c
-                    JOIN INFORMATION_SCHEMA.TABLES t ON c.TABLE_NAME = t.TABLE_NAME
-                    WHERE t.TABLE_TYPE = 'BASE TABLE'
-                      AND c.COLUMN_NAME IN ('servicio','especialidad','Servicio','Especialidad')
-                    ORDER BY t.TABLE_NAME
-                    """
-                )
-                rows = cur.fetchall()
-                data = [{"tabla": r[0]} for r in rows]
-            elif request.GET.get("debug") == "7":
-                # Ver todos los valores distintos de Servicio en sis_medi_servicios
-                cur.execute(
-                    """
-                    SELECT LTRIM(RTRIM(s.Servicio)) AS servicio, COUNT(*) AS medicos
-                    FROM sis_medi_servicios s
-                    GROUP BY s.Servicio
-                    ORDER BY 1
-                    """
-                )
-                rows = cur.fetchall()
-                data = [{"servicio": r[0], "medicos": r[1]} for r in rows]
-            elif request.GET.get("debug") == "6":
-                # Todos los Medicos vinculados al servicio POLISOMNOGRAF en sis_medi_servicios
-                cur.execute(
-                    """
-                    SELECT m.codigo, LTRIM(RTRIM(m.nombre)) AS nombre,
-                           LTRIM(RTRIM(COALESCE(m.especialidad,''))) AS especialidad,
-                           LTRIM(RTRIM(s.Servicio)) AS servicio
-                    FROM Medicos m
-                    JOIN sis_medi_servicios s ON s.Medico = m.codigo
-                    WHERE s.Servicio LIKE '%POLISOMNOGRAF%'
-                    ORDER BY m.nombre
-                    """
-                )
-                cols = [d[0] for d in cur.description]
-                rows = cur.fetchall()
-                data = [dict(zip(cols, r)) for r in rows]
-            elif request.GET.get("debug") == "5":
-                # Buscar en Medicos por nombre ?q=YESENIA
-                nombre_q = request.GET.get("q", "")
-                cur.execute(
-                    """
-                    SELECT codigo, LTRIM(RTRIM(nombre)) AS nombre,
-                           LTRIM(RTRIM(COALESCE(especialidad,''))) AS especialidad
-                    FROM Medicos
-                    WHERE nombre LIKE %s
-                    ORDER BY nombre
-                    """,
-                    [f"%{nombre_q}%"]
-                )
-                cols = [d[0] for d in cur.description]
-                rows = cur.fetchall()
-                data = [dict(zip(cols, r)) for r in rows]
-            elif request.GET.get("debug") == "4":
-                # Ver columnas de la tabla indicada con ?tabla=NombreTabla
-                tabla = request.GET.get("tabla", "personal")
-                cur.execute(
-                    """
-                    SELECT COLUMN_NAME, DATA_TYPE
-                    FROM INFORMATION_SCHEMA.COLUMNS
-                    WHERE TABLE_NAME = %s
-                    ORDER BY ORDINAL_POSITION
-                    """,
-                    [tabla]
-                )
-                rows = cur.fetchall()
-                data = [{"columna": r[0], "tipo": r[1]} for r in rows]
-            else:
-                cur.execute(
-                    """
-                    SELECT DISTINCT
-                        LTRIM(RTRIM(u.nombre)) AS nombre,
-                        u.email
-                    FROM usuario u
-                    WHERE u.email LIKE '%neuroelectrodx%'
-                      AND u.status = '1'
-                    ORDER BY nombre
-                    """
-                )
-                rows = cur.fetchall()
-                data = [{"nombre": r[0], "email": r[1]} for r in rows]
+            cur.execute(
+                """
+                SELECT
+                    m.codigo,
+                    LTRIM(RTRIM(m.nombre))       AS nombre,
+                    LTRIM(RTRIM(m.especialidad)) AS especialidad
+                FROM Medicos m
+                WHERE m.especialidad LIKE '%ENFERMERIA%'
+                ORDER BY m.nombre
+                """
+            )
+            rows = cur.fetchall()
 
-        return JsonResponse({"success": True, "data": data, "total": len(data)})
+        data = [{"codigo": r[0], "nombre": r[1], "especialidad": r[2]} for r in rows]
+        return JsonResponse({"success": True, "data": data})
     except Exception as e:
         return JsonResponse({"success": False, "detail": str(e)}, status=500)
 
