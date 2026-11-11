@@ -117,6 +117,34 @@ def get_tecnicos(request):
                 cols = [d[0] for d in cur.description]
                 rows = cur.fetchall()
                 data = [dict(zip(cols, r)) for r in rows]
+            elif request.GET.get("debug") == "3":
+                # Listar tablas de Zeus que contienen columnas 'servicio' o 'especialidad'
+                cur.execute(
+                    """
+                    SELECT DISTINCT t.TABLE_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS c
+                    JOIN INFORMATION_SCHEMA.TABLES t ON c.TABLE_NAME = t.TABLE_NAME
+                    WHERE t.TABLE_TYPE = 'BASE TABLE'
+                      AND c.COLUMN_NAME IN ('servicio','especialidad','Servicio','Especialidad')
+                    ORDER BY t.TABLE_NAME
+                    """
+                )
+                rows = cur.fetchall()
+                data = [{"tabla": r[0]} for r in rows]
+            elif request.GET.get("debug") == "4":
+                # Ver columnas de la tabla indicada con ?tabla=NombreTabla
+                tabla = request.GET.get("tabla", "personal")
+                cur.execute(
+                    """
+                    SELECT COLUMN_NAME, DATA_TYPE
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_NAME = %s
+                    ORDER BY ORDINAL_POSITION
+                    """,
+                    [tabla]
+                )
+                rows = cur.fetchall()
+                data = [{"columna": r[0], "tipo": r[1]} for r in rows]
             else:
                 cur.execute(
                     """
