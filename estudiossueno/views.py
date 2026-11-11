@@ -77,8 +77,7 @@ def get_especialistas(request):
 @api_view(["GET"])
 def get_tecnicos(request):
     """
-    Técnicos de sueño — usuarios de SIESA cuyo email contiene
-    el dominio neuroelectrodx y están activos como auxiliares de electrodiagnóstico.
+    Técnicos de sueño — todos los usuarios activos de SIESA con email neuroelectrodx.
     """
     try:
         with connections["zeussalud"].cursor() as cur:
@@ -90,23 +89,6 @@ def get_tecnicos(request):
                 FROM usuario u
                 WHERE u.email LIKE '%neuroelectrodx%'
                   AND u.status = '1'
-                  AND (
-                      u.nombre LIKE '%AMAYA%'
-                      OR u.nombre LIKE '%MORENO%'
-                      OR u.nombre LIKE '%BAQUERO%'
-                      OR u.nombre LIKE '%MOTAVITA%'
-                      OR u.nombre LIKE '%MOLANO%'
-                      OR u.nombre LIKE '%DIAZ%'
-                      OR u.nombre LIKE '%GONZAEZ%'
-                      OR u.nombre LIKE '%GONZALEZ%'
-                      OR u.nombre LIKE '%BOBADILLA%'
-                      OR u.nombre LIKE '%BENITEZ%'
-                      OR u.nombre LIKE '%PEREZ%'
-                      OR u.nombre LIKE '%WILLIAM%'
-                      OR u.nombre LIKE '%YESENIA%'
-                      OR u.nombre LIKE '%LINA%'
-                      OR u.nombre LIKE '%MARTHA%'
-                  )
                 ORDER BY nombre
                 """
             )
