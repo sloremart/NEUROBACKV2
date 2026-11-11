@@ -131,6 +131,22 @@ def get_tecnicos(request):
                 )
                 rows = cur.fetchall()
                 data = [{"tabla": r[0]} for r in rows]
+            elif request.GET.get("debug") == "6":
+                # Todos los Medicos vinculados al servicio POLISOMNOGRAF en sis_medi_servicios
+                cur.execute(
+                    """
+                    SELECT m.codigo, LTRIM(RTRIM(m.nombre)) AS nombre,
+                           LTRIM(RTRIM(COALESCE(m.especialidad,''))) AS especialidad,
+                           LTRIM(RTRIM(s.Servicio)) AS servicio
+                    FROM Medicos m
+                    JOIN sis_medi_servicios s ON s.Medico = m.codigo
+                    WHERE s.Servicio LIKE '%POLISOMNOGRAF%'
+                    ORDER BY m.nombre
+                    """
+                )
+                cols = [d[0] for d in cur.description]
+                rows = cur.fetchall()
+                data = [dict(zip(cols, r)) for r in rows]
             elif request.GET.get("debug") == "5":
                 # Buscar en Medicos por nombre ?q=YESENIA
                 nombre_q = request.GET.get("q", "")
