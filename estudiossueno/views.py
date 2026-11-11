@@ -135,10 +135,10 @@ def get_tecnicos(request):
                 # Ver todos los valores distintos de Servicio en sis_medi_servicios
                 cur.execute(
                     """
-                    SELECT DISTINCT LTRIM(RTRIM(s.Servicio)) AS servicio, COUNT(*) AS medicos
+                    SELECT LTRIM(RTRIM(s.Servicio)) AS servicio, COUNT(*) AS medicos
                     FROM sis_medi_servicios s
                     GROUP BY s.Servicio
-                    ORDER BY s.Servicio
+                    ORDER BY 1
                     """
                 )
                 rows = cur.fetchall()
