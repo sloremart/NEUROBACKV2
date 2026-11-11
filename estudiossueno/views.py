@@ -131,6 +131,18 @@ def get_tecnicos(request):
                 )
                 rows = cur.fetchall()
                 data = [{"tabla": r[0]} for r in rows]
+            elif request.GET.get("debug") == "7":
+                # Ver todos los valores distintos de Servicio en sis_medi_servicios
+                cur.execute(
+                    """
+                    SELECT DISTINCT LTRIM(RTRIM(s.Servicio)) AS servicio, COUNT(*) AS medicos
+                    FROM sis_medi_servicios s
+                    GROUP BY s.Servicio
+                    ORDER BY s.Servicio
+                    """
+                )
+                rows = cur.fetchall()
+                data = [{"servicio": r[0], "medicos": r[1]} for r in rows]
             elif request.GET.get("debug") == "6":
                 # Todos los Medicos vinculados al servicio POLISOMNOGRAF en sis_medi_servicios
                 cur.execute(
