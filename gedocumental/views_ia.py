@@ -310,3 +310,90 @@ def bandeja_cuentas_medicas(request):
 
     except Exception as e:
         return Response({'success': False, 'detail': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admisiones con documentos faltantes, para el panel del admisionista: admisiones a las que el usuario
+# les subió documentos (aún no aprobados por Cuentas Médicas) y les falta ORDEN, AUTORIZACION o COMPROBANTE.
+# El RESULTADO no cuenta: lo sube la coordinación médica. Particulares no aparecen (no se validan); MRC y
+# demás contratos sin autorización no exigen la AUTORIZACION.
+#
+# GET api/v2/gedocumental/documentos-faltantes/?usuario_id=3&dias=60   (cargues de los últimos N días)
+# ─────────────────────────────────────────────────────────────────────────────
+DOCUMENTOS_ADMISIONES = ('ORDEN', 'AUTORIZACION', 'COMPROBANTE')
+
+
+@api_view(['GET'])
+def documentos_faltantes(request):
+    from django.db.models import Max
+    from gedocumental.models import ArchivoFacturacion
+    from gedocumental.services.validacion_paciente import CONTRATOS_SIN_AUTORIZACION
+
+    try:
+        usuario_id = request.query_params.get('usuario_id')
+        if not usuario_id:
+            return Response({'success': False, 'detail': 'Falta usuario_id'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from datetime import timedelta
+        try:
+            dias = max(1, int(request.query_params.get('dias') or 60))
+        except ValueError:
+            dias = 60
+        # Admisiones del usuario que siguen en proceso (algún documento sin aprobar por Cuentas Médicas),
+        # con cargue en los últimos `dias` días (no el histórico viejo)
+        ultimo = dict(
+            ArchivoFacturacion.objects.filter(Usuario_id=usuario_id, RevisionPrimera=False,
+                                              FechaCreacionArchivo__gte=datetime.now() - timedelta(days=dias))
+            .exclude(Tipo__in=TIPOS_SIN_REVISION_IA)
+            .values('Admision_id').annotate(u=Max('FechaCreacionArchivo')).values_list('Admision_id', 'u')
+        )
+        ids = list(ultimo.keys())
+        cargados = {}
+        for adm_id, tipo in ArchivoFacturacion.objects.filter(Admision_id__in=ids).values_list('Admision_id', 'Tipo'):
+            cargados.setdefault(adm_id, set()).add((tipo or '').upper())
+        faltan = {a: [t for t in DOCUMENTOS_ADMISIONES if t not in cargados.get(a, set())] for a in ids}
+        faltan = {a: f for a, f in faltan.items() if f}
+
+        admisiones, contratos = {}, {}
+        if faltan:
+            with connections['zeussalud'].cursor() as cursor:
+                bloque_ids = list(faltan.keys())
+                for i in range(0, len(bloque_ids), 500):
+                    bloque = bloque_ids[i:i + 500]
+                    admisiones.update(get_admisiones_zeus_bulk(cursor, bloque))
+                    cursor.execute(
+                        f"""SELECT sm.con_estudio, UPPER(LTRIM(RTRIM(ISNULL(c.alias, '') + ' ' + ISNULL(c.nombre, ''))))
+                            FROM sis_maes sm LEFT JOIN contratos c ON sm.contrato = c.codigo
+                            WHERE sm.con_estudio IN ({', '.join(['%s'] * len(bloque))})""", bloque)
+                    contratos.update({int(e): n or '' for e, n in cursor.fetchall()})
+        # Particular: sus documentos no se validan (no aparece). MRC y demás contratos sin autorización
+        # (CONTRATOS_SIN_AUTORIZACION): no se exige la AUTORIZACION
+        for adm_id in list(faltan):
+            contrato = contratos.get(adm_id, '')
+            if 'PARTICULAR' in contrato:
+                del faltan[adm_id]
+                continue
+            if any(c in contrato for c in CONTRATOS_SIN_AUTORIZACION):
+                faltan[adm_id] = [t for t in faltan[adm_id] if t != 'AUTORIZACION']
+            if not faltan[adm_id]:
+                del faltan[adm_id]
+
+        ahora = datetime.now()
+        data = []
+        for adm_id, f in faltan.items():
+            adm = admisiones.get(adm_id)
+            fecha_ing = adm[6] if adm else None
+            data.append({
+                'Admision':            adm_id,
+                'Paciente':            _reparar_texto(' '.join((adm[3] or '').split())) if adm else '',
+                'Identificacion':      adm[1] if adm else '',
+                'Entidad':             (adm[2] or '').strip() if adm else '',
+                'DocumentosFaltantes': f,
+                'UltimoCargue':        ultimo[adm_id].isoformat() if ultimo.get(adm_id) else None,
+                'DiasDesdeIngreso':    (ahora - fecha_ing).days if fecha_ing else None,
+            })
+        data.sort(key=lambda x: x['UltimoCargue'] or '')  # las más antiguas primero
+        return Response({'success': True, 'data': data}, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({'success': False, 'detail': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
