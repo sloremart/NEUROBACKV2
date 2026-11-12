@@ -115,7 +115,8 @@ VERIFICACIONES OBLIGATORIAS (en este orden):
      - otra LATERALIDAD (estudio de miembro derecho y la orden pide el izquierdo);
      - con contraste explícito cuando el CUPS dice "simple" o "sin contraste", o al revés. Si la descripción
        del CUPS NO menciona contraste, el mismo CUPS sirve para el estudio simple y el contrastado: que la
-       orden pida contraste NO es error.
+       orden pida contraste NO es error de procedimiento (el sistema valida aparte la observación de la
+       admisión); solo transcribe en "contraste_documento" lo que dice el documento sobre el contraste.
    Ante la duda razonable de que sea el mismo estudio, considéralo coincidente (procedimientos_coinciden = SI).
 3. Solo si 1 y 2 están bien, revisa el resto según la tabla de convenciones (fechas, vigencia, cantidades,
    firmas, legibilidad, datos incompletos).
@@ -152,6 +153,7 @@ aunque la primera ya haya fallado:
   "nombre_documento": "<solo el nombre completo del paciente TRANSCRITO LETRA POR LETRA tal como está escrito en el documento, sin corregir ortografía ni completarlo con el de la admisión; tómalo del campo IMPRESO del paciente (\"PACIENTE:\", \"Nombre del paciente\"), NUNCA de la firma manuscrita ni del ENCABEZADO (el nombre del médico, consultorio o IPS que va arriba con dirección, teléfono y NIT no es el paciente), o ''>",
   "identificacion_documento": "<solo el número de documento del paciente (el que va junto a IDENTIFICACIÓN, CC, TI, RC, CE, documento), sin tipo ni separadores, o ''. NUNCA el NIT del encabezado ni el número de fórmula, folio, factura, autorización, orden o código de barras>",
   "paciente_coincide": "SI | NO | NO_APARECE",
+  "contraste_documento": "<texto LITERAL del documento que pide o indica contraste (ej. 'RNM DE PELVIS CONTRASTADA', 'con contraste', 'con gadolinio'), en el procedimiento o en las observaciones, o '' si no menciona contraste>",
   "procedimientos_documento": "<TODOS los CUPS/procedimientos que trae el documento, con su código, sin omitir ninguna fila de la tabla (revisa hasta la última), o 'no aplica'>",
   "procedimientos_coinciden": "SI | NO | NO_APLICA",
   "firma_paciente": "SI | NO | NO_APLICA   (solo COMPROBANTE; en otros documentos NO_APLICA)",
@@ -236,7 +238,8 @@ def obtener_contexto_admision(consecutivo) -> dict:
                 SELECT TOP 1
                     sp.tipo_id, sp.num_id,
                     sp.primer_nom, sp.segundo_nom, sp.primer_ape, sp.segundo_ape,
-                    se.nombre AS entidad, c.alias AS contrato, sm.fecha_ing, c.nombre AS contrato_nombre
+                    se.nombre AS entidad, c.alias AS contrato, sm.fecha_ing, c.nombre AS contrato_nombre,
+                    sm.obs
                 FROM sis_maes sm
                 LEFT JOIN sis_paci sp ON sm.autoid = sp.autoid
                 LEFT JOIN sis_empre se ON LTRIM(RTRIM(sm.EPSPaciente)) = LTRIM(RTRIM(se.codigo))
@@ -255,6 +258,8 @@ def obtener_contexto_admision(consecutivo) -> dict:
                     "contrato": _reparar_texto((fila[7] or '').strip()),
                     "fecha": str(fila[8].date()) if fila[8] else '',
                     "contrato_nombre": _reparar_texto((fila[9] or '').strip()),
+                    # Observación de la admisión: ahí admisiones anota "CONTRASTADA" (mismo CUPS simple/contrastado)
+                    "observacion": _reparar_texto(str(fila[10] or '').strip()),
                 })
 
             cursor.execute(
@@ -770,10 +775,26 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_abdomen_pelvis=True)
 
-    # Contraste que el CUPS de la admisión no distingue (mismo CUPS para simple y contrastado): no es error
-    if (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
-            and resultado.get("paciente_coincide") != "NO"
-            and _solo_motivo_contraste(resultado.get("descripcion"), datos_admision)):
+    # Contraste con un CUPS que no distingue simple de contrastado: si el documento pide contrastada, la admisión
+    # en SIESA debe tener la observación de contrastada; si la tiene (o el documento no pide contraste), no es error
+    solo_contraste = (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
+                      and resultado.get("paciente_coincide") != "NO"
+                      and _solo_motivo_contraste(resultado.get("descripcion"), datos_admision))
+    falta_obs = (not _es_comprobante(tipo_documento) and resultado.get("paciente_coincide") != "NO"
+                 and (_falta_observacion_contraste(tipo_documento, resultado, texto, datos_admision)
+                      or (solo_contraste and _documento_pide_contraste(resultado.get("descripcion"))
+                          and _falta_observacion_contraste(tipo_documento, {'contraste_documento': 'contrastada'},
+                                                           '', datos_admision))))
+    if falta_obs and (resultado["tipo"] == "OK" or solo_contraste):
+        logger.info("%s contrastada sin observación en la admisión: '%s'", tipo_documento,
+                    resultado.get("contraste_documento"))
+        resultado.update(
+            tipo="AUTORIZACION" if (tipo_documento or '').upper() == 'AUTORIZACION' else "SOPORTES",
+            descripcion=(f"Contraste: la {(tipo_documento or '').lower()} indica contrastada "
+                         f"('{resultado.get('contraste_documento')}') y la admisión en SIESA no tiene la "
+                         "observación de contrastada (el CUPS es el mismo para simple y contrastado)."),
+            ajuste_contraste_observacion=True)
+    elif solo_contraste and not falta_obs:
         logger.info("%s: solo difiere el contraste, se descarta '%s'", tipo_documento, resultado.get("descripcion"))
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_contraste=True)
@@ -1448,6 +1469,59 @@ def _hay_otros_motivos(d: str, patron: str = None) -> bool:
     return bool(re.search(patron or _OTROS_MOTIVOS, re.sub(_AFIRMACIONES, ' ', d)))
 
 
+def _plano(t) -> str:
+    import unicodedata
+    return unicodedata.normalize('NFKD', str(t or '')).encode('ascii', 'ignore').decode().lower()
+
+
+def _procedimientos_admision(datos_admision) -> list:
+    """Líneas de la admisión con código CUPS (sin insumos de código None ni líneas revertidas), normalizadas."""
+    import re
+    return [_plano(c) for c in (datos_admision.get('cups') or [])
+            if re.match(r'\s*\d', str(c)) and '(revertido)' not in _plano(c)]
+
+
+def _pide_contraste(texto) -> bool:
+    """El texto pide o indica contraste (contrastada, con contraste, con gadolinio...), no 'sin contraste'."""
+    import re
+    t = re.sub(r'\b(sin|no)\s+(medio\s+de\s+)?contrast\w*', ' ', _plano(texto))
+    return bool(re.search(r'contrast|gadolin', t))
+
+
+def _cups_distingue_contraste(datos_admision) -> bool:
+    import re
+    return bool(re.search(r'contrast|simple', ' '.join(_procedimientos_admision(datos_admision))))
+
+
+def _admision_contrastada(datos_admision) -> bool:
+    """La observación de la admisión en SIESA (o la descripción del servicio) indica contrastada."""
+    return _pide_contraste(datos_admision.get('observacion')) or any(
+        _pide_contraste(c) for c in _procedimientos_admision(datos_admision))
+
+
+def _documento_pide_contraste(descripcion) -> bool:
+    """La descripción del hallazgo dice que el DOCUMENTO es contrastado (y la admisión no)."""
+    import re
+    d = _plano(descripcion)
+    return bool(re.search(r'(en\s+(el\s+)?)?(documento|orden|autorizacion)\s+(es|:)\s*con\b'
+                          r'|(documento|orden|autorizacion)\s+(\w+\s+){0,2}(incluye|pide|indica|solicita|especifica|'
+                          r'menciona|tiene|refiere|dice)\w*\s+(\w+\s+){0,3}(contrast|gadolin)'
+                          r'|(documento|orden|autorizacion)\s+(\w+\s+){0,3}contrastad', d))
+
+
+def _falta_observacion_contraste(tipo_documento, resultado, texto, datos_admision) -> bool:
+    """
+    Orden o autorización que pide el estudio CONTRASTADO, con un CUPS que no distingue simple de contrastado,
+    y la admisión en SIESA sin la observación de contrastada: es hallazgo (caso 35656).
+    """
+    if (tipo_documento or '').upper() not in ('ORDEN', 'AUTORIZACION'):
+        return False
+    if _cups_distingue_contraste(datos_admision) or _admision_contrastada(datos_admision):
+        return False
+    leido = resultado.get('contraste_documento')
+    return _pide_contraste(leido) and (not (texto or '').strip() or _pide_contraste(texto))
+
+
 def _solo_motivo_contraste(descripcion, datos_admision) -> bool:
     """
     True si el único motivo es el contraste ("la orden incluye contraste… la admisión no especifica
@@ -1461,7 +1535,7 @@ def _solo_motivo_contraste(descripcion, datos_admision) -> bool:
         return unicodedata.normalize('NFKD', str(t or '')).encode('ascii', 'ignore').decode().lower()
 
     d = plano(descripcion)
-    cups = plano(' '.join(str(c) for c in (datos_admision.get('cups') or [])))
+    cups = ' '.join(_procedimientos_admision(datos_admision))
     # "no aparece / no incluye contraste" habla del contraste mismo, no de otro procedimiento
     sin_contraste = re.sub(r'\bno\s+(se\s+)?(aparece|incluye|especifica|menciona|indica|registra|refiere|cubre|tiene)'
                            r'\s+((el|la|un|uso|medio|de|del)\s+)*contrast\w*', ' ', d)

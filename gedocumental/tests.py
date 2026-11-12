@@ -385,15 +385,40 @@ class ContrasteConAfirmacionesTests(SimpleTestCase):
         adm_simple = {'cups': ['883440 - RESONANCIA MAGNETICA DE PELVIS SIMPLE (cant. 1)']}
         self.assertFalse(_solo_motivo_contraste(self.DESC, adm_simple))
 
+    ADM_REAL = dict(ADMISION, paciente='LEIDY CAROLINA LOPEZ COCUY', identificacion='CC 40305485', cups=[
+        '883440 - RESONANCIA MAGNÉTICA DE PELVIS (cant. 1)', 'None - VENOCAT IV NO. 20 ROSADO (cant. 1)',
+        'None - CLARISCAN 0.5MMOL (ACIDO GADOTERICO) (cant. 1)',
+        'None - JERINGA INYECTOR DE CONTRASTE SINO MEDICAL -RESONADOR (cant. 1)'])
+
+    def test_autorizacion_contrastada_sin_observacion_es_hallazgo(self):
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM_REAL))
+
+    def test_admision_con_observacion_contrastada_se_descarta(self):
+        adm = dict(self.ADM_REAL, observacion='RM PELVIS CONTRASTADA')
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, adm)[0], DESCARTADO)
+
+    def test_ia_ok_pero_documento_contrastado_sin_observacion(self):
+        from gedocumental.services.ai_revision import _falta_observacion_contraste
+        r = {'contraste_documento': 'SS RNM DE PELVIS CONTRASTADA'}
+        self.assertTrue(_falta_observacion_contraste('AUTORIZACION', r, '', self.ADM_REAL))
+        self.assertFalse(_falta_observacion_contraste('AUTORIZACION', r, '',
+                                                      dict(self.ADM_REAL, observacion='contrastada')))
+        self.assertFalse(_falta_observacion_contraste('AUTORIZACION', {'contraste_documento': 'sin contraste'},
+                                                      '', self.ADM_REAL))
+        self.assertFalse(_falta_observacion_contraste('AUTORIZACION', {'contraste_documento': ''}, '',
+                                                      self.ADM_REAL))
+        self.assertFalse(_falta_observacion_contraste('RESULTADO', r, '', self.ADM_REAL))
+
     def test_nombre_incorrecto_sigue_siendo_otro_motivo(self):
         from gedocumental.services.ai_revision import _solo_motivo_contraste
         adm = {'cups': ['883440 - RESONANCIA MAGNETICA DE PELVIS (cant. 1)']}
         self.assertFalse(_solo_motivo_contraste("Nombre del usuario incorrecto. Contraste distinto.", adm))
 
-    def test_reverificacion_descarta(self):
-        adm = dict(ADMISION, paciente='LEIDY CAROLINA LOPEZ COCUY', identificacion='CC 40305485',
-                   cups=['883440 - RESONANCIA MAGNETICA DE PELVIS (cant. 1)'])
-        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, adm)[0], DESCARTADO)
+    def test_documento_sin_contraste_se_descarta(self):
+        # Solo difiere el contraste pero el documento no lo pide: el CUPS no distingue, no es error
+        desc = "Nombre del usuario correcto. Contraste en documento es SIN y en admisión no especifica."
+        adm = dict(ADMISION, cups=['883440 - RESONANCIA MAGNETICA DE PELVIS (cant. 1)'])
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, adm)[0], DESCARTADO)
 
 
 class NombreDelEncabezadoTests(SimpleTestCase):
