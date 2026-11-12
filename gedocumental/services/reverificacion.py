@@ -316,7 +316,7 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     """
     d = (descripcion or '').strip()
     if d and (tipo_documento or '').upper() in TIPOS_NO_REVISADOS:
-        return DESCARTADO, "Los soportes ADICIONALES no se revisan."
+        return DESCARTADO, "Las historias clínicas y los soportes ADICIONALES no se revisan."
     if d and _autorizacion_soat(tipo_documento, datos_admision):
         return DESCARTADO, "Autorización SOAT (radicado SIRAS): se anexa tal cual y no se valida."
     if d and _es_particular(datos_admision):

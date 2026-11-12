@@ -1078,9 +1078,14 @@ class NombrePegadoYHistoriaClinicaTests(SimpleTestCase):
     def test_historia_clinica_numero_mal_escrito_no_es_hallazgo(self):
         self.assertEqual(evaluar_hallazgo('HCLINICA', DOC_MAL, ADMISION)[0], DESCARTADO)
 
-    def test_historia_clinica_de_otra_persona_sigue(self):
-        desc = "Paciente no corresponde: documento 'MARIA LOPEZ GOMEZ', admisión 'PEDRO NEL ALVAREZ RODRIGUEZ'."
-        self.assertIsNone(evaluar_hallazgo('HCLINICA', desc, self.ADM))
+    def test_historia_clinica_no_se_revisa(self):
+        # Caso 35580: HC y adicionales no se revisan, ni siquiera el paciente
+        desc = "Paciente no corresponde: documento 'HCLINICA', admisión '35580'."
+        for tipo in ('HCLINICA', 'HCNEURO', 'ADICIONALES'):
+            self.assertEqual(evaluar_hallazgo(tipo, desc, self.ADM)[0], DESCARTADO)
+        from gedocumental.services.ai_revision import TIPOS_SIN_LLAMADA_IA
+        self.assertIn('HCLINICA', TIPOS_SIN_LLAMADA_IA)
+        self.assertIn('HCNEURO', TIPOS_SIN_LLAMADA_IA)
 
 
 class LecturasDeOtrosDocumentosTests(SimpleTestCase):

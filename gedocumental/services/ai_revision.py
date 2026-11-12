@@ -57,7 +57,7 @@ TIPOS_SIN_REVISION_IA = ('FACTURAPROVEEDOR',)
 # Tipos que no se mandan a la IA: además de los anteriores, la FACTURA (la genera SIESA; nada la valida y
 # la pre-auditoría no la tiene en cuenta)
 # Soportes ADICIONALES: no se revisan (ni paciente ni nada); no generan hallazgos ni cuentan para la pre-auditoría
-TIPOS_NO_REVISADOS = ('ADICIONALES',)
+TIPOS_NO_REVISADOS = ('ADICIONALES', 'HCLINICA', 'HCNEURO')   # soportes que no se revisan (ni con IA ni con reglas)
 TIPOS_SIN_LLAMADA_IA = TIPOS_SIN_REVISION_IA + ('FACTURA',) + TIPOS_NO_REVISADOS
 # Soportes que trae el paciente (historias clínicas, adicionales): solo se valida que sean del paciente
 TIPOS_SOLO_PACIENTE = ('HCLINICA', 'HCNEURO', 'ADICIONALES')
