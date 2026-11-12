@@ -1442,10 +1442,6 @@ _AFIRMACIONES = (r'\b(el\s+|la\s+)?(nombre(\s+del?\s+(usuario|paciente))?|pacien
                  r'\s+(es\s+|son\s+|esta\s+|estan\s+)?(correct[oa]s?|coincide[n]?|vigente|presente|legible)\b')
 
 
-_MEDIOS_CONTRASTE = (r'contraste|gadoli|gadoter|gadobut|gadopent|clariscan|dotarem|gadovist|magnevist|omniscan|'
-                     r'prohance|iopamid|iohexol|iopromid|ioversol|iodixan|omnipaque|ultravist|optiray|visipaque')
-
-
 def _hay_otros_motivos(d: str, patron: str = None) -> bool:
     """Busca otros motivos (vencida, nombre, firma...) en la descripción ya normalizada, sin las afirmaciones."""
     import re
@@ -1465,17 +1461,7 @@ def _solo_motivo_contraste(descripcion, datos_admision) -> bool:
         return unicodedata.normalize('NFKD', str(t or '')).encode('ascii', 'ignore').decode().lower()
 
     d = plano(descripcion)
-    lineas = [plano(c) for c in (datos_admision.get('cups') or []) if '(revertido)' not in plano(c)]
-    # Solo las líneas con código CUPS son procedimientos; los insumos (código None: jeringa del inyector de
-    # contraste, gadolinio...) no dicen si el CUPS distingue simple o contrastado (caso 35656)
-    procedimientos = [c for c in lineas if re.match(r'\s*\d', c)]
-    insumos = [c for c in lineas if not re.match(r'\s*\d', c)]
-    # Medio de contraste facturado como insumo: la admisión SÍ es contrastada, la diferencia CON/SIN no existe
-    if re.search(r'contrast', d) and any(re.search(_MEDIOS_CONTRASTE, c) for c in insumos) \
-            and not re.search(r'\bsimple\b|sin contraste', ' '.join(procedimientos)) \
-            and not re.search(_OTROS_MOTIVOS, re.sub(_AFIRMACIONES, ' ', d)):
-        return True
-    cups = ' '.join(procedimientos)
+    cups = plano(' '.join(str(c) for c in (datos_admision.get('cups') or [])))
     # "no aparece / no incluye contraste" habla del contraste mismo, no de otro procedimiento
     sin_contraste = re.sub(r'\bno\s+(se\s+)?(aparece|incluye|especifica|menciona|indica|registra|refiere|cubre|tiene)'
                            r'\s+((el|la|un|uso|medio|de|del)\s+)*contrast\w*', ' ', d)

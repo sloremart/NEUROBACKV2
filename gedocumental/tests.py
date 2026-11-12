@@ -385,19 +385,6 @@ class ContrasteConAfirmacionesTests(SimpleTestCase):
         adm_simple = {'cups': ['883440 - RESONANCIA MAGNETICA DE PELVIS SIMPLE (cant. 1)']}
         self.assertFalse(_solo_motivo_contraste(self.DESC, adm_simple))
 
-    def test_admision_con_insumos_de_contraste(self):
-        # Admisión real de la 35656: el CUPS no dice contraste, pero lleva gadolinio y la jeringa del inyector
-        from gedocumental.services.ai_revision import _solo_motivo_contraste
-        adm = {'cups': ['883440 - RESONANCIA MAGNÉTICA DE PELVIS (cant. 1)',
-                        'None - VENOCAT IV NO. 20 ROSADO (cant. 1)',
-                        'None - CLARISCAN 0.5MMOL (ACIDO GADOTERICO) (cant. 1)',
-                        'None - JERINGA INYECTOR DE CONTRASTE SINO MEDICAL -RESONADOR (cant. 1)',
-                        'None - (Revertido) -  CLARISCAN 0.5MMOL (ACIDO GADOTERICO) (cant. 1)']}
-        self.assertTrue(_solo_motivo_contraste(self.DESC, adm))
-        sin_insumos = {'cups': ['883440 - RESONANCIA MAGNÉTICA DE PELVIS (cant. 1)',
-                                'None - JERINGA 10 ML (cant. 1)']}
-        self.assertTrue(_solo_motivo_contraste(self.DESC, sin_insumos))
-
     def test_nombre_incorrecto_sigue_siendo_otro_motivo(self):
         from gedocumental.services.ai_revision import _solo_motivo_contraste
         adm = {'cups': ['883440 - RESONANCIA MAGNETICA DE PELVIS (cant. 1)']}
