@@ -574,6 +574,29 @@ class TerceroConApellidoDeMasTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('ORDEN', desc, self.ADM, autorizacion=self.AUT))
 
 
+class NombreConfirmadoPorOtroDocumentoTests(SimpleTestCase):
+    """Si la orden o la autorización tiene el nombre de SIESA, el nombre mal escrito en otro documento no es hallazgo."""
+    ADM = dict(ADMISION, paciente='MARIA ALEJANDRA FERNANDEZ DE CASTRO', identificacion='RC 1121981943')
+    DESC = ("Nombre del usuario incorrecto: documento 'MARIA ALEJANDRA FERNANDES CASTRO', "
+            "admisión 'MARIA ALEJANDRA FERNANDEZ DE CASTRO'.")
+    IGUAL = {'nombre': 'MARIA ALEJANDRA FERNANDEZ DE CASTRO', 'documento': '1121981943'}
+    MAL = {'nombre': 'MARIA ALEJANDRA FERNANDES CASTRO', 'documento': '1121981943'}
+
+    def test_orden_correcta_autorizacion_mal(self):
+        otras = [dict(self.IGUAL, tipo='ORDEN')]
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM, otras=otras)[0], DESCARTADO)
+
+    def test_autorizacion_correcta_orden_mal(self):
+        otras = [dict(self.IGUAL, tipo='AUTORIZACION')]
+        self.assertEqual(evaluar_hallazgo('ORDEN', self.DESC, self.ADM, otras=otras)[0], DESCARTADO)
+
+    def test_ninguno_externo_coincide_sigue(self):
+        # Solo el comprobante y el resultado (salen de SIESA) traen el nombre igual: no confirman
+        otras = [dict(self.IGUAL, tipo='COMPROBANTE'), dict(self.IGUAL, tipo='RESULTADO'),
+                 dict(self.MAL, tipo='ORDEN')]
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM, otras=otras))
+
+
 class AutorizacionSoatTests(SimpleTestCase):
     """Caso 33369: en SOAT la autorización es el radicado de SIRAS (trae el nombre de quien radica)."""
     ADM = dict(ADMISION, paciente='CAMILO ANDRES GOMEZ ORJUELA', identificacion='CC 1121846868',
@@ -1022,11 +1045,15 @@ class LecturasDeOtrosDocumentosTests(SimpleTestCase):
         otras = [self._otra('ORDEN', None, 'MARIA EDELMIRA SANTANA BEATRIZ')]   # la confirma
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras))
 
-    def test_varias_palabras_distintas_no_es_error_de_lectura(self):
+    def test_varias_palabras_distintas_con_orden_igual_a_siesa(self):
+        # La orden tiene el nombre de SIESA: el nombre mal escrito en la autorización no es hallazgo
         adm = dict(ADMISION, paciente='MARIA EDELMIRA SANTANA BENITO', identificacion='CC 21189487')
         desc = ("Nombre del usuario incorrecto: documento 'MARIA LUISA SANTANA BEATRIZ', "
                 "admisión 'MARIA EDELMIRA SANTANA BENITO'.")
         otras = [self._otra('ORDEN', '21189487', adm['paciente'])]
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras)[0], DESCARTADO)
+        # Si ningún documento externo coincide con SIESA, sigue siendo hallazgo
+        otras = [self._otra('ORDEN', '21189487', 'MARIA LUISA SANTANA BEATRIZ')]
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras))
 
     def test_variante_parecida_en_varios_documentos_el_error_es_de_zeus(self):

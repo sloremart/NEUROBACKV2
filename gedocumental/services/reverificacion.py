@@ -56,6 +56,9 @@ PACIENTE_SIN_DATOS = 'Paciente no corresponde: el documento no contiene'
 # el número del paciente no lo puede corregir facturación. Si la AUTORIZACIÓN de la EPS coincide con Zeus,
 # el error es del tercero y no es hallazgo; si la autorización dice lo mismo que la orden, el error es de Zeus.
 TIPOS_DE_TERCEROS = ('ORDEN', 'HCLINICA', 'HCNEURO', 'ADICIONALES')
+# Documentos externos (EPS, médico que remite) que confirman el nombre del paciente. El COMPROBANTE, la FACTURA y
+# el RESULTADO salen de SIESA y siempre lo traen igual: no confirman nada.
+FUENTES_NOMBRE = ('AUTORIZACION', 'ORDEN', 'HCLINICA')
 
 
 # ── Lectura del PDF (solo texto, sin imágenes ni IA) ─────────────────────────
@@ -358,6 +361,15 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
         if _mismo_paciente({'nombre_documento': leido, 'identificacion_documento': ''}, datos_admision):
             return CORREGIDO, (f"El nombre del archivo ('{leido}') coincide con ZeusSalud (corregido en Zeus o "
                                f"diferencia solo de formato).")
+        # Basta con que UN documento externo (autorización u orden) tenga el nombre de SIESA: el error de
+        # escritura de los demás (la EPS o el médico que remite lo escribió mal) no es hallazgo
+        confirma = next((x for x in otras or [] if (x.get('tipo') or '').upper() in FUENTES_NOMBRE
+                         and _mismo_paciente({'nombre_documento': x.get('nombre') or '',
+                                              'identificacion_documento': ''}, datos_admision)), None)
+        if confirma:
+            return DESCARTADO, (f"La {confirma['tipo'].lower()} tiene el nombre de SIESA "
+                                f"({datos_admision.get('paciente')}); el nombre de este documento ('{leido}') "
+                                "no se toma como hallazgo.")
         if tipo in TIPOS_SOLO_PACIENTE:
             return _solo_paciente(leido)
         if (tipo in TIPOS_DE_TERCEROS and autorizacion and _mismo_largo(leido, tokens_adm)
