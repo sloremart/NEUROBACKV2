@@ -829,6 +829,11 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(tipo="OK", descripcion="Documento correcto (orden manuscrita: no se valida)",
                          paciente_coincide="SI", ajuste_manuscrita=True)
 
+    # Hallazgo de procedimientos/cantidades que repite lo mismo de Zeus (caso 34448)
+    if resultado["tipo"] != "OK" and _cups_y_cantidades_como_zeus(resultado.get("descripcion"), datos_admision):
+        logger.info("CUPS y cantidades iguales a Zeus: se descarta '%s'", resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cups_iguales=True)
+
     # La IA marcó hallazgo pero sus comparaciones dicen lo mismo en documento y admisión
     if resultado["tipo"] != "OK" and _sin_diferencias(resultado.get("descripcion")):
         logger.info("Hallazgo sin diferencias: se descarta '%s'", resultado.get("descripcion"))
@@ -1339,6 +1344,51 @@ def _solo_motivo_procedimiento(descripcion) -> bool:
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
     sobre_procedimiento = re.search(r'procedimiento|cups|estudio|servicio|no se especifica|no incluye|no aparece', d)
     return bool(sobre_procedimiento and not re.search(_OTROS_MOTIVOS, d))
+
+
+def _cups_y_cantidades_como_zeus(descripcion, datos_admision: dict) -> bool:
+    """
+    True si un hallazgo de procedimientos/cantidades no tiene ninguna diferencia real con Zeus: los CUPS que
+    la IA dice que tiene el documento son los mismos de la admisión y cada "N para CUPS" es la cantidad de
+    Zeus. Caso 34448: "Procedimientos no coinciden: documento tiene 871070 y 871040, admisión tiene 871040 y
+    871070. Cantidad anotada en documento es 2 para 871070, pero solo 1 para 871040" con Zeus 871070 x2 y
+    871040 x1.
+    """
+    import re
+    import unicodedata
+    d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    if not d or ' | ' in d or 'se esperaba' in d:
+        return False
+    if re.search(r'vencid|vigencia|caducad|numero de autorizacion|sin numero|legib|firma|paciente|nombre|'
+                 r'identificacion|fecha|tachon|enmendad|lateralidad|izquierd|derech|bilateral|contraste|'
+                 r'no cubre|no incluye|falta|no aparece|no se encuentra|valor|copago|cuota', d):
+        return False
+    zeus = {}
+    for c in datos_admision.get('cups') or []:
+        m = re.match(r'\s*(\d{5}[0-9A-Za-z])\b.*?(?:\(cant\.\s*(\d+)\))?\s*$', str(c))
+        if m:
+            zeus[m.group(1).lower()] = int(m.group(2)) if m.group(2) else None
+
+    def codigos(t):
+        return set(re.findall(r'\b\d{5}[0-9a-z]\b', t))
+
+    if not zeus or not codigos(d) or not codigos(d) <= set(zeus):
+        return False
+    comprobado = False
+    m = re.search(r'documento\s+tiene\s+(.+?),?\s+(?:y\s+)?(?:la\s+)?admision\s+tiene\s+(.+?)(?:[.;]|$)', d)
+    if m:
+        if not (codigos(m.group(1)) == codigos(m.group(2)) == set(zeus)):
+            return False
+        comprobado = True
+    cantidades = re.findall(r'\b(\d{1,3})\s+para\s+(?:el\s+)?(?:procedimiento\s+|cups\s+)?(\d{5}[0-9a-z])\b', d)
+    for n, cups in cantidades:
+        if zeus.get(cups) != int(n):
+            return False
+    if cantidades:
+        comprobado = True
+    elif 'cantidad' in d:
+        return False   # habla de cantidades sin decir de qué CUPS: no se puede comprobar
+    return comprobado
 
 
 def _sin_diferencias(descripcion) -> bool:

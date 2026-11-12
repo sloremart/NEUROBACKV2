@@ -511,6 +511,27 @@ class NombreAbreviadoTests(SimpleTestCase):
                                              self.ADM), nombre)
 
 
+class CupsIgualesZeusTests(SimpleTestCase):
+    """Caso 34448: la IA dice que no coinciden, pero repite los mismos CUPS y cantidades de Zeus."""
+    ADM = dict(ADMISION, paciente='ANGELA PATRICIA GOMEZ', identificacion='CC 39675670', cups=[
+        '871040 - RADIOGRAFÍA DE COLUMNA LUMBOSACRA (cant. 1)',
+        '871070 - RADIOGRAFÍA DINÁMICA DE COLUMNA VERTEBRAL (cant. 2)'])
+    DESC = ("Procedimientos no coinciden: documento tiene 871070 y 871040, admisión tiene 871040 y 871070. "
+            "Cantidad anotada en documento es 2 para 871070, pero solo 1 para 871040.")
+
+    def test_mismos_cups_y_cantidades_se_descarta(self):
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM)[0], DESCARTADO)
+
+    def test_diferencia_real_sigue(self):
+        from gedocumental.services.ai_revision import _cups_y_cantidades_como_zeus
+        self.assertFalse(_cups_y_cantidades_como_zeus(self.DESC.replace('es 2 para', 'es 3 para'), self.ADM))
+        self.assertFalse(_cups_y_cantidades_como_zeus(
+            "Procedimientos no coinciden: documento tiene 871070, admisión tiene 871040 y 871070.", self.ADM))
+        self.assertFalse(_cups_y_cantidades_como_zeus(
+            "Cantidad autorizada en el documento es 1, se esperaba 2 para el procedimiento 871070.", self.ADM))
+        self.assertFalse(_cups_y_cantidades_como_zeus(self.DESC + " Autorización vencida.", self.ADM))
+
+
 class AutorizacionSoatTests(SimpleTestCase):
     """Caso 33369: en SOAT la autorización es el radicado de SIRAS (trae el nombre de quien radica)."""
     ADM = dict(ADMISION, paciente='CAMILO ANDRES GOMEZ ORJUELA', identificacion='CC 1121846868',
