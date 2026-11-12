@@ -361,15 +361,20 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
         if _mismo_paciente({'nombre_documento': leido, 'identificacion_documento': ''}, datos_admision):
             return CORREGIDO, (f"El nombre del archivo ('{leido}') coincide con ZeusSalud (corregido en Zeus o "
                                f"diferencia solo de formato).")
-        # Basta con que UN documento externo (autorización u orden) tenga el nombre de SIESA: el error de
-        # escritura de los demás (la EPS o el médico que remite lo escribió mal) no es hallazgo
-        confirma = next((x for x in otras or [] if (x.get('tipo') or '').upper() in FUENTES_NOMBRE
-                         and _mismo_paciente({'nombre_documento': x.get('nombre') or '',
-                                              'identificacion_documento': ''}, datos_admision)), None)
-        if confirma:
-            return DESCARTADO, (f"La {confirma['tipo'].lower()} tiene el nombre de SIESA "
-                                f"({datos_admision.get('paciente')}); el nombre de este documento ('{leido}') "
-                                "no se toma como hallazgo.")
+        # El nombre se compara entre los documentos externos (autorización, orden, HC externa). Neuro no puede
+        # corregir lo que escribió la EPS o el médico que remite: el nombre distinto solo es hallazgo si es un
+        # error de SIESA, es decir, si otro documento externo escribe el nombre igual a este (o una variante
+        # parecida en dos o más). Si los demás tienen el nombre de SIESA, u otra escritura, es error del documento.
+        externas = [x for x in otras or [] if (x.get('tipo') or '').upper() in FUENTES_NOMBRE
+                    and len(_tokens_nombre(x.get('nombre'))) >= 2]
+        if tipo in FUENTES_NOMBRE and externas:
+            distintas = [t for t in _separar_pegadas(_tokens_doc(leido), tokens_adm)
+                         if not _buscar_palabra(t, tokens_adm)]
+            if not any(_variante_confirmada(t, tokens_adm, externas) for t in distintas):
+                return DESCARTADO, (f"Ningún otro documento externo escribe el nombre como '{leido}' "
+                                    f"({_resumen_lecturas(externas, 'nombre')}); SIESA: "
+                                    f"{datos_admision.get('paciente')}. Error de escritura del documento, "
+                                    "no de SIESA ni de admisiones.")
         if tipo in TIPOS_SOLO_PACIENTE:
             return _solo_paciente(leido)
         if (tipo in TIPOS_DE_TERCEROS and autorizacion and _mismo_largo(leido, tokens_adm)

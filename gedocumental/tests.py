@@ -590,11 +590,18 @@ class NombreConfirmadoPorOtroDocumentoTests(SimpleTestCase):
         otras = [dict(self.IGUAL, tipo='AUTORIZACION')]
         self.assertEqual(evaluar_hallazgo('ORDEN', self.DESC, self.ADM, otras=otras)[0], DESCARTADO)
 
-    def test_ninguno_externo_coincide_sigue(self):
-        # Solo el comprobante y el resultado (salen de SIESA) traen el nombre igual: no confirman
+    def test_dos_externos_con_el_mismo_error_es_de_siesa(self):
+        # La orden escribe el nombre igual que la autorización y distinto de SIESA: el error es de SIESA
         otras = [dict(self.IGUAL, tipo='COMPROBANTE'), dict(self.IGUAL, tipo='RESULTADO'),
                  dict(self.MAL, tipo='ORDEN')]
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM, otras=otras))
+
+    def test_cada_externo_con_un_error_distinto_no_es_hallazgo(self):
+        otras = [{'tipo': 'ORDEN', 'documento': None, 'nombre': 'MARIA ALEJANDRA HERNANDEZ DE CASTRO'}]
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM, otras=otras)[0], DESCARTADO)
+
+    def test_sin_otro_documento_externo_no_se_puede_comparar(self):
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM, otras=[]))
 
 
 class AutorizacionSoatTests(SimpleTestCase):
@@ -1036,12 +1043,13 @@ class LecturasDeOtrosDocumentosTests(SimpleTestCase):
         otras = [self._otra('ORDEN', '21189487', 'SANTANA BENITO MARIA EDELMIRA')]
         self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras)[0], DESCARTADO)
 
-    def test_una_palabra_distinta_sin_confirmacion_de_zeus_se_mantiene(self):
+    def test_una_palabra_distinta_cada_documento_distinto(self):
         adm = dict(ADMISION, paciente='MARIA EDELMIRA SANTANA BENITO', identificacion='CC 21189487')
         desc = ("Nombre del usuario incorrecto: documento 'MARIA EDELMIRA SANTANA BEATRIZ', "
                 "admisión 'MARIA EDELMIRA SANTANA BENITO'.")
-        otras = [self._otra('ORDEN', None, 'MARIA SANTANA LOPEZ')]   # tampoco coincide con Zeus
-        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras))
+        # La orden escribe otra cosa: nadie respalda 'BEATRIZ', es error de escritura del documento
+        otras = [self._otra('ORDEN', None, 'MARIA SANTANA LOPEZ')]
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras)[0], DESCARTADO)
         otras = [self._otra('ORDEN', None, 'MARIA EDELMIRA SANTANA BEATRIZ')]   # la confirma
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm, otras=otras))
 
