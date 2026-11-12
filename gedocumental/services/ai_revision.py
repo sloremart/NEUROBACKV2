@@ -149,7 +149,7 @@ Responde ÚNICAMENTE con un JSON válido sin texto adicional. Completa SIEMPRE l
 aunque la primera ya haya fallado:
 {
   "paciente_documento": "<nombre e identificación tal como aparecen en el documento, o 'no aparece'>",
-  "nombre_documento": "<solo el nombre completo del paciente TRANSCRITO LETRA POR LETRA tal como está escrito en el documento, sin corregir ortografía ni completarlo con el de la admisión, o ''>",
+  "nombre_documento": "<solo el nombre completo del paciente TRANSCRITO LETRA POR LETRA tal como está escrito en el documento, sin corregir ortografía ni completarlo con el de la admisión; tómalo del campo IMPRESO del paciente, NUNCA de la firma manuscrita, o ''>",
   "identificacion_documento": "<solo el número de documento del paciente (el que va junto a IDENTIFICACIÓN, CC, TI, RC, CE, documento), sin tipo ni separadores, o ''. NUNCA el número de fórmula, folio, factura, autorización, orden o código de barras>",
   "paciente_coincide": "SI | NO | NO_APARECE",
   "procedimientos_documento": "<TODOS los CUPS/procedimientos que trae el documento, con su código, sin omitir ninguna fila de la tabla (revisa hasta la última), o 'no aplica'>",
@@ -1136,9 +1136,12 @@ def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
     if not adm or not doc or (len(doc) < 2 and not pegado_servicio):
         return False
     disponibles = list(adm)
+    # Nombre abreviado (firma o campo corto: "Ann G Carrizo" de ANNY GICED CARRIZO CHOURIO, caso 35838): con
+    # menos palabras que Zeus, cada palabra puede ser el comienzo de un nombre o apellido
+    abreviado = len(doc) < len(adm)
     for i, palabra in enumerate(doc):
         igual = _buscar_palabra(palabra, disponibles)
-        if igual is None and i == len(doc) - 1 and len(palabra) >= 3:
+        if igual is None and (abreviado or i == len(doc) - 1) and len(palabra) >= 3:
             # Última palabra cortada por el ancho del campo del formulario ("MARTI" de MARTINEZ)
             igual = next((a for a in disponibles if a.startswith(palabra)), None)
         if igual is None:

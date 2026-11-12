@@ -493,6 +493,24 @@ class NombreRepetidoTests(SimpleTestCase):
         self.assertFalse(_mismo_paciente(dict(doc, nombre_documento='MARIANGEL LUCIA GARZON SANCHEZ'), self.ADM))
 
 
+class NombreAbreviadoTests(SimpleTestCase):
+    """Caso 35838: la IA tomó la firma 'Ann G Carrizo'; el campo impreso dice ANNY GICED CARRIZO CHOURIO."""
+    ADM = dict(ADMISION, paciente='ANNY GICED CARRIZO CHOURIO', identificacion='PT 5963952')
+
+    def test_nombre_abreviado_es_la_misma_persona(self):
+        from gedocumental.services.ai_revision import _mismo_paciente
+        self.assertTrue(_mismo_paciente({'nombre_documento': 'Ann G Carrizo', 'identificacion_documento': ''},
+                                        self.ADM))
+        desc = "Nombre del usuario incorrecto: documento 'Ann G Carrizo', admisión 'ANNY GICED CARRIZO CHOURIO'."
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, self.ADM)[0], CORREGIDO)
+
+    def test_nombre_completo_mal_escrito_sigue_siendo_hallazgo(self):
+        from gedocumental.services.ai_revision import _mismo_paciente
+        for nombre in ('ANN GICED CARRIZO CHOURIO', 'ANNY GISED CARRIZO CHOURIO', 'ANA CARRIZO'):
+            self.assertFalse(_mismo_paciente({'nombre_documento': nombre, 'identificacion_documento': ''},
+                                             self.ADM), nombre)
+
+
 class AutorizacionSoatTests(SimpleTestCase):
     """Caso 33369: en SOAT la autorización es el radicado de SIRAS (trae el nombre de quien radica)."""
     ADM = dict(ADMISION, paciente='CAMILO ANDRES GOMEZ ORJUELA', identificacion='CC 1121846868',
