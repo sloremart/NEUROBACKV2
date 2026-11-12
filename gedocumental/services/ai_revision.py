@@ -236,7 +236,7 @@ def obtener_contexto_admision(consecutivo) -> dict:
                 SELECT TOP 1
                     sp.tipo_id, sp.num_id,
                     sp.primer_nom, sp.segundo_nom, sp.primer_ape, sp.segundo_ape,
-                    se.nombre AS entidad, c.alias AS contrato, sm.fecha_ing
+                    se.nombre AS entidad, c.alias AS contrato, sm.fecha_ing, c.nombre AS contrato_nombre
                 FROM sis_maes sm
                 LEFT JOIN sis_paci sp ON sm.autoid = sp.autoid
                 LEFT JOIN sis_empre se ON LTRIM(RTRIM(sm.EPSPaciente)) = LTRIM(RTRIM(se.codigo))
@@ -254,6 +254,7 @@ def obtener_contexto_admision(consecutivo) -> dict:
                     "entidad": _reparar_texto((fila[6] or '').strip()),
                     "contrato": _reparar_texto((fila[7] or '').strip()),
                     "fecha": str(fila[8].date()) if fila[8] else '',
+                    "contrato_nombre": _reparar_texto((fila[9] or '').strip()),
                 })
 
             cursor.execute(
@@ -1543,7 +1544,7 @@ def _es_particular(datos_admision: dict) -> bool:
 def _es_soat(datos_admision: dict) -> bool:
     """Admisión de una aseguradora SOAT (accidente de tránsito): su 'autorización' es el radicado de SIRAS."""
     import re
-    texto = f"{datos_admision.get('contrato') or ''} {datos_admision.get('entidad') or ''}".upper()
+    texto = ' '.join(str(datos_admision.get(k) or '') for k in ('contrato', 'contrato_nombre', 'entidad')).upper()
     return bool(re.search(r'\bSOAT\b', texto))
 
 
