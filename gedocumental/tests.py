@@ -607,6 +607,22 @@ class NombreConfirmadoPorOtroDocumentoTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM, otras=[]))
 
 
+class ApellidoConApostrofoTests(SimpleTestCase):
+    """Caso 33220: FOMAG escribe PACHON D`ACHIARDI; SIESA, PACHON DACHIARDI."""
+    ADM = dict(ADMISION, paciente='MARTHA MARLEN PACHON DACHIARDI', identificacion='CC 41721505')
+
+    def test_apostrofo_es_formato(self):
+        desc = ("Nombre del usuario incorrecto: documento 'PACHON D' ACHIARDI MARTHA MARLEN', "
+                "admisión 'MARTHA MARLEN PACHON DACHIARDI'.")
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc.replace("D' ", "D` "), self.ADM)[0], CORREGIDO)
+        from gedocumental.services.ai_revision import _mismo_paciente
+        for nombre in ("PACHON D`ACHIARDI MARTHA MARLEN", "PACHON D’ ACHIARDI MARTHA MARLEN"):
+            self.assertTrue(_mismo_paciente({'nombre_documento': nombre, 'identificacion_documento': ''},
+                                            self.ADM), nombre)
+        self.assertFalse(_mismo_paciente({'nombre_documento': 'PACHON ACHIARDI MARTHA MARLEN',
+                                          'identificacion_documento': ''}, self.ADM))
+
+
 class AutorizacionSoatTests(SimpleTestCase):
     """Caso 33369: en SOAT la autorización es el radicado de SIRAS (trae el nombre de quien radica)."""
     ADM = dict(ADMISION, paciente='CAMILO ANDRES GOMEZ ORJUELA', identificacion='CC 1121846868',

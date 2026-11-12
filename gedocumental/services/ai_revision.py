@@ -940,6 +940,9 @@ def _tokens_nombre(texto) -> list[str]:
     import re
     import unicodedata
     t = _reparar_texto(str(texto or ''))
+    # Apellido con apóstrofo ("PACHON D`ACHIARDI", "D' ACHIARDI", "O'CONNOR"): la partícula va pegada
+    # (en SIESA se escribe DACHIARDI, caso 33220)
+    t = re.sub(r"(?<![A-Za-z])([A-Za-z])\s*['`\u00b4\u2018\u2019]\s*(?=[A-Za-z])", r"\1", t)
     # Vocal tildada dañada por la codificación de Zeus ("HERNÃ?NDEZ" = HERNÁNDEZ): una sola letra ilegible
     t = re.sub(r'Ã[\?�\u0081\u008d\u008f\u0090\u009d]', '#', t)
     # Letras ilegibles por la codificación ("CASTA?EDA", "CASTA\ufffdEDA") quedan como comodín '#'
