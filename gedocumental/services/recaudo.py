@@ -77,9 +77,12 @@ def datos_recaudo_zeus(estudio: int) -> dict | None:
             # Solo los PROCEDIMIENTOS: SIESA liquida el copago sobre ellos, no sobre los artículos (medio de
             # contraste, jeringas, catéter...). Caso 34368: 11.5 % de 494.400 + 571.468 = 122.600 cobrado
             cursor.execute(
-                "SELECT LTRIM(RTRIM(descripcion)), ISNULL(total, 0) FROM sis_deta WHERE estudio = %s "
-                "AND ISNULL(LTRIM(RTRIM(TipoItem)), 'Procedimiento') IN ('Procedimiento', '')", [estudio])
-            servicios = [(d or '', float(t or 0)) for d, t in cursor.fetchall()]
+                "SELECT LTRIM(RTRIM(descripcion)), ISNULL(total, 0), ISNULL(cantidad, 1) FROM sis_deta "
+                "WHERE estudio = %s AND ISNULL(LTRIM(RTRIM(TipoItem)), 'Procedimiento') IN ('Procedimiento', '')",
+                [estudio])
+            filas = cursor.fetchall()
+            servicios = [(d or '', float(t or 0)) for d, t, _ in filas]
+            sesiones = int(sum(float(c or 1) for _, _, c in filas))
             cursor.execute(
                 "SELECT UPPER(LTRIM(RTRIM(descripcion))), SUM(valor) FROM pagos "
                 "WHERE con_estudio = %s AND activo = 1 GROUP BY UPPER(LTRIM(RTRIM(descripcion)))", [estudio])
@@ -94,6 +97,7 @@ def datos_recaudo_zeus(estudio: int) -> dict | None:
         "afiliado_zeus": AFILIADO_ZEUS.get(fila[3]),
         "servicios": servicios,
         "valor_servicios": sum(t for _, t in servicios),
+        "sesiones": sesiones,
         "consultas": [('CONSULTA' in d.upper()) for d, _ in servicios],
         "cuota_moderadora": cobros.get('CUOTA MODERADORA', 0.0),
         "copago": cobros.get('COPAGO', 0.0),
@@ -238,6 +242,12 @@ def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
     if cobrado_tipo != esperado_tipo:
         return 'RECAUDO', "; ".join([f"Tipo de cobro incorrecto: se recaudó {cobrado_txt}; debía ser {debia}"]
                                     + notas)
+    # Valor POR SESIÓN ("PAGUE ... POR CADA SESION $29.800", "VALIDO PARA 2 SESIONES", caso 35301): lo cobrado
+    # puede ser el valor de la autorización por las sesiones (cantidad) de la admisión en Zeus
+    if (valor_doc and esperado_valor == valor_doc and cobrado > valor_doc + TOLERANCIA_PESOS
+            and any(abs(cobrado - valor_doc * n) <= TOLERANCIA_PESOS
+                    for n in range(2, int(z.get("sesiones") or 1) + 1))):
+        return ('INFORMACION', notas[0]) if notas else None
     if esperado_valor and abs(cobrado - esperado_valor) > TOLERANCIA_PESOS:
         return 'RECAUDO', "; ".join([f"Valor recaudado distinto: {cobrado_txt}; debía ser {debia}"] + notas)
     return ('INFORMACION', notas[0]) if notas else None

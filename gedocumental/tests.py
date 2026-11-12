@@ -1375,6 +1375,16 @@ class RecaudoTests(SimpleTestCase):
     def test_copago_correcto_beneficiario(self):
         self.assertIsNone(self._verificar({'requiere_pago': 'SI', 'categoria': 'B'}, copago=17300.0))
 
+    def test_valor_por_sesion(self):
+        # Caso 35301 (Capital Salud): "PAGUE POR CADA SESION $29.800", 2 sesiones; se cobró $59.600
+        doc = {'requiere_pago': 'SI', 'tipo_cobro': 'COPAGO', 'valor': '29.800'}
+        zeus = dict(empresa='EPS025', contrato='CAPITAL SALUD CONTRIBUTIVO', copago=59600.0)
+        self.assertIsNone(self._verificar(doc, sesiones=2, **zeus))
+        # Con una sola sesión en la admisión, el doble sí es valor distinto
+        self.assertEqual(self._verificar(doc, sesiones=1, **zeus)[0], 'RECAUDO')
+        # Tres veces el valor con 2 sesiones tampoco
+        self.assertEqual(self._verificar(doc, sesiones=2, **dict(zeus, copago=89400.0))[0], 'RECAUDO')
+
     def test_copago_cuando_era_cuota_moderadora(self):
         # Cotizante categoría A en un procedimiento: se cobra el valor de la categoría ($5.000) como copago;
         # cobrar el 11,5 % es un valor distinto
