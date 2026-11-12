@@ -149,8 +149,8 @@ Responde ÚNICAMENTE con un JSON válido sin texto adicional. Completa SIEMPRE l
 aunque la primera ya haya fallado:
 {
   "paciente_documento": "<nombre e identificación tal como aparecen en el documento, o 'no aparece'>",
-  "nombre_documento": "<solo el nombre completo del paciente TRANSCRITO LETRA POR LETRA tal como está escrito en el documento, sin corregir ortografía ni completarlo con el de la admisión; tómalo del campo IMPRESO del paciente, NUNCA de la firma manuscrita, o ''>",
-  "identificacion_documento": "<solo el número de documento del paciente (el que va junto a IDENTIFICACIÓN, CC, TI, RC, CE, documento), sin tipo ni separadores, o ''. NUNCA el número de fórmula, folio, factura, autorización, orden o código de barras>",
+  "nombre_documento": "<solo el nombre completo del paciente TRANSCRITO LETRA POR LETRA tal como está escrito en el documento, sin corregir ortografía ni completarlo con el de la admisión; tómalo del campo IMPRESO del paciente (\"PACIENTE:\", \"Nombre del paciente\"), NUNCA de la firma manuscrita ni del ENCABEZADO (el nombre del médico, consultorio o IPS que va arriba con dirección, teléfono y NIT no es el paciente), o ''>",
+  "identificacion_documento": "<solo el número de documento del paciente (el que va junto a IDENTIFICACIÓN, CC, TI, RC, CE, documento), sin tipo ni separadores, o ''. NUNCA el NIT del encabezado ni el número de fórmula, folio, factura, autorización, orden o código de barras>",
   "paciente_coincide": "SI | NO | NO_APARECE",
   "procedimientos_documento": "<TODOS los CUPS/procedimientos que trae el documento, con su código, sin omitir ninguna fila de la tabla (revisa hasta la última), o 'no aplica'>",
   "procedimientos_coinciden": "SI | NO | NO_APLICA",
@@ -386,7 +386,8 @@ def _transcribir_procedimientos(client, modelo: str, imagenes: list[str]) -> tup
 PROMPT_RELEER_NOMBRE = (
     "Transcribe LETRA POR LETRA el nombre completo del PACIENTE tal como está escrito en el documento (campo "
     "\"Paciente\", \"Nombre del paciente\" o DATOS DEL PACIENTE), con TODOS sus nombres y apellidos, sin corregir "
-    "ni omitir ninguno. No tomes al médico, al acompañante ni a quien imprime. Responde en JSON: "
+    "ni omitir ninguno. No tomes al médico, al acompañante, a quien imprime ni el nombre del ENCABEZADO (médico, "
+    "consultorio o IPS con dirección, teléfono y NIT). Responde en JSON: "
     '{"nombre": "<nombre completo del paciente>"}'
 )
 
@@ -687,13 +688,19 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
 
     # Escaneado con "nombre mal escrito": puede ser una mala lectura de la imagen (RIVERA por RIVEROS, y sin
     # URREA, caso 35228). Se pide solo el nombre (consulta corta); si la relectura es el nombre de Zeus, no hay error.
-    if (imagenes and not _reintento and resultado.get("paciente_coincide") == "NOMBRE_MAL_ESCRITO"
+    # También con "Paciente no corresponde" en un escaneo: la IA pudo tomar el nombre del encabezado (médico o IPS)
+    # y el NIT como documento (caso 35608: 'CAMILO HERNANDEZ RUBIO', NIT 16623180, paciente CABRERA JARAMILLO
+    # CAMILO). La relectura debe traer el nombre COMPLETO de Zeus; el número leído antes no se usa.
+    otra_persona = (resultado.get("paciente_coincide") == "NO"
+                    and str(resultado.get("descripcion") or '').startswith("Paciente no corresponde: documento"))
+    if (imagenes and not _reintento and (resultado.get("paciente_coincide") == "NOMBRE_MAL_ESCRITO" or otra_persona)
             and not _nombre_en_texto(resultado.get("nombre_documento"), texto)):
         nombre, tokens = _releer_nombre(client, modelo, imagenes)
         resultado["tokens"] = [a + b for a, b in zip(resultado["tokens"], tokens)]
         resultado["llamadas"] = resultado.get("llamadas", 1) + 1
         if nombre and _mismo_paciente({'nombre_documento': nombre,
-                                       'identificacion_documento': resultado.get('identificacion_documento')},
+                                       'identificacion_documento': ('' if otra_persona
+                                                                    else resultado.get('identificacion_documento'))},
                                       datos_admision):
             logger.info("Relectura del nombre '%s' coincide con Zeus: se descarta '%s'", nombre,
                         resultado.get("descripcion"))

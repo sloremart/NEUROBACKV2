@@ -372,6 +372,37 @@ class RelecturaCantidadTests(SimpleTestCase):
         self.assertEqual(self._llamar({"cantidad_anotada": "3"})['tipo'], 'AUTORIZACION')
 
 
+class NombreDelEncabezadoTests(SimpleTestCase):
+    """Caso 35608: la IA tomó al médico del encabezado (CAMILO HERNANDEZ RUBIO, NIT 16623180) como paciente."""
+    ADM = dict(ADMISION, paciente='CAMILO CABRERA JARAMILLO', identificacion='CC 17312171')
+
+    def _llamar(self, relectura):
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        revision = {
+            "nombre_documento": "CAMILO HERNANDEZ RUBIO", "identificacion_documento": "16623180",
+            "paciente_coincide": "NO", "procedimientos_coinciden": "SI", "firma_paciente": "NO_APLICA",
+            "tipo": "INFORMACION", "descripcion": "Paciente no corresponde.",
+        }
+        def respuesta(contenido):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
+                                  usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [respuesta(revision), respuesta(relectura)]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            return _llamar_openai('', ['img'], 'ORDEN', self.ADM)
+
+    def test_relectura_con_el_paciente_no_es_hallazgo(self):
+        r = self._llamar({"nombre": "CABRERA JARAMILLO CAMILO"})
+        self.assertEqual(r['tipo'], 'OK')
+        self.assertEqual(r['paciente_coincide'], 'SI')
+
+    def test_relectura_con_otra_persona_sigue(self):
+        r = self._llamar({"nombre": "CAMILO HERNANDEZ RUBIO"})
+        self.assertTrue(r['descripcion'].startswith('Paciente no corresponde: documento'))
+
+
 class CantidadPorCupsTests(SimpleTestCase):
     """Caso 33030: dos autorizaciones en un PDF ('CANTIDAD 2' para 930860, 'CANTIDAD 8' para 891509)."""
     ADM = dict(ADMISION, paciente='ARNOLDO ROJAS', identificacion='CC 17313342', cups=[
