@@ -367,7 +367,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
         # parecida en dos o más). Si los demás tienen el nombre de SIESA, u otra escritura, es error del documento.
         externas = [x for x in otras or [] if (x.get('tipo') or '').upper() in FUENTES_NOMBRE
                     and len(_tokens_nombre(x.get('nombre'))) >= 2]
-        if tipo in FUENTES_NOMBRE and externas:
+        # Un nombre o apellido de MÁS en el documento (BEJARANO FERNANDEZ DE CASTRO MARIA ALEJANDRA frente a
+        # MARIA ALEJANDRA FERNANDEZ DE CASTRO en SIESA, caso 33686) es SIESA incompleto: sigue siendo hallazgo.
+        # La revisión OK de otro documento no lo desmiente, porque la IA acepta un apellido faltante como formato.
+        if tipo in FUENTES_NOMBRE and externas and not _contiene_nombre(leido, tokens_adm):
             distintas = [t for t in _separar_pegadas(_tokens_doc(leido), tokens_adm)
                          if not _buscar_palabra(t, tokens_adm)]
             if not any(_variante_confirmada(t, tokens_adm, externas) for t in distintas):
@@ -387,14 +390,6 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
                 return DESCARTADO, (f"Error de escritura del nombre en el documento del tercero ('{leido}'); "
                                     f"la autorización de la EPS coincide con ZeusSalud "
                                     f"({datos_admision.get('paciente')}).")
-        # Documento del tercero con MÁS palabras que Zeus (un apellido de más) y que contiene todo el nombre de
-        # Zeus, con la autorización de la EPS igual a Zeus: la EPS manda (caso 33686: orden 'BEJARANO FERDANDEZ
-        # DE CASTRO MARIA ALEJANDRA', Zeus y autorización 'MARIA ALEJANDRA FERNANDEZ DE CASTRO')
-        if (tipo in TIPOS_DE_TERCEROS and autorizacion and _contiene_nombre(leido, tokens_adm)
-                and _mismo_paciente({'nombre_documento': autorizacion.get('nombre') or '',
-                                     'identificacion_documento': ''}, datos_admision)):
-            return DESCARTADO, (f"El documento del tercero trae el nombre con palabras de más ('{leido}'); "
-                                f"la autorización de la EPS coincide con ZeusSalud ({datos_admision.get('paciente')}).")
         if otras:
             palabras = _separar_pegadas(_tokens_doc(leido), tokens_adm)
             distintas = [t for t in palabras if not _buscar_palabra(t, tokens_adm)]

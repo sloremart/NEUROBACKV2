@@ -560,8 +560,11 @@ class TerceroConApellidoDeMasTests(SimpleTestCase):
             "admisión 'MARIA ALEJANDRA FERNANDEZ DE CASTRO'.")
     AUT = {'nombre': 'MARIA ALEJANDRA FERNANDEZ DE CASTRO', 'documento': '1121981943'}
 
-    def test_orden_con_apellido_de_mas_se_descarta(self):
-        self.assertEqual(evaluar_hallazgo('ORDEN', self.DESC, self.ADM, autorizacion=self.AUT)[0], DESCARTADO)
+    def test_apellido_de_mas_es_siesa_incompleto(self):
+        # La orden (y la autorización de Salud Total) traen BEJARANO: a SIESA le falta un apellido
+        self.assertIsNone(evaluar_hallazgo('ORDEN', self.DESC, self.ADM, autorizacion=self.AUT))
+        otras = [{'tipo': 'AUTORIZACION', 'documento': None, 'nombre': self.AUT['nombre']}]
+        self.assertIsNone(evaluar_hallazgo('ORDEN', self.DESC, self.ADM, autorizacion=self.AUT, otras=otras))
 
     def test_sin_autorizacion_o_autorizacion_distinta_sigue(self):
         self.assertIsNone(evaluar_hallazgo('ORDEN', self.DESC, self.ADM))
