@@ -553,6 +553,27 @@ class CantidadFamiliaCupsTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, otra))
 
 
+class TerceroConApellidoDeMasTests(SimpleTestCase):
+    """Caso 33686: la orden trae un apellido de más; la autorización de la EPS dice lo mismo que Zeus."""
+    ADM = dict(ADMISION, paciente='MARIA ALEJANDRA FERNANDEZ DE CASTRO', identificacion='RC 1121981943')
+    DESC = ("Nombre del usuario incorrecto: documento 'BEJARANO FERDANDEZ DE CASTRO MARIA ALEJANDRA', "
+            "admisión 'MARIA ALEJANDRA FERNANDEZ DE CASTRO'.")
+    AUT = {'nombre': 'MARIA ALEJANDRA FERNANDEZ DE CASTRO', 'documento': '1121981943'}
+
+    def test_orden_con_apellido_de_mas_se_descarta(self):
+        self.assertEqual(evaluar_hallazgo('ORDEN', self.DESC, self.ADM, autorizacion=self.AUT)[0], DESCARTADO)
+
+    def test_sin_autorizacion_o_autorizacion_distinta_sigue(self):
+        self.assertIsNone(evaluar_hallazgo('ORDEN', self.DESC, self.ADM))
+        otra = {'nombre': 'MARIA ALEJANDRA BEJARANO FERNANDEZ DE CASTRO', 'documento': '1121981943'}
+        self.assertIsNone(evaluar_hallazgo('ORDEN', self.DESC, self.ADM, autorizacion=otra))
+        # En la autorización (documento de la EPS) sí es hallazgo
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM, autorizacion=self.AUT))
+        # Un nombre distinto con más palabras no se descarta
+        desc = self.DESC.replace('MARIA ALEJANDRA\'', 'LUISA FERNANDA\'')
+        self.assertIsNone(evaluar_hallazgo('ORDEN', desc, self.ADM, autorizacion=self.AUT))
+
+
 class AutorizacionSoatTests(SimpleTestCase):
     """Caso 33369: en SOAT la autorización es el radicado de SIRAS (trae el nombre de quien radica)."""
     ADM = dict(ADMISION, paciente='CAMILO ANDRES GOMEZ ORJUELA', identificacion='CC 1121846868',

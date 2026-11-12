@@ -131,6 +131,22 @@ def _numero_parecido(a: str, b: str) -> bool:
             and SequenceMatcher(None, a, b).ratio() >= 0.75)
 
 
+def _contiene_nombre(leido: str, tokens_zeus: list) -> bool:
+    """El nombre del documento tiene más palabras que Zeus y cada palabra de Zeus está en él (o casi igual)."""
+    from difflib import SequenceMatcher
+    doc = _tokens_doc(leido)
+    if not tokens_zeus or len(doc) <= len(tokens_zeus):
+        return False
+    disponibles = list(doc)
+    for z in tokens_zeus:
+        igual = _buscar_palabra(z, disponibles) or next(
+            (t for t in disponibles if len(t) >= 4 and SequenceMatcher(None, t, z).ratio() >= 0.85), None)
+        if igual is None:
+            return False
+        disponibles.remove(igual)
+    return True
+
+
 def lectura_autorizacion(admision_id, datos_admision: dict) -> dict | None:
     """
     Qué dice del paciente la AUTORIZACIÓN de la admisión, según su última revisión IA:
@@ -354,6 +370,14 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
                 return DESCARTADO, (f"Error de escritura del nombre en el documento del tercero ('{leido}'); "
                                     f"la autorización de la EPS coincide con ZeusSalud "
                                     f"({datos_admision.get('paciente')}).")
+        # Documento del tercero con MÁS palabras que Zeus (un apellido de más) y que contiene todo el nombre de
+        # Zeus, con la autorización de la EPS igual a Zeus: la EPS manda (caso 33686: orden 'BEJARANO FERDANDEZ
+        # DE CASTRO MARIA ALEJANDRA', Zeus y autorización 'MARIA ALEJANDRA FERNANDEZ DE CASTRO')
+        if (tipo in TIPOS_DE_TERCEROS and autorizacion and _contiene_nombre(leido, tokens_adm)
+                and _mismo_paciente({'nombre_documento': autorizacion.get('nombre') or '',
+                                     'identificacion_documento': ''}, datos_admision)):
+            return DESCARTADO, (f"El documento del tercero trae el nombre con palabras de más ('{leido}'); "
+                                f"la autorización de la EPS coincide con ZeusSalud ({datos_admision.get('paciente')}).")
         if otras:
             palabras = _separar_pegadas(_tokens_doc(leido), tokens_adm)
             distintas = [t for t in palabras if not _buscar_palabra(t, tokens_adm)]
