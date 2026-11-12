@@ -532,6 +532,27 @@ class CupsIgualesZeusTests(SimpleTestCase):
         self.assertFalse(_cups_y_cantidades_como_zeus(self.DESC + " Autorización vencida.", self.ADM))
 
 
+class CantidadFamiliaCupsTests(SimpleTestCase):
+    """Caso 34348: autorización 873420 x2; la admisión factura 873420 x1 + 873422 (comparativas) x1."""
+    ADM = dict(ADMISION, paciente='BLANCA ODILIA MORA DE NOVOA', identificacion='CC 21233598', cups=[
+        '873420 - RADIOGRAFÍA DE RODILLA (AP- LATERAL) (cant. 1)',
+        '873422 - RADIOGRAFÍA DE RODILLAS COMPARATIVAS POSICION VERTICAL (cant. 1)'])
+
+    def test_familia_suma_la_cantidad(self):
+        from gedocumental.services.ai_revision import _cantidades_distintas_zeus
+        self.assertEqual(_cantidades_distintas_zeus('873420:2', self.ADM), [])
+        self.assertEqual(_cantidades_distintas_zeus('873420:3', self.ADM), [('873420', 3, 1)])
+        # Si la autorización trae los dos CUPS, cada uno se compara con el suyo
+        self.assertEqual(_cantidades_distintas_zeus('873420:2; 873422:1', self.ADM), [('873420', 2, 1)])
+
+    def test_hallazgo_existente_se_cierra(self):
+        desc = "Cantidad autorizada en el documento es 2, se esperaba 1 para el procedimiento 873420."
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, self.ADM)[0], CORREGIDO)
+        otra = dict(self.ADM, cups=['873420 - RADIOGRAFÍA DE RODILLA (AP- LATERAL) (cant. 1)',
+                                    '873111 - RADIOGRAFÍA DE CRÁNEO (cant. 1)'])
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, otra))
+
+
 class AutorizacionSoatTests(SimpleTestCase):
     """Caso 33369: en SOAT la autorización es el radicado de SIRAS (trae el nombre de quien radica)."""
     ADM = dict(ADMISION, paciente='CAMILO ANDRES GOMEZ ORJUELA', identificacion='CC 1121846868',

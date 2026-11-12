@@ -1532,7 +1532,7 @@ def _cantidad_documento_en_zeus(descripcion, datos_admision: dict) -> bool:
     for doc, _, resto in pares:
         codigos = [c for c in _codigos_cups(resto) if c in por_cups]
         if codigos:
-            if por_cups[codigos[0]] != int(doc):
+            if int(doc) not in (por_cups[codigos[0]], _cantidad_familia(codigos[0], por_cups)):
                 return False
         elif len(por_cups) != 1 or int(doc) not in por_cups.values():
             return False
@@ -1550,6 +1550,16 @@ def _cantidades_por_cups(datos_admision: dict) -> dict:
     return por_cups
 
 
+def _cantidad_familia(cups: str, por_cups: dict, en_documento=()) -> int:
+    """
+    Cantidad de Zeus del CUPS más la de los CUPS de la misma familia (mismos 5 primeros dígitos) que no están
+    en el documento. Caso 34348: la autorización da 873420 (rodilla AP-lateral) x2 y la admisión factura
+    873420 x1 + 873422 (rodillas comparativas) x1.
+    """
+    return por_cups.get(cups, 0) + sum(n for c, n in por_cups.items()
+                                       if c != cups and c[:5] == cups[:5] and c not in en_documento)
+
+
 def _cantidades_distintas_zeus(cantidades_documento, datos_admision: dict, cantidad_anotada='') -> list:
     """
     [(cups, cantidad_documento, cantidad_zeus)] de los CUPS que están en la autorización y en la admisión con
@@ -1565,7 +1575,8 @@ def _cantidades_distintas_zeus(cantidades_documento, datos_admision: dict, canti
     # está bien aunque en cantidades_documento haya puesto la de la tabla (caso 35215: tabla 1, "CANTIDAD 2")
     anotadas = {int(n) for n in re.findall(r'\d{1,3}', str(cantidad_anotada or ''))}
     return [(cups, cantidad, por_cups[cups]) for cups, cantidad in documento.items()
-            if cups in por_cups and cantidad > 0 and cantidad != por_cups[cups] and por_cups[cups] not in anotadas]
+            if cups in por_cups and cantidad > 0 and cantidad != por_cups[cups] and por_cups[cups] not in anotadas
+            and cantidad != _cantidad_familia(cups, por_cups, documento)]
 
 
 def _cantidades_zeus(datos_admision: dict) -> list:
