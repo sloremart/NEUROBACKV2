@@ -230,10 +230,10 @@ def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
     if cobrado <= TOLERANCIA_PESOS:
         return 'RECAUDO', "; ".join([f"No se recaudó; debía cobrarse {debia}"] + notas)
     cobrado_tipo = 'CUOTA_MODERADORA' if cm >= cp else 'COPAGO'
-    # Fuera de Sanitas el tipo lo da el servicio: consultas → cuota moderadora; procedimientos (RX, RM, TAC,
-    # electro…) → copago, aunque la autorización lo llame cuota moderadora. Se valida solo el valor.
-    if (z["empresa"] not in EMPRESAS_SANITAS and cobrado_tipo != esperado_tipo
-            and cobrado_tipo == _tipo_por_servicio(z)):
+    # En todas las EPS (también Sanitas) el tipo lo da el servicio: la cuota moderadora es solo para
+    # consultas; procedimientos (RX, RM, TAC, electro…) → copago, aunque la autorización o la regla del
+    # cotizante lo llamen cuota moderadora (caso 35775). Se valida solo el valor.
+    if cobrado_tipo != esperado_tipo and cobrado_tipo == _tipo_por_servicio(z):
         esperado_tipo = cobrado_tipo
     if cobrado_tipo != esperado_tipo:
         return 'RECAUDO', "; ".join([f"Tipo de cobro incorrecto: se recaudó {cobrado_txt}; debía ser {debia}"]

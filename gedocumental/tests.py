@@ -1161,8 +1161,21 @@ class RecaudoTests(SimpleTestCase):
         self.assertIsNone(self._verificar({'requiere_pago': 'SI', 'categoria': 'B'}, copago=17300.0))
 
     def test_copago_cuando_era_cuota_moderadora(self):
+        # Cotizante categoría A en un procedimiento: se cobra el valor de la categoría ($5.000) como copago;
+        # cobrar el 11,5 % es un valor distinto
         r = self._verificar({'requiere_pago': 'SI', 'categoria': 'A'}, afiliado_zeus='COTIZANTE', copago=11500.0)
         self.assertEqual(r[0], 'RECAUDO')
+        self.assertIn('Valor recaudado distinto', r[1])
+
+    def test_procedimiento_sanitas_cotizante_es_copago(self):
+        # Caso 35775: Sanitas contributivo, procedimiento, cotizante A; la autorización dice cuota moderadora
+        # $5.000 y en SIESA se recaudó copago $5.000. La cuota moderadora es solo para consultas: está bien
+        doc = {'requiere_pago': 'SI', 'categoria': 'A', 'tipo_cobro': 'CUOTA_MODERADORA', 'valor': '5000'}
+        self.assertIsNone(self._verificar(doc, afiliado_zeus='COTIZANTE', copago=5000.0))
+        self.assertIsNone(self._verificar({'requiere_pago': 'SI', 'categoria': 'A'},
+                                          afiliado_zeus='COTIZANTE', copago=5000.0))
+        # Una consulta de Sanitas cobrada como copago sigue siendo hallazgo de tipo
+        r = self._verificar(doc, afiliado_zeus='COTIZANTE', copago=5000.0, consultas=[True])
         self.assertIn('Tipo de cobro incorrecto', r[1])
 
     def test_procedimiento_cobrado_como_copago_otra_eps(self):
