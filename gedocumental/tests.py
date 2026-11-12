@@ -372,6 +372,30 @@ class RelecturaCantidadTests(SimpleTestCase):
         self.assertEqual(self._llamar({"cantidad_anotada": "3"})['tipo'], 'AUTORIZACION')
 
 
+class ContrasteConAfirmacionesTests(SimpleTestCase):
+    """Caso 35656: 'Nombre del usuario correcto; procedimiento coincide. Contraste en admisión es SIN y en documento
+    es CON.' El CUPS 883440 (RM de pelvis) sirve para simple y contrastada; la afirmación del nombre no es motivo."""
+    DESC = ("Nombre del usuario correcto; procedimiento coincide. Contraste en admisión es SIN y en documento "
+            "es CON.")
+
+    def test_solo_contraste_con_afirmaciones(self):
+        from gedocumental.services.ai_revision import _solo_motivo_contraste
+        adm = {'cups': ['883440 - RESONANCIA MAGNETICA DE PELVIS (cant. 1)']}
+        self.assertTrue(_solo_motivo_contraste(self.DESC, adm))
+        adm_simple = {'cups': ['883440 - RESONANCIA MAGNETICA DE PELVIS SIMPLE (cant. 1)']}
+        self.assertFalse(_solo_motivo_contraste(self.DESC, adm_simple))
+
+    def test_nombre_incorrecto_sigue_siendo_otro_motivo(self):
+        from gedocumental.services.ai_revision import _solo_motivo_contraste
+        adm = {'cups': ['883440 - RESONANCIA MAGNETICA DE PELVIS (cant. 1)']}
+        self.assertFalse(_solo_motivo_contraste("Nombre del usuario incorrecto. Contraste distinto.", adm))
+
+    def test_reverificacion_descarta(self):
+        adm = dict(ADMISION, paciente='LEIDY CAROLINA LOPEZ COCUY', identificacion='CC 40305485',
+                   cups=['883440 - RESONANCIA MAGNETICA DE PELVIS (cant. 1)'])
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, adm)[0], DESCARTADO)
+
+
 class NombreDelEncabezadoTests(SimpleTestCase):
     """Caso 35608: la IA tomó al médico del encabezado (CAMILO HERNANDEZ RUBIO, NIT 16623180) como paciente."""
     ADM = dict(ADMISION, paciente='CAMILO CABRERA JARAMILLO', identificacion='CC 17312171')

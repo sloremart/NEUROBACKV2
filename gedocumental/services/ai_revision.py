@@ -1098,7 +1098,7 @@ def _solo_motivos_corregidos(resultado: dict, ajustes: dict) -> bool:
     if "procedimientos_coinciden" in ajustes:
         return _solo_motivo_procedimiento(d) and not re.search(r'derech|izquierd|lateralidad', d)
     if "firma_paciente" in ajustes:
-        return 'firma' in d and not re.search(_OTROS_MOTIVOS.replace('firma|', ''), d)
+        return 'firma' in d and not _hay_otros_motivos(d, _OTROS_MOTIVOS.replace('firma|', ''))
     return False
 
 
@@ -1353,7 +1353,7 @@ def _solo_motivo_procedimiento(descripcion) -> bool:
     import unicodedata
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
     sobre_procedimiento = re.search(r'procedimiento|cups|estudio|servicio|no se especifica|no incluye|no aparece', d)
-    return bool(sobre_procedimiento and not re.search(_OTROS_MOTIVOS, d))
+    return bool(sobre_procedimiento and not _hay_otros_motivos(d))
 
 
 def _cups_y_cantidades_como_zeus(descripcion, datos_admision: dict) -> bool:
@@ -1435,6 +1435,18 @@ _OTROS_MOTIVOS = (r'vencid|vigencia|caducad|numero de autorizacion|sin numero|no
                   r'legib|cantidad|firma|paciente no|nombre|documento de identidad|identificacion|'
                   r'fecha|tachon|enmendad')
 
+# La IA a veces confirma lo que está bien antes del motivo real ("Nombre del usuario correcto; procedimiento
+# coincide. Contraste en admisión es SIN...", caso 35656): esas afirmaciones no son otro motivo.
+_AFIRMACIONES = (r'\b(el\s+|la\s+)?(nombre(\s+del?\s+(usuario|paciente))?|paciente|documento(\s+de\s+identidad)?|'
+                 r'identificacion|fecha|firma|cantidad(es)?|procedimientos?|cups|numero\s+de\s+autorizacion)'
+                 r'\s+(es\s+|son\s+|esta\s+|estan\s+)?(correct[oa]s?|coincide[n]?|vigente|presente|legible)\b')
+
+
+def _hay_otros_motivos(d: str, patron: str = None) -> bool:
+    """Busca otros motivos (vencida, nombre, firma...) en la descripción ya normalizada, sin las afirmaciones."""
+    import re
+    return bool(re.search(patron or _OTROS_MOTIVOS, re.sub(_AFIRMACIONES, ' ', d)))
+
 
 def _solo_motivo_contraste(descripcion, datos_admision) -> bool:
     """
@@ -1456,7 +1468,7 @@ def _solo_motivo_contraste(descripcion, datos_admision) -> bool:
     otro = re.search(r'no incluye|no aparece|no cubre|no corresponde|en lugar de|en vez de|otra region|'
                      r'lateralidad|derech|izquierd', _quitar_procedimiento_de_mas(sin_contraste))
     return bool(re.search(r'contrast', d) and not re.search(r'contrast|simple', cups)
-                and not otro and not re.search(_OTROS_MOTIVOS, d))
+                and not otro and not _hay_otros_motivos(d))
 
 
 # Frases que dicen que el documento trae un procedimiento que NO está en la admisión (de más, no faltante):
@@ -1650,7 +1662,7 @@ def _solo_procedimiento_adicional(descripcion) -> bool:
                        r'|\badicional(es)?\b|\bademas de\b|' + _PROCEDIMIENTO_DE_MAS, d)
     falta = re.search(r'no incluye|no aparece|no se especifica|no cubre|no corresponde|no coincide|en lugar de|'
                       r'en vez de|distint|diferente|falta|lateralidad|derech|izquierd', _quitar_procedimiento_de_mas(d))
-    return bool(de_mas and not falta and not re.search(_OTROS_MOTIVOS, d))
+    return bool(de_mas and not falta and not _hay_otros_motivos(d))
 
 
 def _modalidad_base(m: str) -> str:
@@ -1686,7 +1698,7 @@ def _solo_motivo_abdomen_pelvis(descripcion) -> bool:
     modalidades = [m for m in (r'resonancia|\brm\b|\brmn\b', r'tomograf|\btac\b|\btc\b|escanograf',
                                r'ecograf|ultrason', r'radiograf|\brx\b') if re.search(m, d)]
     return bool(re.search(r'abdom', d) and re.search(r'pelvi', d) and not otra_region
-                and len(modalidades) <= 1 and not re.search(_OTROS_MOTIVOS, d))
+                and len(modalidades) <= 1 and not _hay_otros_motivos(d))
 
 
 def _region_base(r: str) -> str:
