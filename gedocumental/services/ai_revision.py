@@ -799,6 +799,12 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_contraste=True)
 
+    # Cantidad 0 leída para un CUPS que sí está en la autorización: mala lectura de la tabla (caso 35942)
+    if (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
+            and resultado.get("paciente_coincide") != "NO" and _cantidad_cero_leida(resultado.get("descripcion"))):
+        logger.info("%s: cantidad 0 leída, se descarta '%s'", tipo_documento, resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cantidad_cero=True)
+
     # Cantidad: la anotación "CANTIDAD N" al pie de la autorización (leída por la IA en cantidad_anotada,
     # o en el texto del PDF digital) prevalece sobre la tabla; si coincide con Zeus no es error
     if (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
@@ -1579,6 +1585,22 @@ def _solo_motivo_cantidad(descripcion) -> bool:
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
     return 'cantidad' in d and not re.search(r'vencid|vigencia|nombre|identificacion|firma|legib|no cubre|'
                                              r'no incluye|no corresponde|numero de autorizacion|sin numero', d)
+
+
+def _cantidad_cero_leida(descripcion) -> bool:
+    """
+    El único motivo es que la IA leyó cantidad 0 para un CUPS que SÍ está en el documento ("no cubre el
+    procedimiento, ya que la cantidad autorizada es 0 para el CUPS 879420, se esperaba 1", caso 35942). Una
+    autorización aprobada nunca autoriza 0: la columna está corrida o el número no se leyó.
+    """
+    import re
+    import unicodedata
+    d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    # "no cubre ... ya que/porque la cantidad..." habla de la cantidad, no de otro procedimiento
+    d = re.sub(r'no (cubre|incluye)[^.;]*?(ya que|porque|pues|debido a que|dado que)', ' ', d)
+    cero = re.search(r'cantidad[^.;\d]{0,40}?\b(es|de|:|=|en el documento es)?\s*[\'"(]?0[\'")]?(?![\d.,])', d) \
+        or re.search(r'documento\s*[\'"(]0[\'")]', d)
+    return bool(cero) and _solo_motivo_cantidad(d)
 
 
 def _orden_con_mas_cantidad(tipo_documento, descripcion) -> bool:

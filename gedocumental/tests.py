@@ -372,6 +372,25 @@ class RelecturaCantidadTests(SimpleTestCase):
         self.assertEqual(self._llamar({"cantidad_anotada": "3"})['tipo'], 'AUTORIZACION')
 
 
+class CantidadCeroLeidaTests(SimpleTestCase):
+    """Caso 35942: Sanitas, CUPS 879420 cantidad 1 (columna corrida); la IA leyó 0."""
+    ADM = dict(ADMISION, paciente='OLGA LILIANA TOLE MONTES', identificacion='CC 40428075',
+               cups=['879420 - TOMOGRAFIA COMPUTADA DE ABDOMEN Y PELVIS (cant. 1)'])
+
+    def test_cantidad_cero_se_descarta(self):
+        for desc in ("La autorización no cubre el procedimiento de la admisión, ya que la cantidad autorizada es 0 "
+                     "para el CUPS 879420, mientras que se esperaba 1.",
+                     "Cantidad autorizada incorrecta: documento '0', admisión '1'."):
+            self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, self.ADM)[0], DESCARTADO, desc)
+
+    def test_otras_cantidades_y_motivos_siguen(self):
+        from gedocumental.services.ai_revision import _cantidad_cero_leida
+        self.assertFalse(_cantidad_cero_leida("Cantidad autorizada incorrecta: documento '10', admisión '1'."))
+        self.assertFalse(_cantidad_cero_leida("Cantidad autorizada es 2, se esperaba 1."))
+        self.assertFalse(_cantidad_cero_leida("Autorización vencida; cantidad autorizada es 0."))
+        self.assertFalse(_cantidad_cero_leida("La autorización no cubre el CUPS 879420 (documento trae 879410)."))
+
+
 class ContrasteConAfirmacionesTests(SimpleTestCase):
     """Caso 35656: 'Nombre del usuario correcto; procedimiento coincide. Contraste en admisión es SIN y en documento
     es CON.' El CUPS 883440 (RM de pelvis) sirve para simple y contrastada; la afirmación del nombre no es motivo."""

@@ -32,7 +32,7 @@ from gedocumental.services.ai_revision import (
     MAX_PAGINAS_LEER, MIN_CARACTERES_TEXTO, TIPOS_SIN_REVISION_IA, _buscar_palabra, _codigos_cups,
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE, TIPOS_NO_REVISADOS,
-    _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada,
+    _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida,
     _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
     _tokens_nombre, _NO_SON_NOMBRE,
     obtener_contexto_admision,
@@ -433,6 +433,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
 
     if _es_comprobante(tipo) and firma is True and _solo_motivo_firma(d):
         return DESCARTADO, "El sistema detecta la firma del paciente en el PDF."
+
+    if not _es_comprobante(tipo) and _cantidad_cero_leida(d):
+        return DESCARTADO, ("La IA leyó cantidad 0 para un CUPS que está en el documento; una autorización "
+                            "aprobada no autoriza 0 (mala lectura de la tabla).")
 
     if texto and _cantidad_anotada(texto, _cantidades_esperadas(d)):
         return DESCARTADO, (f"El PDF tiene la anotación 'CANTIDAD {_cantidades_esperadas(d)[0]}' que coincide "
