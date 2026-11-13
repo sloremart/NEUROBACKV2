@@ -49,6 +49,21 @@ def procedimientos_por_admision(admision_ids) -> dict:
 from login.models import CustomUser
 
 
+def contratos_por_admision(admision_ids) -> dict:
+    """{admisión: nombre del contrato/EPS como en Radicación ('CAPITAL SALUD SUBSIDIADO')} desde ZeusSalud."""
+    resultado = {}
+    ids = [int(i) for i in admision_ids if i]
+    with connections['zeussalud'].cursor() as cursor:
+        for i in range(0, len(ids), 500):
+            bloque = ids[i:i + 500]
+            cursor.execute(
+                f"""SELECT sm.con_estudio, LTRIM(RTRIM(ISNULL(NULLIF(LTRIM(RTRIM(c.alias)), ''), c.nombre)))
+                    FROM sis_maes sm LEFT JOIN contratos c ON sm.contrato = c.codigo
+                    WHERE sm.con_estudio IN ({', '.join(['%s'] * len(bloque))})""", bloque)
+            resultado.update({int(e): _reparar_texto(n) for e, n in cursor.fetchall() if n})
+    return resultado
+
+
 @api_view(['GET'])
 def hallazgos_ia(request):
     try:
@@ -90,6 +105,7 @@ def hallazgos_ia(request):
         with connections['zeussalud'].cursor() as cursor:
             admisiones = get_admisiones_zeus_bulk(cursor, admision_ids)
         procedimientos = procedimientos_por_admision(admision_ids)
+        contratos = contratos_por_admision(admision_ids)
         usuarios = dict(
             CustomUser.objects.filter(id__in={h.UsuarioId for h in hallazgos if h.UsuarioId})
             .values_list('id', 'nombre')
@@ -109,7 +125,8 @@ def hallazgos_ia(request):
                 'Paciente':        _reparar_texto(' '.join((adm[3] or '').split())) if adm else '',
                 'Procedimiento':   procedimientos.get(h.AdmisionId, ''),
                 'Identificacion':  adm[1] if adm else '',
-                'Entidad':         (adm[2] or '').strip() if adm else '',
+                'Entidad':         contratos.get(h.AdmisionId) or ((adm[2] or '').strip() if adm else ''),
+                'CodigoEntidad':   (adm[2] or '').strip() if adm else '',
                 'TipoDocumento':   h.TipoDocumento,
                 'TipoHallazgo':    h.TipoHallazgo,
                 'Descripcion':     h.Descripcion,
@@ -359,18 +376,15 @@ def documentos_faltantes(request):
             with connections['zeussalud'].cursor() as cursor:
                 bloque_ids = list(faltan.keys())
                 for i in range(0, len(bloque_ids), 500):
-                    bloque = bloque_ids[i:i + 500]
-                    admisiones.update(get_admisiones_zeus_bulk(cursor, bloque))
-                    cursor.execute(
-                        f"""SELECT sm.con_estudio, UPPER(LTRIM(RTRIM(ISNULL(c.alias, '') + ' ' + ISNULL(c.nombre, ''))))
-                            FROM sis_maes sm LEFT JOIN contratos c ON sm.contrato = c.codigo
-                            WHERE sm.con_estudio IN ({', '.join(['%s'] * len(bloque))})""", bloque)
-                    contratos.update({int(e): n or '' for e, n in cursor.fetchall()})
+                    admisiones.update(get_admisiones_zeus_bulk(cursor, bloque_ids[i:i + 500]))
+            contratos = contratos_por_admision(list(faltan.keys()))
         # Particular: sus documentos no se validan (no aparece). MRC y demás contratos sin autorización
         # (CONTRATOS_SIN_AUTORIZACION): no se exige la AUTORIZACION
         for adm_id in list(faltan):
-            contrato = contratos.get(adm_id, '')
-            if 'PARTICULAR' in contrato:
+            contrato = contratos.get(adm_id, '').upper()
+            adm = admisiones.get(adm_id)
+            codigo_entidad = ((adm[2] or '').strip().upper() if adm else '')
+            if 'PARTICULAR' in contrato or codigo_entidad.startswith('PAR'):
                 del faltan[adm_id]
                 continue
             if any(c in contrato for c in CONTRATOS_SIN_AUTORIZACION):
@@ -387,7 +401,7 @@ def documentos_faltantes(request):
                 'Admision':            adm_id,
                 'Paciente':            _reparar_texto(' '.join((adm[3] or '').split())) if adm else '',
                 'Identificacion':      adm[1] if adm else '',
-                'Entidad':             (adm[2] or '').strip() if adm else '',
+                'Entidad':             contratos.get(adm_id) or ((adm[2] or '').strip() if adm else ''),
                 'DocumentosFaltantes': f,
                 'UltimoCargue':        ultimo[adm_id].isoformat() if ultimo.get(adm_id) else None,
                 'DiasDesdeIngreso':    (ahora - fecha_ing).days if fecha_ing else None,
