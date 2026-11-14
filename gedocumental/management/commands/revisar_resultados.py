@@ -17,6 +17,7 @@ Uso:
   python manage.py revisar_resultados --solo-faltantes # no llama a OpenAI
 """
 
+import logging
 import re
 from datetime import datetime, timedelta
 
@@ -34,6 +35,8 @@ from gedocumental.services.reverificacion import reverificar_hallazgos_sin_ia
 from gedocumental.views_siesa import (
     SinLecturaError, _fetch_pdf_siesa, _guardar_pdf, _registrar_en_bd, _copiar_a_examenes,
 )
+
+logger = logging.getLogger(__name__)
 
 TIPO = 'RESULTADO'
 # Minutos desde la carga antes de revisar un documento sin revisión IA (la revisión del cargue va primero)
@@ -56,19 +59,33 @@ class Command(BaseCommand):
                             help="Días hacia atrás para buscar RESULTADOS de imagen posiblemente incompletos")
 
     def handle(self, *args, **o):
-        # 0. Hallazgos que ya no aplican: corregidos en ZeusSalud o mal leídos por la IA (sin IA)
-        r = reverificar_hallazgos_sin_ia()['resumen']
-        self.stdout.write(f"Hallazgos cerrados sin IA: corregidos {r['CORREGIDO']}, descartados {r['DESCARTADO']} "
-                          f"(PDF releídos {r['pdf_leidos']}, escaneados que requieren IA {r['requieren_ia']})")
-        self.stdout.write(f"Hallazgos de recaudo corregidos en SIESA: {reverificar_recaudo_con_zeus()}")
+        # Cada paso va aislado: un error en uno (ej. una consulta a Zeus) no debe frenar la revisión de los
+        # RESULTADOS. Caso 2026-11: el paso de regeneración fallaba en cada corrida y quedaron 739 sin revisar.
+        def paso(nombre, funcion, *args):
+            try:
+                funcion(*args)
+            except Exception as exc:
+                logger.exception("revisar_resultados: falló el paso %s", nombre)
+                self.stderr.write(self.style.ERROR(f"ERROR en el paso {nombre}: {exc}"))
+
+        def reverificar():
+            # 0. Hallazgos que ya no aplican: corregidos en ZeusSalud o mal leídos por la IA (sin IA)
+            r = reverificar_hallazgos_sin_ia()['resumen']
+            self.stdout.write(f"Hallazgos cerrados sin IA: corregidos {r['CORREGIDO']}, descartados "
+                              f"{r['DESCARTADO']} (PDF releídos {r['pdf_leidos']}, escaneados que requieren IA "
+                              f"{r['requieren_ia']})")
+            self.stdout.write(f"Hallazgos de recaudo corregidos en SIESA: {reverificar_recaudo_con_zeus()}")
+
+        paso('reverificar', reverificar)
         if not o['solo_faltantes']:
-            self._regenerar_incompletos_siesa(o['dias_siesa'])
-            self._revisar_resultados(o['dias'], o['limite'])
-            self._revisar_sin_revision(o['dias'], o['limite'])
-            self._revisar_procedimiento_cambiado(o['limite'])
-        self._registrar_faltantes(o['ventana_faltantes'])
-        self._registrar_sin_autorizacion(o['ventana_faltantes'])
-        self._registrar_datos_incompletos(o['ventana_faltantes'])
+            # Primero la revisión IA de los RESULTADOS (lo que alimenta la bandeja de Cuentas Médicas)
+            paso('revisar_resultados', self._revisar_resultados, o['dias'], o['limite'])
+            paso('revisar_sin_revision', self._revisar_sin_revision, o['dias'], o['limite'])
+            paso('regenerar_incompletos_siesa', self._regenerar_incompletos_siesa, o['dias_siesa'])
+            paso('procedimiento_cambiado', self._revisar_procedimiento_cambiado, o['limite'])
+        paso('registrar_faltantes', self._registrar_faltantes, o['ventana_faltantes'])
+        paso('registrar_sin_autorizacion', self._registrar_sin_autorizacion, o['ventana_faltantes'])
+        paso('registrar_datos_incompletos', self._registrar_datos_incompletos, o['ventana_faltantes'])
 
     # ── 0. Regenerar RESULTADOS de imagen generados con informe incompleto ───
     def _regenerar_incompletos_siesa(self, dias):
@@ -103,7 +120,7 @@ class Command(BaseCommand):
                       WHERE dh.estudio = sd.estudio
                         AND (
                             dh.campo1 IS NULL
-                            OR dh.campo1 NOT LIKE '%ATENDIDO POR:%'
+                            OR dh.campo1 NOT LIKE '%%ATENDIDO POR:%%'
                         )
                   )
                 GROUP BY sd.estudio
