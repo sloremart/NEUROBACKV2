@@ -391,8 +391,9 @@ def _transcribir_procedimientos(client, modelo: str, imagenes: list[str]) -> tup
 PROMPT_RELEER_NOMBRE = (
     "Transcribe LETRA POR LETRA el nombre completo del PACIENTE tal como está escrito en el documento (campo "
     "\"Paciente\", \"Nombre del paciente\" o DATOS DEL PACIENTE), con TODOS sus nombres y apellidos, sin corregir "
-    "ni omitir ninguno. No tomes al médico, al acompañante, a quien imprime ni el nombre del ENCABEZADO (médico, "
-    "consultorio o IPS con dirección, teléfono y NIT). Responde en JSON: "
+    "ni omitir ninguno. No tomes al médico, al acompañante, a quien imprime, el nombre del ENCABEZADO (médico, "
+    "consultorio o IPS con dirección, teléfono y NIT) ni el nombre ESCRITO A MANO junto a la firma (es quien firma, "
+    "a veces un familiar). Responde en JSON: "
     '{"nombre": "<nombre completo del paciente>"}'
 )
 
@@ -713,6 +714,16 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             resultado.update(tipo=tipo_ia if otro_motivo else "OK",
                              descripcion=descripcion_ia if otro_motivo else "Documento correcto",
                              paciente_coincide="SI", nombre_documento=nombre, ajuste_relectura_nombre=True)
+        elif otra_persona and nombre and _contiene_todo_el_nombre(nombre, datos_admision):
+            # La relectura trae el nombre de Zeus con un apellido de MÁS (caso 35533: la IA tomó el nombre
+            # manuscrito de quien firma, 'LEIDY CATALINA VILLAMIL CARDONA'; el impreso es 'NICOL XIMENA VILLAMIL
+            # CARDONA' y SIESA 'NICOL XIMENA VILLAMIL'): es el paciente, y a SIESA le falta un apellido
+            logger.info("Relectura '%s': mismo paciente con un apellido de más que Zeus", nombre)
+            resultado.update(
+                tipo="INFORMACION", paciente_coincide="NOMBRE_MAL_ESCRITO", nombre_documento=nombre,
+                descripcion=(f"Nombre del usuario incorrecto: documento '{nombre}', "
+                             f"admisión '{datos_admision.get('paciente')}'."),
+                ajuste_relectura_nombre=True)
 
     # Mismo código CUPS en el documento y en la admisión: el procedimiento coincide, aunque la
     # descripción esté escrita distinto ("...TITULACION DE DISPOSITIVO MEDICO" vs "...DE CPAP NASAL").
@@ -1017,6 +1028,21 @@ _NO_SON_NOMBRE = {'resultado', 'documento', 'informe', 'reporte', 'paciente', 'n
                   # Rótulos de columnas que se pegan al nombre en autorizaciones ("MARTI-TR EDAD")
                   'edad', 'sexo', 'genero', 'fecha', 'nacimiento', 'tipo', 'telefono', 'direccion',
                   'regimen', 'afiliado', 'afiliacion', 'anos', 'meses', 'ciudad', 'municipio'}
+
+
+def _contiene_todo_el_nombre(nombre: str, datos_admision: dict) -> bool:
+    """El nombre leído tiene MÁS palabras que el de Zeus y contiene todas las de Zeus (un apellido de más)."""
+    leido = [t for t in _tokens_nombre(nombre) if t not in _NO_SON_NOMBRE]
+    zeus = _tokens_nombre(datos_admision.get('paciente'))
+    if len(zeus) < 2 or len(leido) <= len(zeus):
+        return False
+    disponibles = list(leido)
+    for z in zeus:
+        igual = _buscar_palabra(z, disponibles)
+        if igual is None:
+            return False
+        disponibles.remove(igual)
+    return True
 
 
 def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> str:
