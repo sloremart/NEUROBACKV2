@@ -34,8 +34,8 @@ from gedocumental.services.ai_revision import (
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE, TIPOS_NO_REVISADOS,
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida,
     _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
-    _tokens_nombre, _NO_SON_NOMBRE,
-    obtener_contexto_admision,
+    _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden,
+    obtener_contexto_admision, cantidades_orden,
 )
 
 logger = logging.getLogger(__name__)
@@ -434,6 +434,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     if _es_comprobante(tipo) and firma is True and _solo_motivo_firma(d):
         return DESCARTADO, "El sistema detecta la firma del paciente en el PDF."
 
+    if (tipo or '').upper() == 'AUTORIZACION' and _autorizacion_de_mas_con_orden(d, datos_admision):
+        return DESCARTADO, ("La autorización trae más cantidad que la admisión, pero la orden pide lo mismo que la "
+                            "admisión: el error es de la autorización, la admisión está bien.")
+
     if not _es_comprobante(tipo) and _cantidad_cero_leida(d):
         return DESCARTADO, ("La IA leyó cantidad 0 para un CUPS que está en el documento; una autorización "
                             "aprobada no autoriza 0 (mala lectura de la tabla).")
@@ -526,7 +530,10 @@ def reverificar_hallazgos_sin_ia(admision=None, tipo_documento=None, aplicar=Tru
     for h in _pendientes(admision, tipo_documento):
         resumen['revisados'] += 1
         if h.AdmisionId not in contextos:
-            contextos[h.AdmisionId] = obtener_contexto_admision(h.AdmisionId)
+            contexto = obtener_contexto_admision(h.AdmisionId)
+            if contexto.get('cups'):
+                contexto = dict(contexto, cantidades_orden=cantidades_orden(h.AdmisionId))
+            contextos[h.AdmisionId] = contexto
         datos = contextos[h.AdmisionId]
         if not datos.get('identificacion') and not datos.get('paciente'):
             continue   # Zeus no respondió: no se decide nada

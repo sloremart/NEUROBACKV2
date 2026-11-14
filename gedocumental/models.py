@@ -201,6 +201,9 @@ class RevisionIA(models.Model):
     # Condiciones de pago que leyó la IA de la autorización (JSON): permiten volver a comparar el
     # recaudo con SIESA sin otra llamada a la IA y cerrar el hallazgo cuando se corrige el cobro
     DatosRecaudo = models.TextField(blank=True, default='')
+    # Cantidades que leyó la IA en la ORDEN o la AUTORIZACION ('883101:1; 891509:8'): la orden desempata cuando
+    # la autorización trae más cantidad que la admisión (caso 36734)
+    Cantidades = models.CharField(max_length=500, blank=True, default='')
 
     Resuelta = models.BooleanField(default=False, db_index=True)
     Resolucion = models.CharField(max_length=20, choices=RESOLUCIONES, null=True, blank=True)

@@ -159,7 +159,7 @@ aunque la primera ya haya fallado:
   "firma_paciente": "SI | NO | NO_APLICA   (solo COMPROBANTE; en otros documentos NO_APLICA)",
   "manuscrito": "SI | NO   (SI si el nombre del paciente o los procedimientos están ESCRITOS A MANO, como una fórmula u orden manuscrita; NO si están impresos o digitados)",
   "cantidad_anotada": "<solo AUTORIZACION: el número de la anotación u observación de cantidad que está FUERA de la tabla (ej. 'CANTIDAD 2' al pie), o '' si no hay>",
-  "cantidades_documento": "<solo AUTORIZACION: 'CUPS:cantidad' de CADA procedimiento autorizado, separados por ';' (ej. '930860:2; 891509:8'). Si la autorización trae anotación 'CANTIDAD N' fuera de la tabla, N es la cantidad de su procedimiento; si el PDF trae varias autorizaciones (una por página), cada anotación es la de SU autorización. Sin anotación, la columna Cantidad. '' en otros documentos>",
+  "cantidades_documento": "<AUTORIZACION u ORDEN: 'CUPS:cantidad' de CADA procedimiento autorizado u ordenado (en la orden, la columna CANTIDAD de cada procedimiento), separados por ';' (ej. '930860:2; 891509:8'). Si la autorización trae anotación 'CANTIDAD N' fuera de la tabla, N es la cantidad de su procedimiento; si el PDF trae varias autorizaciones (una por página), cada anotación es la de SU autorización. Sin anotación, la columna Cantidad. '' en otros documentos>",
   "estudio_documento": {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
   "estudio_admision":  {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
   "recaudo": {"requiere_pago": "SI | NO | NO_INDICA", "tipo_cobro": "CUOTA_MODERADORA | COPAGO | NO_INDICA",
@@ -854,6 +854,16 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                         anotada, resultado.get("descripcion"))
             resultado.update(tipo="OK", descripcion="Documento correcto", cantidad_anotada=anotada,
                              ajuste_cantidad=True)
+
+    # La autorización trae MÁS cantidad que la admisión y la ORDEN pide lo mismo que la admisión: el error es de
+    # la autorización y la admisión está bien (caso 36734: autorización 883101 x2, orden y admisión x1)
+    if ((tipo_documento or '').upper() == 'AUTORIZACION' and resultado["tipo"] != "OK"
+            and resultado.get("paciente_coincide") != "NO"
+            and _autorizacion_de_mas_con_orden(resultado.get("descripcion"), datos_admision,
+                                               resultado.get("cantidades_documento"))):
+        logger.info("AUTORIZACION con más cantidad; la orden coincide con la admisión: se descarta '%s'",
+                    resultado.get("descripcion"))
+        resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cantidad_orden=True)
 
     # ORDEN escrita a mano: la letra del especialista no se lee bien (nombre, procedimiento, fecha); cualquier
     # hallazgo de ese documento se descarta (caso 19671: "Antonio Caicedo" leído como "MARIO CAICEDO")
@@ -1668,6 +1678,45 @@ def _cantidades_por_cups(datos_admision: dict) -> dict:
     return por_cups
 
 
+def _parsear_cantidades(texto) -> dict:
+    """'883101:1; 891509:8' → {'883101': 1, '891509': 8} (el mismo CUPS repetido se suma)."""
+    import re
+    salida = {}
+    for cups, cantidad in re.findall(r'(\d{6})(?:-\d{1,2})?\s*[:=]\s*(\d{1,3})(?!\d)', str(texto or '')):
+        salida[cups] = salida.get(cups, 0) + int(cantidad)
+    return salida
+
+
+def _autorizacion_de_mas_con_orden(descripcion, datos_admision: dict, cantidades_autorizacion='') -> bool:
+    """
+    Hallazgo de cantidad de la AUTORIZACION que trae MÁS que la admisión, y la ORDEN de la admisión (sus
+    cantidades en datos_admision['cantidades_orden']) pide exactamente lo de Zeus: la autorización está mal y la
+    admisión bien; no es hallazgo de facturación. Si la orden no se conoce o pide más, sigue (caso 33030).
+    """
+    import re
+    if not _solo_motivo_cantidad(descripcion):
+        return False
+    orden = _parsear_cantidades(datos_admision.get('cantidades_orden'))
+    zeus = _cantidades_por_cups(datos_admision)
+    if not orden or not zeus:
+        return False
+    # Qué CUPS reclama el hallazgo: los de la descripción, o los de la autorización, o todos los de Zeus
+    reclamados = [c for c in re.findall(r'\b(\d{6})\b', str(descripcion)) if c in zeus]
+    autorizacion = _parsear_cantidades(cantidades_autorizacion)
+    if not reclamados:
+        reclamados = [c for c in autorizacion if c in zeus] or list(zeus)
+    for cups in set(reclamados):
+        if orden.get(cups) != zeus[cups]:
+            return False
+        if cups in autorizacion and autorizacion[cups] <= zeus[cups]:
+            return False   # la autorización trae menos: sigue siendo hallazgo
+    # La descripción debe decir que el documento trae MÁS ("es 2, se esperaba 1"; "documento '2', admisión '1'")
+    numeros = [int(n) for n in re.findall(r'(?<!\d)(?<!\d[.,])(\d{1,3})(?!\d)(?![.,]\d)', str(descripcion))]
+    if autorizacion:
+        return any(autorizacion.get(c, 0) > zeus[c] for c in reclamados)
+    return len(numeros) == 2 and numeros[0] > numeros[1]
+
+
 def _cantidad_familia(cups: str, por_cups: dict, en_documento=()) -> int:
     """
     Cantidad de Zeus del CUPS más la de los CUPS de la misma familia (mismos 5 primeros dígitos) que no están
@@ -1961,6 +2010,18 @@ def _agregar_hallazgo_recaudo(resultado: dict, datos_admision: dict) -> None:
         resultado["descripcion"] = f"{resultado.get('descripcion', '')} | {descripcion}"
 
 
+def cantidades_orden(admision_id) -> str:
+    """Cantidades que leyó la IA en la ORDEN vigente de la admisión ('883101:1'), o '' si no se conocen."""
+    from gedocumental.models import RevisionIA
+    try:
+        r = (RevisionIA.objects.filter(AdmisionId=admision_id, TipoDocumento__iexact='ORDEN', IdArchivo__isnull=False)
+             .exclude(Cantidades='').order_by('-IdRevision').first())
+        return r.Cantidades if r else ''
+    except Exception as exc:
+        logger.warning("No se pudieron leer las cantidades de la orden de %s: %s", admision_id, exc)
+        return ''
+
+
 def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
     """
     Punto de entrada principal.
@@ -2021,6 +2082,9 @@ def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
     if not ruta_absoluta.lower().endswith(EXTENSIONES_REVISABLES):
         return None
 
+    # La autorización se compara también con lo que pide la orden (cantidad de más en la autorización)
+    if (archivo_obj.Tipo or '').upper() == 'AUTORIZACION' and 'cantidades_orden' not in datos_admision:
+        datos_admision = dict(datos_admision, cantidades_orden=cantidades_orden(archivo_obj.Admision_id))
     try:
         resultado = analizar_documento(ruta_absoluta, archivo_obj.Tipo, datos_admision)
     except Exception as exc:
@@ -2070,6 +2134,8 @@ def _registrar_revision(archivo_obj, resultado: dict) -> None:
             Modo=resultado.get("modo", ""),
             DatosRecaudo=(json.dumps(resultado.get("recaudo"), ensure_ascii=False)
                           if resultado.get("hallazgo_recaudo") else ''),
+            Cantidades=(str(resultado.get("cantidades_documento") or '')[:500]
+                        if (archivo_obj.Tipo or '').upper() in ('ORDEN', 'AUTORIZACION') else ''),
             # Un OK no deja nada pendiente
             Resuelta=resultado["tipo"] == "OK",
         )

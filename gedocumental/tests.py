@@ -372,6 +372,35 @@ class RelecturaCantidadTests(SimpleTestCase):
         self.assertEqual(self._llamar({"cantidad_anotada": "3"})['tipo'], 'AUTORIZACION')
 
 
+class AutorizacionDeMasConOrdenTests(SimpleTestCase):
+    """Caso 36734: autorización 883101 x2; orden y admisión x1 → la admisión está bien."""
+    ADM = dict(ADMISION, paciente='DEMECIO HERNANDEZ COCA', identificacion='CC 86044398',
+               cups=['883101 - RESONANCIA MAGNETICA DE CEREBRO (cant. 1)'], cantidades_orden='883101:1')
+    DESC = "Cantidad autorizada en el documento es 2, se esperaba 1 para el procedimiento 883101."
+
+    def test_orden_igual_a_admision_se_descarta(self):
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM)[0], DESCARTADO)
+        desc = "Cantidad autorizada incorrecta: documento '2', admisión '1'."
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, self.ADM)[0], DESCARTADO)
+
+    def test_orden_pide_lo_de_la_autorizacion_sigue(self):
+        # Caso 33030: la orden también pide más; la admisión debía facturar más
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, dict(self.ADM, cantidades_orden='883101:2')))
+
+    def test_sin_cantidades_de_la_orden_sigue(self):
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, dict(self.ADM, cantidades_orden='')))
+
+    def test_autorizacion_con_menos_sigue(self):
+        adm = dict(self.ADM, cups=['883101 - RESONANCIA MAGNETICA DE CEREBRO (cant. 2)'], cantidades_orden='883101:2')
+        desc = "Cantidad autorizada en el documento es 1, se esperaba 2 para el procedimiento 883101."
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm))
+
+    def test_post_proceso_ia(self):
+        from gedocumental.services.ai_revision import _autorizacion_de_mas_con_orden
+        self.assertTrue(_autorizacion_de_mas_con_orden(self.DESC, self.ADM, '883101:2'))
+        self.assertFalse(_autorizacion_de_mas_con_orden(self.DESC, self.ADM, '883101:1'))
+
+
 class CantidadCeroLeidaTests(SimpleTestCase):
     """Caso 35942: Sanitas, CUPS 879420 cantidad 1 (columna corrida); la IA leyó 0."""
     ADM = dict(ADMISION, paciente='OLGA LILIANA TOLE MONTES', identificacion='CC 40428075',
@@ -1292,6 +1321,7 @@ class ReverificarHallazgosTests(SimpleTestCase):
                 mock.patch.object(reverificacion, 'obtener_contexto_admision', return_value=datos), \
                 mock.patch.object(reverificacion, '_ruta', return_value='orden.pdf'),                 mock.patch.object(reverificacion, 'lectura_autorizacion', return_value=kw.pop('aut', None)), \
                 mock.patch.object(reverificacion, 'lecturas_admision', return_value=kw.pop('lecturas', {})), \
+                mock.patch.object(reverificacion, 'cantidades_orden', return_value=''), \
                 mock.patch.object(reverificacion, 'texto_pdf', return_value=texto) as leer:
             return reverificar_hallazgos_sin_ia(**kw), leer
 
