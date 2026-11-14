@@ -383,6 +383,13 @@ class AutorizacionDeMasConOrdenTests(SimpleTestCase):
         desc = "Cantidad autorizada incorrecta: documento '2', admisión '1'."
         self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, self.ADM)[0], DESCARTADO)
 
+    def test_con_afirmaciones_de_la_ia(self):
+        # Caso 35704: la IA confirma nombre y procedimiento antes del motivo de cantidad
+        desc = ("Nombre del usuario correcto; procedimiento autorizado '883101 - RESONANCIA T-CONTRASTE MAGNETICA "
+                "DE CEREBRO' coincide con la admisión. Cantidad autorizada es 2, se esperaba 1.")
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, self.ADM)[0], DESCARTADO)
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc.replace('correcto', 'incorrecto'), self.ADM))
+
     def test_orden_pide_lo_de_la_autorizacion_sigue(self):
         # Caso 33030: la orden también pide más; la admisión debía facturar más
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, dict(self.ADM, cantidades_orden='883101:2')))

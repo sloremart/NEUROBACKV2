@@ -1593,6 +1593,8 @@ def _solo_motivo_cantidad(descripcion) -> bool:
     import re
     import unicodedata
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    # "Nombre del usuario correcto; procedimiento ... coincide" confirma, no es otro motivo (caso 35704)
+    d = re.sub(_AFIRMACIONES, ' ', d)
     return 'cantidad' in d and not re.search(r'vencid|vigencia|nombre|identificacion|firma|legib|no cubre|'
                                              r'no incluye|no corresponde|numero de autorizacion|sin numero', d)
 
