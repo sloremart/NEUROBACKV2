@@ -843,9 +843,8 @@ def fomag_autogestion_radicar_view(request):
                 if nro_orden and cups:
                     id_zeus = f"{nro_orden}-{cups}"
                     gestion_body = json.dumps({
-                        "confirmar_autorizacion": bool(nro_aut),
+                        "confirmar_autorizacion": True,
                         "num_autorizacion": nro_aut,
-                        "val_eps_estado": "CON_VOLANTE" if nro_aut else "AUTORIZADO",
                     }).encode()
                     gestion_req = urllib.request.Request(
                         f"{DEMANDA_WEB_URL}/api/guardar_gestion/{id_zeus}",
