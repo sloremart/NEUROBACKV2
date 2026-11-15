@@ -639,6 +639,70 @@ def guardar_gestion_llamada(request):
     })
 
 
+@csrf_exempt
+@require_POST
+def fomag_datos_admision_view(request):
+    """
+    Consulta ZeusSalud para pre-llenar el formulario FOMAG Transcripción Externa.
+    Body: { "nro_orden": "22065", "cups": "883512" }
+    """
+    try:
+        body = json.loads(request.body)
+    except Exception:
+        return JsonResponse({"ok": False, "error": "JSON inválido"}, status=400)
+
+    nro_orden = str(body.get("nro_orden") or "").strip()
+    cups = str(body.get("cups") or "").strip().split("-")[0]
+
+    if not nro_orden or not nro_orden.isdigit():
+        return JsonResponse({"ok": False, "error": "nro_orden inválido"}, status=400)
+
+    try:
+        with connections['zeussalud'].cursor() as cur:
+            cur.execute(f"""
+                SELECT TOP 1
+                    CONVERT(varchar, o.fecha, 23)                AS fecha_orden,
+                    ISNULL(med.nombre, '')                       AS medico_nombre,
+                    ISNULL(med.num_id, '')                       AS medico_documento,
+                    ISNULL(med.registro, '')                     AS medico_registro,
+                    ISNULL(m.diagnostico, '')                    AS diagnostico1,
+                    ISNULL(m.diagnostico2, '')                   AS diagnostico2,
+                    ISNULL(m.diagnostico3, '')                   AS diagnostico3,
+                    ISNULL(CAST(i.cantidad AS INT), 1)           AS cantidad,
+                    ISNULL(i.detalle, '')                        AS descripcion_cups
+                FROM ordenes o
+                JOIN ordenes_detalle i ON i.numero_orden = o.numero
+                JOIN sis_maes m ON o.ingreso = m.con_estudio
+                LEFT JOIN sis_medi med ON o.cod_med = med.codigo
+                WHERE o.numero = {nro_orden}
+                  AND LEFT(LTRIM(RTRIM(CAST(i.codigo AS VARCHAR))), 6) = '{cups[:6]}'
+            """)
+            row = cur.fetchone()
+            if not row:
+                return JsonResponse({"ok": False, "error": "Orden no encontrada en ZeusSalud"})
+            rec = dict(zip([c[0] for c in cur.description], row))
+
+        diagnosticos = [
+            d.strip() for d in [rec.get("diagnostico1",""), rec.get("diagnostico2",""), rec.get("diagnostico3","")]
+            if d and str(d).strip()
+        ]
+
+        return JsonResponse({
+            "ok": True,
+            "datos": {
+                "fecha_orden":      rec.get("fecha_orden", ""),
+                "medico_nombre":    rec.get("medico_nombre", ""),
+                "medico_documento": rec.get("medico_documento", ""),
+                "medico_registro":  rec.get("medico_registro", ""),
+                "diagnosticos":     diagnosticos,
+                "cantidad":         int(rec.get("cantidad") or 1),
+                "descripcion_cups": rec.get("descripcion_cups", ""),
+            }
+        })
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+
 def _proxy_playground(endpoint: str, body: dict) -> dict:
     payload = json.dumps(body).encode()
     req = urllib.request.Request(
