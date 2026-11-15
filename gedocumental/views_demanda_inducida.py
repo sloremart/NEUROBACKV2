@@ -733,6 +733,20 @@ def fomag_datos_admision_view(request):
         except Exception:
             pass  # diagnósticos opcionales; el usuario puede llenarlos manualmente
 
+        # Debug temporal: traer fila completa de sis_medi para identificar columna de registro
+        debug_medi = {}
+        try:
+            cedula = rec.get("medico_documento", "")
+            if cedula:
+                with connections['zeussalud'].cursor() as cur:
+                    cur.execute(f"SELECT TOP 1 * FROM sis_medi WHERE LTRIM(RTRIM(cedula)) = '{cedula}'")
+                    drow = cur.fetchone()
+                    if drow:
+                        debug_medi = dict(zip([c[0] for c in cur.description], drow))
+                        debug_medi = {k: (str(v) if v is not None else "") for k, v in debug_medi.items()}
+        except Exception:
+            pass
+
         return JsonResponse({
             "ok": True,
             "datos": {
@@ -743,7 +757,8 @@ def fomag_datos_admision_view(request):
                 "diagnosticos":     diagnosticos,
                 "cantidad":         int(rec.get("cantidad") or 1),
                 "descripcion_cups": rec.get("descripcion_cups", ""),
-            }
+            },
+            "_debug_medi": debug_medi,
         })
     except Exception as e:
         return JsonResponse({"ok": False, "error": str(e)}, status=500)
