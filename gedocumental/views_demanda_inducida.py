@@ -666,7 +666,8 @@ def fomag_datos_admision_view(request):
                     ISNULL(med.cedula, '')                       AS medico_documento,
                     ISNULL(med.registro, '')                     AS medico_registro,
                     ISNULL(CAST(i.cantidad AS INT), 1)           AS cantidad,
-                    ISNULL(i.detalle, '')                        AS descripcion_cups
+                    ISNULL(i.detalle, '')                        AS descripcion_cups,
+                    o.cod_med                                    AS cod_med_raw
                 FROM ordenes o
                 JOIN ordenes_detalle i ON i.numero_orden = o.numero
                 JOIN sis_maes m ON o.ingreso = m.con_estudio
@@ -733,17 +734,26 @@ def fomag_datos_admision_view(request):
         except Exception:
             pass  # diagnósticos opcionales; el usuario puede llenarlos manualmente
 
-        # Debug temporal: traer fila completa de sis_medi para identificar columna de registro
-        debug_medi = {}
+        # Buscar especialidad del médico dinámicamente vía INFORMATION_SCHEMA
+        especialidad = ""
         try:
-            cedula = rec.get("medico_documento", "")
-            if cedula:
+            cod_med = str(rec.get("cod_med_raw") or "").strip()
+            if cod_med:
                 with connections['zeussalud'].cursor() as cur:
-                    cur.execute(f"SELECT TOP 1 * FROM sis_medi WHERE LTRIM(RTRIM(cedula)) = '{cedula}'")
-                    drow = cur.fetchone()
-                    if drow:
-                        debug_medi = dict(zip([c[0] for c in cur.description], drow))
-                        debug_medi = {k: (str(v) if v is not None else "") for k, v in debug_medi.items()}
+                    cur.execute("""
+                        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_NAME = 'sis_medi'
+                          AND LOWER(COLUMN_NAME) LIKE '%espec%'
+                        ORDER BY ORDINAL_POSITION
+                    """)
+                    espec_cols = [r[0] for r in cur.fetchall()]
+                if espec_cols:
+                    col = espec_cols[0]
+                    with connections['zeussalud'].cursor() as cur:
+                        cur.execute(f"SELECT TOP 1 ISNULL(CAST({col} AS VARCHAR), '') FROM sis_medi WHERE codigo = {cod_med}")
+                        erow = cur.fetchone()
+                        if erow and erow[0]:
+                            especialidad = str(erow[0]).strip()
         except Exception:
             pass
 
@@ -754,11 +764,11 @@ def fomag_datos_admision_view(request):
                 "medico_nombre":    rec.get("medico_nombre", ""),
                 "medico_documento": rec.get("medico_documento", ""),
                 "medico_registro":  rec.get("medico_registro", ""),
+                "especialidad":     especialidad,
                 "diagnosticos":     diagnosticos,
                 "cantidad":         int(rec.get("cantidad") or 1),
                 "descripcion_cups": rec.get("descripcion_cups", ""),
             },
-            "_debug_medi": debug_medi,
         })
     except Exception as e:
         return JsonResponse({"ok": False, "error": str(e)}, status=500)
