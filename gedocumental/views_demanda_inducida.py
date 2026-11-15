@@ -679,25 +679,57 @@ def fomag_datos_admision_view(request):
                 return JsonResponse({"ok": False, "error": "Orden no encontrada en ZeusSalud"})
             rec = dict(zip([c[0] for c in cur.description], row))
 
-        # Intentar traer diagnósticos desde ordenes (columnas pueden variar por versión de Zeus)
+        # Buscar diagnósticos dinámicamente consultando columnas reales de ZeusSalud
         diagnosticos = []
         try:
             with connections['zeussalud'].cursor() as cur:
-                cur.execute(f"""
-                    SELECT TOP 1
-                        ISNULL(o.diagnostico, '')   AS diag1,
-                        ISNULL(o.diagnostico2, '')  AS diag2,
-                        ISNULL(o.diagnostico3, '')  AS diag3
-                    FROM ordenes o
-                    WHERE o.numero = {nro_orden}
+                # Detectar columnas que contengan 'diag' en las tablas ordenes y sis_maes
+                cur.execute("""
+                    SELECT TABLE_NAME, COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_NAME IN ('ordenes', 'sis_maes', 'ordenes_detalle')
+                      AND LOWER(COLUMN_NAME) LIKE '%diag%'
+                    ORDER BY TABLE_NAME, ORDINAL_POSITION
                 """)
-                drow = cur.fetchone()
-                if drow:
-                    drec = dict(zip([c[0] for c in cur.description], drow))
-                    diagnosticos = [
-                        d.strip() for d in [drec.get("diag1",""), drec.get("diag2",""), drec.get("diag3","")]
-                        if d and str(d).strip()
-                    ]
+                cols_diag = [(r[0], r[1]) for r in cur.fetchall()]
+
+            if cols_diag:
+                # Construir SELECT dinámico con las columnas detectadas (hasta 3)
+                selects = []
+                joins_needed = set()
+                for tabla, col in cols_diag[:3]:
+                    alias = tabla[0].lower()  # 'o' para ordenes, 's' para sis_maes
+                    if tabla == 'ordenes':
+                        alias = 'o'
+                    elif tabla == 'sis_maes':
+                        alias = 'm'
+                        joins_needed.add('sis_maes')
+                    elif tabla == 'ordenes_detalle':
+                        alias = 'i'
+                        joins_needed.add('ordenes_detalle')
+                    selects.append(f"ISNULL(CAST({alias}.{col} AS VARCHAR), '') AS {col}")
+
+                join_clauses = ""
+                if 'sis_maes' in joins_needed:
+                    join_clauses += " JOIN sis_maes m ON o.ingreso = m.con_estudio"
+                if 'ordenes_detalle' in joins_needed:
+                    join_clauses += f" JOIN ordenes_detalle i ON i.numero_orden = o.numero AND LEFT(LTRIM(RTRIM(CAST(i.codigo AS VARCHAR))), 6) = '{cups[:6]}'"
+
+                sql_diag = f"""
+                    SELECT TOP 1 {', '.join(selects)}
+                    FROM ordenes o
+                    {join_clauses}
+                    WHERE o.numero = {nro_orden}
+                """
+                with connections['zeussalud'].cursor() as cur:
+                    cur.execute(sql_diag)
+                    drow = cur.fetchone()
+                    if drow:
+                        drec = dict(zip([c[0] for c in cur.description], drow))
+                        diagnosticos = [
+                            str(v).strip() for v in drec.values()
+                            if v and str(v).strip()
+                        ]
         except Exception:
             pass  # diagnósticos opcionales; el usuario puede llenarlos manualmente
 
