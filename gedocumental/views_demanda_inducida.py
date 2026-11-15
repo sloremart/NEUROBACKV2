@@ -197,16 +197,17 @@ def demanda_inducida_view(request):
     # Enriquecer NroAdmision (m.con_estudio) desde ZeusSalud para las filas que no lo traen
     try:
         nros_sin_admision = [item["NroOrden"] for item in data if not item["NroAdmision"] and item["NroOrden"]]
-        if nros_sin_admision:
-            placeholders_a = ", ".join(["%s"] * len(nros_sin_admision))
+        nros_numericos = [n for n in nros_sin_admision if str(n).strip().isdigit()]
+        if nros_numericos:
+            nros_joined = ", ".join(nros_numericos)
             with connections['zeussalud'].cursor() as cur_a:
                 cur_a.execute(f"""
                     SELECT CAST(o.numero AS VARCHAR) AS NroOrden,
                            CAST(m.con_estudio AS VARCHAR) AS NroAdmision
                     FROM ordenes o
                     JOIN sis_maes m ON o.ingreso = m.con_estudio
-                    WHERE o.numero IN ({placeholders_a})
-                """, nros_sin_admision)
+                    WHERE o.numero IN ({nros_joined})
+                """)
                 admision_map = {str(row[0]): str(row[1]) for row in cur_a.fetchall()}
             for item in data:
                 if not item["NroAdmision"] and item["NroOrden"] in admision_map:
