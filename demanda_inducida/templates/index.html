@@ -1,0 +1,2385 @@
+<!DOCTYPE html>
+<html lang="es" oncontextmenu="return false">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Demanda Inducida - Dashboard Pro</title>
+    
+    <!-- Google Fonts: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- DataTables CSS -->
+    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/buttons/2.4.1/css/buttons.bootstrap5.min.css" rel="stylesheet">
+    
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        :root {
+            --primary-color: #173872; /* NeuroDX Blue */
+            --secondary-color: #234E96; /* Lighter Blue for gradient */
+            --bg-color: #F3F4F6; /* Gray 100 */
+            --card-bg: #FFFFFF;
+            --text-main: #1F2937; /* Gray 800 */
+            --text-muted: #6B7280; /* Gray 500 */
+        }
+
+        body { 
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+        }
+
+        /* Navbar Styling */
+        .navbar {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            padding: 1rem 2rem;
+        }
+        .navbar-brand {
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            font-size: 1.15rem;
+            display: flex;
+            align-items: center;
+        }
+
+        /* Container & Cards */
+        .main-container {
+            padding: 1.25rem 0.75rem;
+            max-width: 99%;
+            margin: 0 auto;
+        }
+        
+        .stat-card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03);
+            transition: transform 0.2s ease-in-out;
+        }
+        .stat-card:hover {
+            transform: translateY(-3px);
+        }
+        .stat-icon {
+            font-size: 2.1rem;
+            opacity: 0.85;
+        }
+
+        .table-card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05), 0 4px 6px -2px rgba(0,0,0,0.025);
+            margin-top: 1.25rem;
+        }
+        .table-card .card-header {
+            background-color: var(--card-bg);
+            border-bottom: 1px solid #E5E7EB;
+            padding: 0.85rem 1.25rem;
+            border-radius: 12px 12px 0 0;
+        }
+        .card-title {
+            font-weight: 600;
+            color: var(--text-main);
+            margin: 0;
+            font-size: 1.15rem;
+        }
+
+        /* Table Styling Compacto */
+        .table-responsive {
+            padding: 0.75rem 0.85rem;
+        }
+        table.dataTable {
+            border-collapse: collapse !important;
+            width: 100% !important;
+        }
+        table.dataTable thead th {
+            background-color: #F8FAFC;
+            color: #475569;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.66rem !important;
+            letter-spacing: 0.03em;
+            border-bottom: 2px solid #E2E8F0;
+            padding: 0.5rem 0.4rem !important;
+            white-space: nowrap !important;
+            vertical-align: middle !important;
+        }
+        table.dataTable tbody td {
+            padding: 0.4rem 0.4rem !important;
+            vertical-align: middle !important;
+            border-bottom: 1px solid #F1F5F9;
+            font-size: 0.75rem !important;
+            line-height: 1.22 !important;
+        }
+        table.dataTable tbody tr:hover {
+            background-color: #F8FAFC !important;
+        }
+
+        /* Badges */
+        .badge {
+            padding: 0.5em 0.8em;
+            border-radius: 9999px;
+            font-weight: 500;
+            font-size: 0.75rem;
+        }
+        .bg-success-subtle { background-color: #D1FAE5 !important; color: #065F46 !important; }
+        .bg-warning-subtle { background-color: #FEF3C7 !important; color: #92400E !important; }
+        .bg-danger-subtle { background-color: #FEE2E2 !important; color: #991B1B !important; }
+
+        /* Buttons */
+        .dt-buttons .btn {
+            border-radius: 8px;
+            font-weight: 500;
+            padding: 0.5rem 1rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+        }
+        .btn-excel {
+            background-color: #556B2F !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 50px !important;
+            padding: 0.25rem 0.9rem !important;
+            font-weight: 400 !important;
+            font-size: 0.75rem !important;
+        }
+        .btn-excel:hover {
+            background-color: #47592A;
+            color: white;
+            box-shadow: 0 4px 6px rgba(85, 107, 47, 0.3);
+        }
+
+        /* DataTables Controls */
+        .dataTables_filter input {
+            border-radius: 8px;
+            border: 1px solid #D1D5DB;
+            padding: 0.4rem 0.8rem;
+        }
+        .dataTables_length select {
+            border-radius: 8px;
+            border: 1px solid #D1D5DB;
+        }
+        .page-item.active .page-link {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+        }
+
+        .btn-archivo-orden {
+            font-size: 0.63rem;
+            padding: 0.18rem 0.48rem;
+            border-radius: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Top Navbar -->
+    <nav class="navbar navbar-dark">
+        <div class="container-fluid">
+            <div class="navbar-brand d-flex align-items-center">
+                <img src="data:image/png;base64,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" width="48" height="48" class="me-3" style="border-radius: 50%; object-fit: cover; background: white; padding: 2px;">
+                <div class="d-flex flex-column justify-content-center">
+                    <span class="fw-normal text-white mb-0" style="font-size: 1.15rem; letter-spacing: 0.5px; line-height: 1.1;">NeuroDx</span>
+                    <span style="font-size: 0.8rem; color: #a0aec0; margin-top: 2px;">Programa Demanda Inducida</span>
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-2 text-white">
+                <button type="button" onclick="abrirSelectorAutogestionFomag()" class="btn btn-sm fw-semibold text-white px-3 shadow-sm" style="border-radius: 20px; font-size: 0.78rem; background: linear-gradient(135deg, #0284c7, #0369a1); border: 1px solid #38bdf8;">
+                    <i class="bi bi-magic me-1 text-warning"></i>Autogestión FOMAG
+                </button>
+                <button type="button" onclick="abrirModalTareaProgramada()" class="btn btn-sm btn-warning fw-semibold text-dark px-3" style="border-radius: 20px; font-size: 0.78rem;">
+                    <i class="bi bi-robot me-1"></i>Tarea Programada RPA
+                </button>
+                <small class="opacity-75 d-none d-md-inline"><i class="bi bi-clock-history me-1"></i> Sincronización en tiempo real</small>
+            </div>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        
+        <!-- Summary Widgets -->
+        <div class="row g-3 mb-4">
+            <div class="col-12 col-md-6 col-xl">
+                <div class="card stat-card h-100 bg-white" style="border-left: 5px solid #DC143C;">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="text-muted mb-2 text-uppercase fw-semibold" style="font-size: 0.75rem;">Total Notificaciones</h6>
+                            <h2 class="mb-0 fw-bold text-dark" id="stat-total">0</h2>
+                        </div>
+                        <div class="stat-icon" style="color: #DC143C;">
+                            <i class="bi bi-envelope-check-fill"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-12 col-md-6 col-xl">
+                <div class="card stat-card h-100 bg-white" style="border-left: 5px solid #4B0082;">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="text-muted mb-2 text-uppercase fw-semibold" style="font-size: 0.75rem;">Imagenes Diagnosticas</h6>
+                            <h2 class="mb-0 fw-bold text-dark" id="stat-reso">0</h2>
+                        </div>
+                        <div class="stat-icon" style="color: #4B0082;">
+                            <i class="bi bi-magnet-fill"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-md-6 col-xl">
+                <div class="card stat-card h-100 bg-white" style="border-left: 5px solid #173872;">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="text-muted mb-2 text-uppercase fw-semibold" style="font-size: 0.75rem;">Neurologia y Estudios</h6>
+                            <h2 class="mb-0 fw-bold text-dark" id="stat-moni">0</h2>
+                        </div>
+                        <div class="stat-icon" style="color: #173872;">
+                            <i class="fa-solid fa-brain"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-md-6 col-xl">
+                <div class="card stat-card h-100 bg-white" style="border-left: 5px solid #20c997;">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="text-muted mb-2 text-uppercase fw-semibold" style="font-size: 0.75rem;">Fisiatría y Terapias</h6>
+                            <h2 class="mb-0 fw-bold text-dark" id="stat-fisi">0</h2>
+                        </div>
+                        <div class="stat-icon" style="color: #20c997;">
+                            <i class="fa-solid fa-person-walking"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-md-6 col-xl">
+                <div class="card stat-card h-100 bg-white" style="border-left: 5px solid #F59E0B;">
+                    <div class="card-body py-2 px-3 d-flex flex-column justify-content-between">
+                        <div class="d-flex justify-content-between align-items-start" style="cursor: pointer;" onclick="toggleFiltroPendienteCita('')" title="Clic para filtrar todos los pacientes con Autorización Confirmada por la EPS pendientes de cita">
+                            <div>
+                                <h6 class="text-muted mb-0 text-uppercase fw-semibold" style="font-size: 0.70rem;">Pendiente Cita (Aut. EPS)</h6>
+                                <div class="d-flex align-items-baseline gap-2">
+                                    <h2 class="mb-0 fw-bold text-dark" id="stat-pend-cita">0</h2>
+                                    <small class="text-success fw-semibold" style="font-size: 0.62rem;"><i class="bi bi-patch-check-fill me-1"></i>Aut. Confirmada</small>
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-warning btn-sm py-0 px-2 fw-bold text-dark" style="font-size: 0.63rem; border-radius: 12px;" onclick="event.stopPropagation(); abrirModalDesglosePendienteCita();" title="Ver conteo detallado por cada Orden Solicitada">
+                                <i class="bi bi-list-ol me-1"></i>Detalle
+                            </button>
+                        </div>
+                        <div id="stat-pend-cita-desglose" class="mt-1 pt-1 border-top" style="max-height: 68px; overflow-y: auto; font-size: 0.63rem;">
+                            <span class="text-muted">Sin pendientes en este filtro</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-md-6 col-xl">
+                <div class="card stat-card h-100 bg-white" style="border-left: 5px solid #28a745;">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="text-muted mb-2 text-uppercase fw-semibold" style="font-size: 0.75rem;">Última Actividad</h6>
+                            <h4 class="mb-0 fw-bold text-dark" id="stat-last">-</h4>
+                        </div>
+                        <div class="stat-icon text-success">
+                            <i class="bi bi-lightning-charge-fill"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Data Table -->
+        <div class="card table-card">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <h5 class="card-title mb-0" style="font-size: 1.1rem;">
+                        <i class="bi bi-table me-2 text-muted"></i>Listado de Órdenes Generadas
+                    </h5>
+                    <span id="badgeFiltroCita" class="badge bg-warning text-dark d-none" style="cursor: pointer; font-size: 0.72rem;" onclick="toggleFiltroPendienteCita()">
+                        <i class="bi bi-funnel-fill me-1"></i>Filtro activo: Pendiente Cita (Aut. Confirmada EPS) &times;
+                    </span>
+                </div>
+                <div class="d-flex align-items-center gap-1" style="font-size: 0.8rem;">
+                    <i class="bi bi-calendar3 text-muted"></i>
+                    <span class="text-muted fw-semibold">Fecha Inicial:</span>
+                    <input type="date" id="dateFrom" class="form-control form-control-sm border-secondary-subtle py-0" 
+                           style="width: 130px; font-size: 0.78rem; height: 28px;">
+                    <span class="text-muted fw-semibold ms-1">Fecha Final:</span>
+                    <input type="date" id="dateTo" class="form-control form-control-sm border-secondary-subtle py-0" 
+                           style="width: 130px; font-size: 0.78rem; height: 28px;">
+                    <button type="button" id="btnClearFilter" class="btn btn-sm ms-2 d-flex align-items-center gap-1" 
+                            style="font-size: 0.7rem; height: 26px; white-space: nowrap; background: linear-gradient(135deg, #9B7DD4, #7C5CBF); color: white; border-radius: 20px; border: none; padding: 0 10px;">
+                        <i class="bi bi-arrow-counterclockwise"></i> Limpiar
+                    </button>
+                    <button type="button" onclick="abrirModalTareaProgramada()" class="btn btn-sm ms-1 d-flex align-items-center gap-1 fw-bold" 
+                            style="font-size: 0.7rem; height: 26px; white-space: nowrap; background: linear-gradient(135deg, #F59E0B, #D97706); color: #111827; border-radius: 20px; border: none; padding: 0 10px;"
+                            title="Validar todas las órdenes del día o rango de fechas seleccionado">
+                        <i class="bi bi-calendar2-check-fill"></i> Validar Día EPS
+                    </button>
+                    <button type="button" onclick="abrirSelectorAutogestionFomag()" class="btn btn-sm ms-1 d-flex align-items-center gap-1 fw-bold" 
+                            style="font-size: 0.7rem; height: 26px; white-space: nowrap; background: linear-gradient(135deg, #0284c7, #0369a1); color: #fff; border-radius: 20px; border: none; padding: 0 10px;"
+                            title="Autogestión de Autorización FOMAG (Transcripción Externa — 1 solicitud por servicio CUPS)">
+                        <i class="bi bi-magic text-warning"></i> Autogestión FOMAG
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table id="ordenesTable" class="table table-hover align-middle" style="width:100%">
+                        <thead>
+                            <tr>
+                                <th style="width: 80px; min-width: 75px;">Fecha</th>
+                                <th style="width: 135px; min-width: 120px;">Paciente</th>
+                                <th style="width: 90px; min-width: 85px;">Contacto</th>
+                                <th style="width: 115px; min-width: 105px;">Entidad</th>
+                                <th style="width: 125px; min-width: 115px;">Médico</th>
+                                <th style="width: 155px; min-width: 140px;">Orden Solicitada</th>
+                                <th style="width: 100px; min-width: 90px;">Obs. Médica</th>
+                                <th style="width: 145px; min-width: 130px;">Obs. Gestión</th>
+                                <th style="width: 115px; min-width: 105px;">Validación EPS</th>
+                                <th style="width: 120px; min-width: 110px;">Orden Adjunta</th>
+                                <th style="width: 135px; min-width: 125px;">Seguimiento Cita</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Dynamic Content -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="d-flex justify-content-center align-items-center mt-3 mb-2" style="color: #6c757d; font-size: 0.9rem;">
+            <span class="me-2">Desarrollado por tecnología</span>
+            <img src="data:image/png;base64,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" alt="Logo" class="rounded-circle mx-1" style="width: 22px; height: 22px; object-fit: cover; background: white; padding: 1px;">
+            <span class="fw-semibold">NeurDx</span>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/dataTables.buttons.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.bootstrap5.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.html5.min.js"></script>
+
+    <script>
+        var NEUROBACK_API_URL = "{{ neuroback_api_url | default('http://192.168.1.211:8009') }}";
+        var filtroSoloPendienteCita = false;
+        var filtroOrdenPendienteCita = '';
+        var ultimoDesglosePendienteCita = [];
+
+        function obtenerFamiliaOrden(nombre) {
+            let s = String(nombre || '').trim().toUpperCase();
+            if (!s) return 'SIN ESPECIFICAR';
+            if (s.includes('RESONANCIA')) return 'RESONANCIA MAGNÉTICA';
+            if (s.includes('TOMOGRAF') || s.includes(' TAC ') || s.includes('PET')) return 'TOMOGRAFÍA (TAC)';
+            if (s.includes('ELECTROMIOGRAF')) return 'ELECTROMIOGRAFÍA';
+            if (s.includes('NEUROCONDUCCI') || s.includes('VELOCIDAD DE CONDUCCI')) return 'NEUROCONDUCCIÓN';
+            if (s.includes('REFLEJO H')) return 'REFLEJO H';
+            if (s.includes('ONDA F')) return 'ONDA F';
+            if (s.includes('MONITORIZACI') || s.includes('TELEMETRIA')) return 'MONITORIZACIÓN EEG';
+            if (s.includes('ELECTROENCEFALOGRAMA') || s.includes(' EEG ')) return 'ELECTROENCEFALOGRAMA';
+            if (s.includes('POLISOMNOGRAF') || s.includes('POLISOMNOGRAMA') || s.includes('SUEÑO') || s.includes('SUENO')) return 'POLISOMNOGRAFÍA';
+            if (s.includes('POTENCIAL')) return 'POTENCIALES EVOCADOS';
+            if (s.includes('BLOQUEO')) return 'BLOQUEO';
+            if (s.includes('INFILTRACI')) return 'INFILTRACIÓN';
+            if (s.includes('TOXINA') || s.includes('MIORELAJANTE') || s.includes('INYECCION')) return 'TOXINA BOTULÍNICA';
+            if (s.includes('ECOGRAF') || s.includes('DOPPLER')) return 'ECOGRAFÍA';
+            if (s.includes('RADIOGRAF') || s.includes(' RAYOS ') || s.includes(' RX ')) return 'RADIOGRAFÍA (RX)';
+            if (s.includes('SEDACI')) return 'SOPORTE SEDACIÓN';
+            if (s.includes('PEDIAT') && (s.includes('CONSULTA') || s.includes('NEUROLOG'))) return 'CONSULTA NEUROLOGÍA PEDIÁTRICA';
+            if ((s.includes('FISICA') || s.includes('REHABILITA')) && s.includes('CONSULTA')) return 'CONSULTA FISIATRÍA';
+            if (s.includes('CONSULTA') || s.includes('NEUROLOG') || s.includes('CONTROL')) return 'CONSULTA / CONTROL NEUROLOGÍA';
+
+            // Por defecto, extraer las primeras 2 palabras significativas
+            let palabras = s.split(/[^A-ZÁÉÍÓÚÑ0-9]+/).filter(w => w && !['DE','DEL','LA','EL','LOS','LAS','EN','POR','CON','PARA','O','Y','UN','UNA'].includes(w));
+            return palabras.length ? palabras.slice(0, 2).join(' ') : s.slice(0, 25);
+        }
+
+        function escAttr(str) {
+            return String(str || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        }
+
+        $(document).ready(function() {
+            var table = $('#ordenesTable').DataTable({
+                "autoWidth": false,
+                "ajax": {
+                    "url": "/api/ordenes",
+                    "dataSrc": function ( json ) {
+                        return json.data;
+                    }
+                },
+                "columns": [
+                    { 
+                        "data": "Fecha",
+                        "width": "80px",
+                        "render": function(data) {
+                            return `<div class="fw-medium text-dark text-nowrap">${data.split(' ')[0]}</div>
+                                    <div class="text-muted small text-nowrap" style="font-size: 0.68rem;"><i class="bi bi-clock me-1"></i>${data.split(' ')[1] || '00:00'}</div>`;
+                        }
+                    },
+                    { 
+                        "data": null,
+                        "width": "135px",
+                        "render": function(data) {
+                            return `<div class="fw-bold text-dark text-wrap" style="font-size: 0.74rem; line-height: 1.15; max-width: 140px;">${data.Paciente}</div>
+                                    <div class="text-muted" style="font-size: 0.66rem; margin-top: 2px;"><i class="bi bi-person-vcard me-1"></i>${data.Documento}</div>`;
+                        }
+                    },
+                    { 
+                        "data": "Telefono",
+                        "width": "90px",
+                        "render": function(data) {
+                            let tel = data ? data.trim() : '-';
+                            return `<div class="text-muted text-nowrap" style="font-size: 0.72rem;"><i class="bi bi-telephone text-primary me-1"></i>${tel}</div>`;
+                        }
+                    },
+                    { 
+                        "data": "Entidad",
+                        "width": "115px",
+                        "render": function(data) {
+                            if (!data) return '<span class="text-muted">-</span>';
+                            let clean = data.replace(/FIDEICOMISOS PATRIMONIOS AUTONOMOS FIDUCIARIA LA PREVISORA/gi, 'FOMAG (FIDUPREVISORA)')
+                                            .replace(/ENTIDAD PROMOTORA DE SALUD/gi, 'EPS')
+                                            .replace(/S\.A\.S\.?/gi, '')
+                                            .replace(/S\.A\.?/gi, '')
+                                            .trim();
+                            return `<div style="max-width: 120px; font-size: 0.71rem; line-height: 1.15;" class="text-secondary fw-medium" title="${data}">${clean}</div>`;
+                        }
+                    },
+                    { 
+                        "data": "Medico",
+                        "width": "125px",
+                        "render": function(data) {
+                            let med = data ? data.trim() : 'No asignado';
+                            return `<div style="font-size: 0.72rem; line-height: 1.15; max-width: 130px;" class="text-dark" title="${med}">
+                                        <i class="bi bi-person-badge text-primary me-1"></i>${med}
+                                    </div>`;
+                        }
+                    },
+                    { 
+                        "data": "Orden",
+                        "width": "155px",
+                        "render": function(data, type, row) {
+                            let safeData = data ? data : 'PROCEDIMIENTO (' + row.Cups + ')';
+                            let upperData = safeData.toUpperCase();
+                            let badge = 'bg-light text-dark border';
+                            if (upperData.includes('RESONANCIA')) badge = 'bg-info bg-opacity-10 text-info';
+                            else if (upperData.includes('TELEMETR') || upperData.includes('MONITORIZACI') || upperData.includes('ELECTROENCEFALOGRAMA') || upperData.includes('POTENCIAL') || upperData.includes('NEURO')) badge = 'bg-primary bg-opacity-10 text-primary';
+                            else if (upperData.includes(' TAC ') || upperData.includes('PET-CT')) badge = 'bg-danger bg-opacity-10 text-danger';
+                            else if (upperData.includes('ECOGRAFIA') || upperData.includes('ULTRASONOGRAFIA') || upperData.includes('DOPPLER')) badge = 'bg-success bg-opacity-10 text-success';
+                            else if (upperData.includes('MAMOGRAFIA') || upperData.includes('RAYOS X') || upperData.includes(' RX ') || upperData.includes('RADIOGRAFIA')) badge = 'bg-warning text-dark bg-opacity-25';
+                            else if (upperData.includes('FISIATRIA') || upperData.includes('TERAPIA') || upperData.includes('BIOPSIA') || upperData.includes('INFILTRACION')) badge = 'bg-dark bg-opacity-10 text-dark';
+                            else if (upperData.includes('MEDICAMENTO')) badge = 'bg-secondary bg-opacity-25 text-dark';
+                            else if (upperData.includes('CONSULTA')) badge = 'bg-secondary bg-opacity-10 text-secondary';
+                            
+                            return `<div class="d-flex flex-column align-items-center justify-content-center h-100 w-100" style="max-width: 155px; margin: 0 auto;">
+                                        <div class="badge ${badge} rounded-pill text-wrap text-center" style="font-size: 0.64rem; padding: 0.3em 0.55em; line-height: 1.15; margin-bottom: 2px; max-width: 100%; white-space: normal;" title="${safeData}">${safeData}</div>
+                                        <div class="text-muted text-center" style="font-size: 0.61rem; font-weight: 600;"><i class="bi bi-upc-scan me-1"></i>${row.Cups}</div>
+                                    </div>`;
+                        }
+                    },
+                    { 
+                        "data": "Observacion",
+                        "width": "100px",
+                        "render": function(data) {
+                            if (data && data.trim() !== '') {
+                                return `<div style="font-size: 0.71rem; color: #475569; font-style: italic; max-width: 105px; white-space: normal; line-height: 1.2;" title="${data}"><i class="bi bi-chat-text text-secondary me-1"></i>${data}</div>`;
+                            }
+                            return `<span class="text-muted small">-</span>`;
+                        }
+                    },
+                    { 
+                        "data": "ObservacionGestion",
+                        "width": "145px",
+                        "render": function(data, type, row) {
+                            let obs = data ? data.trim() : '';
+                            let safeId = escAttr(row.Id);
+                            let safePac = escAttr(row.Paciente);
+                            let safeObs = escAttr(obs);
+                            let fecha = row.FechaObservacion ? `<span class="text-muted small d-block" style="font-size: 0.60rem;"><i class="bi bi-clock me-1"></i>${row.FechaObservacion.split(' ')[0]} ${row.FechaObservacion.split(' ')[1] ? row.FechaObservacion.split(' ')[1].substring(0,5) : ''}</span>` : '';
+                            
+                            if (obs !== '') {
+                                return `
+                                    <div class="d-flex flex-column align-items-start" style="max-width: 145px;">
+                                        <div class="p-1 px-2 rounded border text-wrap mb-1 w-100" style="font-size: 0.69rem; line-height: 1.18; background-color: #F8FAFC; border-color: #E2E8F0; color: #1E293B;">
+                                            <i class="bi bi-clipboard-check text-success me-1"></i>${obs}
+                                        </div>
+                                        <div class="d-flex align-items-center justify-content-between w-100">
+                                            ${fecha}
+                                            <button onclick="abrirModalGestion('${safeId}', '${safePac}', '${safeObs}')" class="btn btn-sm btn-link text-primary p-0 ms-auto text-decoration-none" style="font-size: 0.65rem;" title="Editar observación">
+                                                <i class="bi bi-pencil-square me-1"></i>Editar
+                                            </button>
+                                        </div>
+                                    </div>
+                                `;
+                            } else {
+                                return `
+                                    <div class="d-flex justify-content-center">
+                                        <button onclick="abrirModalGestion('${safeId}', '${safePac}', '')" class="btn btn-sm btn-outline-secondary py-0 px-2 d-flex align-items-center gap-1" style="font-size: 0.66rem; border-radius: 20px; border-style: dashed;" title="Agregar observación de gestión">
+                                            <i class="bi bi-plus-circle text-primary"></i> <span class="text-secondary">+ Nota</span>
+                                        </button>
+                                    </div>
+                                `;
+                            }
+                        }
+                    },
+                    { 
+                        "data": null,
+                        "width": "125px",
+                        "render": function(data, type, row) {
+                            let estadoVal = row.ValEpsEstado || 'PENDIENTE';
+                            let safeId = escAttr(row.Id);
+                            let safePac = escAttr(row.Paciente);
+                            let safeAut = escAttr(row.ValEpsAutorizacion || '');
+                            let safeObs = escAttr(row.ObservacionGestion || '');
+                            let safeCita = escAttr(row.EstadoCita || '');
+                            let safeFechaCita = escAttr(row.FechaCita || '');
+                            let esFomag = (row.EpsBotCodigo === 'fomag') || /FOMAG|MAGISTERIO|FIDUPREVISORA|PREVISORA/i.test(String(row.Entidad || ''));
+                            let btnAutogestionFomag = esFomag ? `
+                                <button type="button" onclick="abrirModalTranscripcionFomag('${safeId}')" class="btn btn-sm py-0 px-2 mt-1 w-100 fw-semibold shadow-sm" style="font-size: 0.59rem; border-radius: 20px; background: linear-gradient(135deg, #0284c7, #0369a1); color: #fff; border: none;" title="Autogestión de Autorización FOMAG (Transcripción Externa — 1 solicitud por servicio CUPS)">
+                                    <i class="bi bi-magic me-1"></i>Autogestión FOMAG
+                                </button>` : '';
+                            
+                            if (estadoVal === 'AUTORIZADO') {
+                                return `
+                                    <div class="d-flex flex-column align-items-center" style="max-width: 125px;">
+                                        <span class="badge bg-success bg-opacity-10 text-success fw-bold text-wrap text-center lh-sm" style="font-size: 0.66rem; padding: 0.3em 0.5em;" title="${safeAut}">
+                                            <i class="bi bi-patch-check-fill me-1"></i>${row.ValEpsAutorizacion ? '#' + row.ValEpsAutorizacion.substring(0, 18) : 'Autorizado'}
+                                        </span>
+                                        <small class="text-muted mt-1" style="font-size: 0.59rem;">Vence: ${row.ValEpsVigencia || 'Vigente'}</small>
+                                        <button onclick="revalidarEps('${safeId}', this)" class="btn btn-link text-secondary p-0 mt-1 text-decoration-none" style="font-size: 0.58rem;" title="Volver a consultar en el portal EPS">
+                                            <i class="bi bi-arrow-repeat"></i> Revalidar
+                                        </button>
+                                        ${btnAutogestionFomag}
+                                    </div>
+                                `;
+                            } else if (estadoVal === 'SIN_VOLANTE' || estadoVal === 'SIN_ORDENES') {
+                                return `
+                                    <div class="d-flex flex-column align-items-center" style="max-width: 125px;">
+                                        <span class="badge bg-warning bg-opacity-25 text-dark fw-semibold text-nowrap lh-sm" style="font-size: 0.66rem; padding: 0.28em 0.5em;">
+                                            <i class="bi bi-hourglass-split me-1"></i>Sin Volante
+                                        </span>
+                                        <small class="text-muted mt-1" style="font-size: 0.59rem;">${row.ValEpsFecha ? row.ValEpsFecha.split(' ')[0] : 'Consultado'}</small>
+                                        <button onclick="revalidarEps('${safeId}', this)" class="btn btn-outline-secondary btn-sm py-0 px-2 mt-1 w-100" style="font-size: 0.60rem; border-radius: 20px;">
+                                            <i class="bi bi-arrow-repeat"></i> Revalidar
+                                        </button>
+                                        ${btnAutogestionFomag}
+                                    </div>
+                                `;
+                            } else if (estadoVal === 'DISCREPANCIA_CUPS') {
+                                return `
+                                    <div class="d-flex flex-column align-items-center" style="max-width: 125px;">
+                                        <span class="badge bg-danger bg-opacity-10 text-danger fw-semibold text-nowrap lh-sm" style="font-size: 0.65rem; padding: 0.28em 0.45em;" title="EPS autorizó CUPS: ${escAttr(row.ValEpsCups)}">
+                                            <i class="bi bi-exclamation-octagon-fill me-1"></i>CUPS: ${row.ValEpsCups ? row.ValEpsCups.substring(0, 12) : 'Otro'}
+                                        </span>
+                                        <button onclick="abrirModalSeguimientoCita('${safeId}', '${safePac}', 'PENDIENTE_CITA_AUT_EPS', '${safeFechaCita}', '${safeAut}', '${safeObs}', true)" class="btn btn-outline-success btn-sm py-0 px-2 mt-1 w-100" style="font-size: 0.59rem; border-radius: 20px;" title="Confirmar autorización como válida y pasar a Pendiente Cita">
+                                            <i class="bi bi-check2-circle"></i> Confirmar Aut.
+                                        </button>
+                                        ${btnAutogestionFomag}
+                                    </div>
+                                `;
+                            } else {
+                                return `
+                                    <div class="d-flex flex-column align-items-center" style="max-width: 125px;">
+                                        <span class="badge bg-light text-secondary border text-nowrap lh-sm mb-1" style="font-size: 0.64rem; padding: 0.22em 0.45em;">
+                                            <i class="bi bi-shield-check me-1"></i>Contratado
+                                        </span>
+                                        <button onclick="revalidarEps('${safeId}', this)" class="btn btn-sm btn-outline-primary py-0 px-2 w-100" style="font-size: 0.63rem; border-radius: 20px;">
+                                            <i class="bi bi-search me-1"></i>Validar EPS
+                                        </button>
+                                        ${btnAutogestionFomag}
+                                    </div>
+                                `;
+                            }
+                        }
+                    },
+                    {
+                        "data": null,
+                        "width": "120px",
+                        "render": function(data, type, row) {
+                            let archivos = row.ValEpsArchivos || [];
+                            let safeId = escAttr(row.Id);
+                            let safePac = escAttr(row.Paciente);
+                            let safeOrd = escAttr(row.Orden || row.Cups || '');
+                            let safeSoporte = escAttr(row.ValEpsSoporte || '');
+                            let itemsHtml = '';
+
+                            if (archivos.length > 0) {
+                                archivos.forEach(function(a) {
+                                    let url = a.url_descarga || '#';
+                                    let titulo = escAttr(a.nombre_archivo || a.nombre_original || 'Documento');
+                                    if (a.tipo === 'ORDEN_PDF') {
+                                        let esVolanteFomag = /^Orden_\d+_FOMAG_/i.test(String(a.nombre_archivo || ''));
+                                        let textoBtnPdf = esVolanteFomag ? 'Volante FOMAG' : 'Orden PDF';
+                                        itemsHtml += `
+                                            <a href="${url}" target="_blank" class="btn btn-success btn-archivo-orden d-inline-flex align-items-center justify-content-center w-100 mb-1" title="Descargar ${titulo}">
+                                                <i class="bi bi-file-earmark-check-fill me-1"></i>${textoBtnPdf}
+                                            </a>`;
+                                    } else {
+                                        let labelCorto = (a.nombre_original || 'Adjunto').substring(0, 14);
+                                        itemsHtml += `
+                                            <a href="${url}" target="_blank" class="btn btn-primary btn-archivo-orden d-inline-flex align-items-center justify-content-center w-100 mb-1" title="${titulo}">
+                                                <i class="bi bi-paperclip me-1"></i>${labelCorto}
+                                            </a>`;
+                                    }
+                                });
+                            }
+
+                            if (row.ValEpsSoporte) {
+                                itemsHtml += `
+                                    <a href="javascript:void(0)" onclick="verSoporte('${safeSoporte}', '${safePac}')" class="btn btn-outline-info text-dark btn-archivo-orden d-inline-flex align-items-center justify-content-center w-100 mb-1" title="Ver captura de pantalla del portal EPS">
+                                        <i class="bi bi-file-earmark-image me-1"></i>Soporte EPS
+                                    </a>`;
+                            }
+
+                            if (row.NroAdmision && row.NroOrden) {
+                                let urlSiesa = NEUROBACK_API_URL + '/gedocumental/ver-pdf-orden/?estudio=' + row.NroAdmision + '&numero=' + row.NroOrden;
+                                itemsHtml = `<a href="${urlSiesa}" target="_blank" class="btn btn-outline-info btn-archivo-orden d-inline-flex align-items-center justify-content-center w-100 mb-1" title="Ver orden médica en SIESA / NeuroDx"><i class="bi bi-file-earmark-medical me-1 text-info"></i>Orden SIESA</a>` + itemsHtml;
+                            }
+
+                            itemsHtml += `
+                                <button type="button" onclick="abrirModalSubirOrden('${safeId}', '${safePac}', '${safeOrd}')" class="btn btn-outline-secondary btn-archivo-orden d-inline-flex align-items-center justify-content-center w-100" style="border-style: dashed;" title="Adjuntar PDF o imagen de orden médica / autorización">
+                                    <i class="bi bi-upload text-primary me-1"></i>+ Adjuntar
+                                </button>`;
+
+                            return `<div class="d-flex flex-column align-items-center" style="max-width: 120px; margin: 0 auto;">${itemsHtml}</div>`;
+                        }
+                    },
+                    { 
+                        "data": null,
+                        "width": "135px",
+                        "render": function(data, type, row) {
+                            let safeId = escAttr(row.Id);
+                            let safePac = escAttr(row.Paciente);
+                            let safeAut = escAttr(row.ValEpsAutorizacion || '');
+                            let safeObs = escAttr(row.ObservacionGestion || '');
+                            let safeFechaCita = escAttr(row.FechaCita || '');
+                            let estadoCita = row.EstadoCita || '';
+                            if (!estadoCita && row.ValEpsEstado === 'AUTORIZADO') {
+                                estadoCita = 'PENDIENTE_CITA_AUT_EPS';
+                            }
+
+                            let badgeCitaHtml = '';
+                            if (estadoCita === 'PENDIENTE_CITA_AUT_EPS') {
+                                badgeCitaHtml = `
+                                    <span class="badge text-nowrap mb-1" style="background-color: #FEF3C7; color: #92400E; border: 1px solid #F59E0B; font-size: 0.65rem; padding: 0.32em 0.55em;">
+                                        <i class="bi bi-calendar-exclamation-fill text-warning me-1"></i>Pendiente Cita
+                                    </span>
+                                    <small class="fw-bold text-success d-block lh-1 mb-1 text-center" style="font-size: 0.59rem;">
+                                        <i class="bi bi-patch-check-fill me-1"></i>Aut. Confirmada EPS
+                                    </small>
+                                    <button type="button" onclick="abrirModalSeguimientoCita('${safeId}', '${safePac}', 'CITA_AGENDADA', '${safeFechaCita}', '${safeAut}', '${safeObs}', true)" class="btn btn-warning btn-sm py-0 px-2 fw-semibold text-dark" style="font-size: 0.61rem; border-radius: 20px;">
+                                        <i class="bi bi-calendar-plus me-1"></i>Agendar Cita
+                                    </button>
+                                `;
+                            } else if (estadoCita === 'CITA_AGENDADA') {
+                                badgeCitaHtml = `
+                                    <span class="badge bg-success text-white text-nowrap mb-1" style="font-size: 0.65rem; padding: 0.32em 0.55em;">
+                                        <i class="bi bi-calendar2-check-fill me-1"></i>Cita Agendada
+                                    </span>
+                                    ${row.FechaCita ? `<small class="text-dark fw-semibold d-block lh-1 mb-1" style="font-size: 0.60rem;"><i class="bi bi-clock me-1 text-success"></i>${row.FechaCita}</small>` : ''}
+                                    <button type="button" onclick="abrirModalSeguimientoCita('${safeId}', '${safePac}', 'CITA_AGENDADA', '${safeFechaCita}', '${safeAut}', '${safeObs}', false)" class="btn btn-link btn-sm p-0 text-primary text-decoration-none" style="font-size: 0.60rem;">
+                                        <i class="bi bi-pencil-square me-1"></i>Seguimiento
+                                    </button>
+                                `;
+                            } else if (estadoCita === 'PENDIENTE_AUT_EPS') {
+                                badgeCitaHtml = `
+                                    <span class="badge bg-secondary bg-opacity-10 text-secondary border text-nowrap mb-1" style="font-size: 0.64rem; padding: 0.28em 0.5em;">
+                                        <i class="bi bi-hourglass-split me-1"></i>Pend. Aut. EPS
+                                    </span>
+                                    <button type="button" onclick="abrirModalSeguimientoCita('${safeId}', '${safePac}', 'PENDIENTE_CITA_AUT_EPS', '${safeFechaCita}', '${safeAut}', '${safeObs}', false)" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size: 0.59rem; border-radius: 20px;">
+                                        <i class="bi bi-sliders me-1"></i>Estado Cita
+                                    </button>
+                                `;
+                            } else if (estadoCita === 'NO_CONTESTA') {
+                                badgeCitaHtml = `
+                                    <span class="badge bg-info bg-opacity-10 text-info border border-info text-nowrap mb-1" style="font-size: 0.64rem; padding: 0.28em 0.5em;">
+                                        <i class="bi bi-telephone-x me-1"></i>Sin Respuesta
+                                    </span>
+                                    <button type="button" onclick="abrirModalSeguimientoCita('${safeId}', '${safePac}', 'NO_CONTESTA', '${safeFechaCita}', '${safeAut}', '${safeObs}', false)" class="btn btn-link btn-sm p-0 text-primary text-decoration-none" style="font-size: 0.60rem;">
+                                        <i class="bi bi-pencil-square me-1"></i>Seguimiento
+                                    </button>
+                                `;
+                            } else if (estadoCita === 'DESISTE') {
+                                badgeCitaHtml = `
+                                    <span class="badge bg-danger-subtle text-nowrap mb-1" style="font-size: 0.64rem; padding: 0.28em 0.5em;">
+                                        <i class="bi bi-x-circle me-1"></i>No Desea Cita
+                                    </span>
+                                    <button type="button" onclick="abrirModalSeguimientoCita('${safeId}', '${safePac}', 'DESISTE', '${safeFechaCita}', '${safeAut}', '${safeObs}', false)" class="btn btn-link btn-sm p-0 text-secondary text-decoration-none" style="font-size: 0.59rem;">
+                                        <i class="bi bi-pencil-square me-1"></i>Cambiar
+                                    </button>
+                                `;
+                            } else {
+                                let notifHtml = '';
+                                if (row.Estado === 'PENDIENTE') notifHtml = '<span class="badge bg-warning-subtle text-nowrap mb-1" style="font-size: 0.64rem; padding: 0.28em 0.55em;"><i class="bi bi-hourglass-split me-1"></i>Pendiente</span>';
+                                else if (row.Estado === 'NOTIFICADO') notifHtml = '<span class="badge bg-success-subtle text-nowrap mb-1" style="font-size: 0.64rem; padding: 0.28em 0.55em;"><i class="bi bi-check-circle-fill me-1"></i>Notificado</span>';
+                                else notifHtml = '<span class="badge bg-danger-subtle text-nowrap mb-1" style="font-size: 0.64rem; padding: 0.28em 0.55em;"><i class="bi bi-exclamation-triangle-fill me-1"></i>Error</span>';
+
+                                badgeCitaHtml = `
+                                    ${notifHtml}
+                                    <button type="button" onclick="abrirModalSeguimientoCita('${safeId}', '${safePac}', 'PENDIENTE_CITA_AUT_EPS', '${safeFechaCita}', '${safeAut}', '${safeObs}', false)" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size: 0.59rem; border-radius: 20px;">
+                                        <i class="bi bi-calendar-check me-1"></i>Seg. Cita
+                                    </button>
+                                `;
+                            }
+
+                            return `<div class="d-flex flex-column align-items-center" style="max-width: 135px; margin: 0 auto;">${badgeCitaHtml}</div>`;
+                        }
+                    }
+                ],
+                "order": [[ 0, "desc" ]],
+                "language": {
+                    "url": "https://cdn.datatables.net/plug-ins/1.13.6/i18n/es-ES.json"
+                },
+                "dom": '<"row align-items-center mb-3"<"col-sm-12 col-md-3"l><"col-sm-12 col-md-9 d-flex justify-content-end align-items-center gap-2 custom-toolbar"fB>>rt<"row align-items-center pt-3"<"col-sm-12 col-md-5"i><"col-sm-12 col-md-7"p>>',
+                "buttons": [
+                    {
+                        extend: 'excelHtml5',
+                        text: '<i class="bi bi-file-earmark-excel"></i> Exportar Excel',
+                        className: 'btn btn-excel',
+                        title: 'Reporte_Demanda_Inducida'
+                    }
+                ]
+            });
+
+            // --- FILTRO POR RANGO DE FECHAS Y PENDIENTE CITA ---
+            var now = new Date();
+            var today = now.getFullYear() + '-' + 
+                        String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+                        String(now.getDate()).padStart(2, '0');
+            document.getElementById('dateFrom').value = today;
+            document.getElementById('dateTo').value = today;
+
+            $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
+                var dateFrom = document.getElementById('dateFrom').value;
+                var dateTo = document.getElementById('dateTo').value;
+                
+                var rowData = table.row(dataIndex).data();
+                if (!rowData || !rowData.Fecha) return true;
+                
+                var rowDate = rowData.Fecha.split(' ')[0];
+                if (dateFrom && rowDate < dateFrom) return false;
+                if (dateTo && rowDate > dateTo) return false;
+
+                if (filtroSoloPendienteCita) {
+                    var estCita = rowData.EstadoCita || (rowData.ValEpsEstado === 'AUTORIZADO' ? 'PENDIENTE_CITA_AUT_EPS' : '');
+                    if (estCita !== 'PENDIENTE_CITA_AUT_EPS') return false;
+                    if (filtroOrdenPendienteCita) {
+                        var ordRow = String(rowData.Orden || '').trim().toUpperCase();
+                        var famRow = obtenerFamiliaOrden(ordRow);
+                        // Coincide si el filtro es exactamente la familia (ej. "RESONANCIA MAGNÉTICA") o la orden específica
+                        if (ordRow !== filtroOrdenPendienteCita && famRow !== filtroOrdenPendienteCita) return false;
+                    }
+                }
+                
+                return true;
+            });
+
+            document.getElementById('dateFrom').addEventListener('change', function() {
+                table.draw();
+            });
+            document.getElementById('dateTo').addEventListener('change', function() {
+                table.draw();
+            });
+
+            document.getElementById('btnClearFilter').addEventListener('click', function() {
+                var now = new Date();
+                var hoy = now.getFullYear() + '-' + 
+                           String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+                           String(now.getDate()).padStart(2, '0');
+                document.getElementById('dateFrom').value = hoy;
+                document.getElementById('dateTo').value = hoy;
+                filtroSoloPendienteCita = false;
+                filtroOrdenPendienteCita = '';
+                document.getElementById('badgeFiltroCita').classList.add('d-none');
+                table.draw();
+            });
+
+            // Actualizar tarjetas superiores y desglose por Orden Solicitada
+            table.on('draw', function () {
+                var filteredData = table.rows({ search: 'applied' }).data();
+                var allData = table.rows().data();
+                var dateFrom = document.getElementById('dateFrom').value;
+                var dateTo = document.getElementById('dateTo').value;
+                
+                $('#stat-total').text(filteredData.length);
+                
+                let imagenes = 0;
+                let neuro = 0;
+                let fisi = 0;
+                let pendCita = 0;
+                let lastDate = null;
+                
+                for (let i = 0; i < filteredData.length; i++) {
+                    let item = filteredData[i];
+                    let ordenUpper = item.Orden ? item.Orden.toUpperCase() : '';
+                    
+                    if (ordenUpper.includes('RESONANCIA') || ordenUpper.includes(' TAC ') || ordenUpper.includes('PET') || ordenUpper.includes('RAYOS X') || ordenUpper.includes(' RX ') || ordenUpper.includes('ECOGRAF') || ordenUpper.includes('MAMOGRAF') || ordenUpper.includes('RADIOGRAFIA')) {
+                        imagenes++;
+                    }
+                    else if (ordenUpper.includes('MONITORIZACI') || ordenUpper.includes('TELEMETRIA') || ordenUpper.includes('ELECTROENCEFALOGRAMA') || ordenUpper.includes('POTENCIAL') || ordenUpper.includes('NEURO')) {
+                        neuro++;
+                    }
+                    else if (ordenUpper.includes('FISIATRIA') || ordenUpper.includes('TERAPIA') || ordenUpper.includes('REHABILITA') || ordenUpper.includes('MEDICINA FISICA') || ordenUpper.includes('INFILTRACION')) {
+                        fisi++;
+                    }
+
+                    let estCita = item.EstadoCita || (item.ValEpsEstado === 'AUTORIZADO' ? 'PENDIENTE_CITA_AUT_EPS' : '');
+                    if (estCita === 'PENDIENTE_CITA_AUT_EPS') {
+                        pendCita++;
+                    }
+                    
+                    if (!lastDate || item.Fecha > lastDate) {
+                        lastDate = item.Fecha;
+                    }
+                }
+
+                // Agrupar todas las órdenes PENDIENTE_CITA_AUT_EPS del rango actual por Familia / Primer Nombre
+                let mapaFamiliasPend = {};
+                let totalPendRango = 0;
+                for (let j = 0; j < allData.length; j++) {
+                    let row = allData[j];
+                    if (!row || !row.Fecha) continue;
+                    let rDate = row.Fecha.split(' ')[0];
+                    if (dateFrom && rDate < dateFrom) continue;
+                    if (dateTo && rDate > dateTo) continue;
+
+                    let estCitaRow = row.EstadoCita || (row.ValEpsEstado === 'AUTORIZADO' ? 'PENDIENTE_CITA_AUT_EPS' : '');
+                    if (estCitaRow !== 'PENDIENTE_CITA_AUT_EPS') continue;
+
+                    totalPendRango++;
+                    let nombreOrd = String(row.Orden || 'SIN ESPECIFICAR').trim().toUpperCase();
+                    let familia = obtenerFamiliaOrden(nombreOrd);
+
+                    if (!mapaFamiliasPend[familia]) {
+                        mapaFamiliasPend[familia] = {
+                            familia: familia,
+                            cantidad: 0,
+                            porEps: {},
+                            ordenes: {}
+                        };
+                    }
+                    mapaFamiliasPend[familia].cantidad++;
+                    let epsNombre = 'OTRA EPS';
+                    let entUp = String(row.Entidad || '').toUpperCase();
+                    if (entUp.includes('FOMAG') || entUp.includes('PREVISORA') || entUp.includes('MAGISTERIO') || entUp.includes('FIDEICOMISO')) epsNombre = 'FOMAG';
+                    else if (entUp.includes('CAPITAL SALUD')) epsNombre = 'CAPITAL SALUD';
+                    else if (entUp.includes('SALUD TOTAL')) epsNombre = 'SALUD TOTAL';
+                    else if (entUp.includes('SANITAS')) epsNombre = 'SANITAS';
+                    mapaFamiliasPend[familia].porEps[epsNombre] = (mapaFamiliasPend[familia].porEps[epsNombre] || 0) + 1;
+
+                    if (!mapaFamiliasPend[familia].ordenes[nombreOrd]) {
+                        mapaFamiliasPend[familia].ordenes[nombreOrd] = {
+                            orden: nombreOrd,
+                            cups: row.Cups || '-',
+                            cantidad: 0,
+                            porEps: {}
+                        };
+                    }
+                    mapaFamiliasPend[familia].ordenes[nombreOrd].cantidad++;
+                    mapaFamiliasPend[familia].ordenes[nombreOrd].porEps[epsNombre] = (mapaFamiliasPend[familia].ordenes[nombreOrd].porEps[epsNombre] || 0) + 1;
+                }
+
+                ultimoDesglosePendienteCita = Object.values(mapaFamiliasPend).sort(function(a, b) {
+                    return b.cantidad - a.cantidad;
+                });
+
+                let boxDesglose = document.getElementById('stat-pend-cita-desglose');
+                if (boxDesglose) {
+                    if (ultimoDesglosePendienteCita.length === 0) {
+                        boxDesglose.innerHTML = '<span class="text-muted">Sin pendientes de cita autorizados en esta fecha</span>';
+                    } else {
+                        let htmlItems = '';
+                        ultimoDesglosePendienteCita.forEach(function(g) {
+                            let isAct = (filtroSoloPendienteCita && (filtroOrdenPendienteCita === g.familia || (g.ordenes && g.ordenes[filtroOrdenPendienteCita])));
+                            let safeFamAttr = escAttr(g.familia);
+                            let numVars = Object.keys(g.ordenes).length;
+                            let tipTxt = numVars > 1 ? ` (${numVars} procedimientos)` : '';
+                            htmlItems += `
+                                <div onclick="filtrarPorOrdenPendienteCita('${safeFamAttr}')"
+                                     class="d-flex justify-content-between align-items-center py-0 px-1 rounded mb-1 ${isAct ? 'bg-warning bg-opacity-25 fw-bold' : ''}"
+                                     style="cursor: pointer; line-height: 1.25;"
+                                     title="Clic para filtrar ${g.cantidad} por cita de: ${g.familia}${tipTxt}">
+                                    <span class="text-truncate text-dark me-1" style="max-width: 175px;">• ${g.familia}</span>
+                                    <span class="badge bg-warning text-dark fw-bold" style="font-size: 0.60rem;">${g.cantidad}</span>
+                                </div>`;
+                        });
+                        boxDesglose.innerHTML = htmlItems;
+                    }
+                }
+                
+                $('#stat-reso').text(imagenes);
+                $('#stat-moni').text(neuro);
+                $('#stat-fisi').text(fisi);
+                $('#stat-pend-cita').text(filtroSoloPendienteCita && filtroOrdenPendienteCita ? pendCita : totalPendRango);
+                if(lastDate) {
+                    $('#stat-last').text(lastDate.split(' ')[0]);
+                } else {
+                    $('#stat-last').text('-');
+                }
+            });
+
+            table.on('xhr.dt', function() {
+                setTimeout(function() { table.draw(); }, 200);
+            });
+
+            setInterval(function() {
+                table.ajax.reload(null, false);
+            }, 120000);
+        });
+
+        function actualizarBadgeFiltroCita() {
+            var badge = document.getElementById('badgeFiltroCita');
+            if (!badge) return;
+            if (filtroSoloPendienteCita) {
+                var subTxt = filtroOrdenPendienteCita ? (' • ' + filtroOrdenPendienteCita) : ' (Todas las órdenes)';
+                badge.innerHTML = '<i class="bi bi-funnel-fill me-1"></i>Filtro activo: Pendiente Cita (Aut. EPS)' + subTxt + ' &times;';
+                badge.classList.remove('d-none');
+            } else {
+                badge.classList.add('d-none');
+            }
+        }
+
+        function toggleFiltroPendienteCita(ordenEspecifica) {
+            if (typeof ordenEspecifica === 'string' && ordenEspecifica !== '') {
+                filtrarPorOrdenPendienteCita(ordenEspecifica);
+                return;
+            }
+            if (filtroSoloPendienteCita && !filtroOrdenPendienteCita) {
+                filtroSoloPendienteCita = false;
+                filtroOrdenPendienteCita = '';
+            } else {
+                filtroSoloPendienteCita = true;
+                filtroOrdenPendienteCita = '';
+            }
+            actualizarBadgeFiltroCita();
+            $('#ordenesTable').DataTable().draw();
+        }
+
+        function filtrarPorOrdenPendienteCita(nombreOrden) {
+            var ordClean = String(nombreOrden || '').trim().toUpperCase();
+            if (filtroSoloPendienteCita && filtroOrdenPendienteCita === ordClean) {
+                // Si vuelve a hacer clic sobre la misma orden, quita el filtro específico
+                filtroSoloPendienteCita = false;
+                filtroOrdenPendienteCita = '';
+            } else {
+                filtroSoloPendienteCita = true;
+                filtroOrdenPendienteCita = ordClean;
+            }
+            actualizarBadgeFiltroCita();
+            var modalEl = document.getElementById('modalDesglosePendienteCita');
+            if (modalEl) {
+                var inst = bootstrap.Modal.getInstance(modalEl);
+                if (inst) inst.hide();
+            }
+            $('#ordenesTable').DataTable().draw();
+        }
+
+        function abrirModalDesglosePendienteCita() {
+            var tbody = document.getElementById('tbodyDesglosePendienteCita');
+            var totalSpan = document.getElementById('totalModalPendienteCita');
+            if (tbody) {
+                tbody.innerHTML = '';
+                var suma = 0;
+                if (ultimoDesglosePendienteCita.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">No hay órdenes en estado Pendiente Cita (Aut. Confirmada EPS) para el rango de fechas seleccionado.</td></tr>';
+                } else {
+                    ultimoDesglosePendienteCita.forEach(function(item) {
+                        suma += item.cantidad;
+                        var epsBadgesFam = Object.keys(item.porEps).map(function(k) {
+                            return `<span class="badge bg-light text-dark border me-1">${k}: <b>${item.porEps[k]}</b></span>`;
+                        }).join('');
+                        var safeFam = escAttr(item.familia);
+                        var procsList = Object.values(item.ordenes || {});
+                        var numProcs = procsList.length;
+
+                        // Fila principal del Grupo / Familia
+                        var trFam = document.createElement('tr');
+                        trFam.className = 'table-warning bg-opacity-50 border-top border-warning';
+                        trFam.innerHTML = `
+                            <td colspan="2" class="py-2">
+                                <span class="fw-bold text-dark fs-6"><i class="bi bi-folder2-open text-warning me-2"></i>${item.familia}</span>
+                                <span class="badge bg-white text-secondary border ms-2" style="font-size: 0.68rem;">${numProcs === 1 ? '1 tipo de procedimiento' : (numProcs + ' tipos de procedimientos')}</span>
+                            </td>
+                            <td class="py-2">${epsBadgesFam}</td>
+                            <td class="text-end text-nowrap py-2">
+                                <span class="badge bg-warning text-dark fs-6 me-2">${item.cantidad} por cita</span>
+                                <button type="button" class="btn btn-sm btn-warning text-dark fw-bold py-0 px-2" onclick="filtrarPorOrdenPendienteCita('${safeFam}')" title="Filtrar todas las órdenes del grupo ${item.familia}">
+                                    <i class="bi bi-funnel-fill me-1"></i>Filtrar Grupo
+                                </button>
+                            </td>
+                        `;
+                        tbody.appendChild(trFam);
+
+                        // Filas hijas: detalle de cada procedimiento y CUPS específico
+                        procsList.forEach(function(sub) {
+                            var safeSubOrd = escAttr(sub.orden);
+                            var subEpsBadges = Object.keys(sub.porEps).map(function(k) {
+                                return `<span class="badge bg-white text-muted border me-1" style="font-size: 0.65rem;">${k}: ${sub.porEps[k]}</span>`;
+                            }).join('');
+                            var trSub = document.createElement('tr');
+                            trSub.className = 'bg-white';
+                            trSub.innerHTML = `
+                                <td class="ps-4" style="width: 85px;"><span class="badge bg-primary bg-opacity-10 text-primary fw-bold font-monospace" style="font-size: 0.72rem;">${sub.cups}</span></td>
+                                <td class="small text-secondary ps-2"><i class="bi bi-arrow-return-right me-1 text-muted"></i>${sub.orden}</td>
+                                <td>${subEpsBadges}</td>
+                                <td class="text-end text-nowrap">
+                                    <span class="badge bg-light text-dark border me-2" style="font-size: 0.75rem;">${sub.cantidad} por cita</span>
+                                    <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size: 0.70rem;" onclick="filtrarPorOrdenPendienteCita('${safeSubOrd}')" title="Filtrar únicamente ${sub.orden}">
+                                        <i class="bi bi-funnel me-1"></i>Filtrar
+                                    </button>
+                                </td>
+                            `;
+                            tbody.appendChild(trSub);
+                        });
+                    });
+                }
+                if (totalSpan) totalSpan.innerText = suma;
+            }
+            var modalEl = document.getElementById('modalDesglosePendienteCita');
+            var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            modal.show();
+        }
+    </script>
+
+    <!-- Protección contra inspección -->
+    <script>
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'F12' || e.keyCode === 123) { e.preventDefault(); return false; }
+            if (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i')) { e.preventDefault(); return false; }
+            if (e.ctrlKey && e.shiftKey && (e.key === 'J' || e.key === 'j')) { e.preventDefault(); return false; }
+            if (e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c')) { e.preventDefault(); return false; }
+            if (e.ctrlKey && (e.key === 'U' || e.key === 'u')) { e.preventDefault(); return false; }
+        });
+        document.addEventListener('dragstart', function(e) { e.preventDefault(); });
+    </script>
+
+    <!-- Modal para Agregar/Editar Observación de Gestión -->
+    <div class="modal fade" id="modalGestion" tabindex="-1" aria-labelledby="modalGestionLabel" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg" style="border-radius: 12px; overflow: hidden;">
+          <div class="modal-header bg-dark text-white py-2 px-3">
+            <h6 class="modal-title mb-0" id="modalGestionLabel">
+              <i class="bi bi-clipboard2-check me-2 text-info"></i>Observación de Gestión — Demanda Inducida
+            </h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body p-3 bg-light">
+            <input type="hidden" id="gestionIdZeus">
+            <div class="mb-2 p-2 bg-white rounded border">
+              <div class="small text-muted fw-semibold">Paciente:</div>
+              <div class="fw-bold text-dark" id="gestionPaciente">-</div>
+            </div>
+            
+            <label for="txtObservacionGestion" class="form-label fw-semibold small text-muted mb-1">
+              Nota de Seguimiento / Contacto:
+            </label>
+            <textarea id="txtObservacionGestion" class="form-control" rows="3" 
+                      placeholder="Ej: Paciente contactado, confirma asistencia para el 22/10. Pendiente autorización de la EPS..."
+                      style="font-size: 0.85rem; border-radius: 8px;"></textarea>
+                      
+            <div class="mt-2">
+              <small class="text-muted d-block mb-1" style="font-size: 0.7rem; font-weight: 600;">Respuestas rápidas:</small>
+              <div class="d-flex flex-wrap gap-1">
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size: 0.65rem; border-radius: 12px;" onclick="agregarTagGestion('Cita confirmada y agendada.')">Cita confirmada</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size: 0.65rem; border-radius: 12px;" onclick="agregarTagGestion('Llamada sin respuesta, se reintentará.')">No contesta</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size: 0.65rem; border-radius: 12px;" onclick="agregarTagGestion('Número equivocado / fuera de servicio.')">Tel. equivocado</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size: 0.65rem; border-radius: 12px;" onclick="agregarTagGestion('Pendiente gestión de autorización EPS.')">Pendiente EPS</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size: 0.65rem; border-radius: 12px;" onclick="agregarTagGestion('Paciente no desea el servicio.')">No desea cita</button>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer py-2 px-3 bg-white d-flex justify-content-between">
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+            <button type="button" id="btnGuardarGestion" onclick="guardarObservacionGestion()" class="btn btn-primary btn-sm px-3 d-flex align-items-center gap-1">
+              <i class="bi bi-floppy"></i> Guardar Observación
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal para Seguimiento de Cita y Autorización EPS -->
+    <div class="modal fade" id="modalSeguimientoCita" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg" style="border-radius: 12px; overflow: hidden;">
+          <div class="modal-header text-white py-2 px-3" style="background: linear-gradient(135deg, #173872, #234E96);">
+            <h6 class="modal-title mb-0">
+              <i class="bi bi-calendar2-check me-2 text-warning"></i>Seguimiento de Cita y Autorización EPS
+            </h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body p-3 bg-light">
+            <input type="hidden" id="citaIdZeus">
+            <div class="mb-2 p-2 bg-white rounded border">
+              <div class="small text-muted fw-semibold">Paciente:</div>
+              <div class="fw-bold text-dark" id="citaPaciente">-</div>
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label fw-semibold small text-muted mb-1">Estado del Seguimiento de Cita:</label>
+              <select id="selectEstadoCita" class="form-select form-select-sm fw-semibold">
+                <option value="PENDIENTE_CITA_AUT_EPS">🟠 Pendiente Cita — Autorización Confirmada por la EPS</option>
+                <option value="CITA_AGENDADA">🟢 Cita Agendada / Confirmada con el Paciente</option>
+                <option value="PENDIENTE_AUT_EPS">⏳ Pendiente Autorización EPS (Sin Volante)</option>
+                <option value="NO_CONTESTA">📞 En Gestión / Paciente No Contesta</option>
+                <option value="DESISTE">❌ Paciente Desiste / No Desea Cita</option>
+              </select>
+            </div>
+
+            <div class="row g-2 mb-2">
+              <div class="col-6">
+                <label class="form-label fw-semibold small text-muted mb-1">Fecha / Hora Cita (si aplica):</label>
+                <input type="datetime-local" id="txtFechaCita" class="form-control form-control-sm">
+              </div>
+              <div class="col-6">
+                <label class="form-label fw-semibold small text-muted mb-1">N° Autorización / Orden EPS:</label>
+                <input type="text" id="txtAutEpsManual" class="form-control form-control-sm" placeholder="Ej: 23550501">
+              </div>
+            </div>
+
+            <div class="form-check mb-2">
+              <input class="form-check-input" type="checkbox" id="chkConfirmarAutEps">
+              <label class="form-check-label small fw-semibold text-success" for="chkConfirmarAutEps">
+                Confirmar procedimiento como AUTORIZADO por la EPS
+              </label>
+            </div>
+
+            <label class="form-label fw-semibold small text-muted mb-1">Observación de Seguimiento:</label>
+            <textarea id="txtObsSeguimientoCita" class="form-control form-control-sm" rows="2" placeholder="Ej: Autorización confirmada en EPS, se agenda cita para Neurología..."></textarea>
+          </div>
+          <div class="modal-footer py-2 px-3 bg-white d-flex justify-content-between">
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+            <button type="button" id="btnGuardarSeguimientoCita" onclick="guardarSeguimientoCita()" class="btn btn-primary btn-sm px-3">
+              <i class="bi bi-floppy me-1"></i>Guardar Seguimiento
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal para Subir Orden Adjunta / Soportes -->
+    <div class="modal fade" id="modalSubirOrden" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg" style="border-radius: 12px; overflow: hidden;">
+          <div class="modal-header bg-dark text-white py-2 px-3">
+            <h6 class="modal-title mb-0">
+              <i class="bi bi-file-earmark-arrow-up me-2 text-warning"></i>Adjuntar Orden Médica / Autorización EPS
+            </h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body p-3 bg-light">
+            <input type="hidden" id="subirIdZeus">
+            <div class="mb-2 p-2 bg-white rounded border">
+              <div class="small text-muted fw-semibold">Paciente: <span id="subirPaciente" class="text-dark fw-bold">-</span></div>
+              <div class="small text-muted">Procedimiento: <span id="subirOrdenNombre" class="text-primary fw-semibold">-</span></div>
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label fw-semibold small text-muted mb-1">Tipo de Documento:</label>
+              <select id="selectTipoArchivo" class="form-select form-select-sm">
+                <option value="ORDEN_PDF" selected>Orden / Autorización PDF</option>
+                <option value="ADJUNTO">Historia Clínica / Soporte Adjunto</option>
+              </select>
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label fw-semibold small text-muted mb-1">Seleccionar Archivo (PDF o Imagen):</label>
+              <input type="file" id="inputArchivoOrden" class="form-control form-control-sm" accept=".pdf,.png,.jpg,.jpeg">
+            </div>
+
+            <div class="form-check mt-2">
+              <input class="form-check-input" type="checkbox" id="chkMarcarAutorizadoAlSubir" checked>
+              <label class="form-check-label small fw-semibold text-dark" for="chkMarcarAutorizadoAlSubir">
+                Colocar en estado <span class="text-warning fw-bold">Pendiente Cita (Aut. Confirmada EPS)</span>
+              </label>
+            </div>
+          </div>
+          <div class="modal-footer py-2 px-3 bg-white d-flex justify-content-between">
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+            <button type="button" id="btnSubirArchivoOrden" onclick="guardarArchivoOrdenAdjunta()" class="btn btn-success btn-sm px-3">
+              <i class="bi bi-cloud-arrow-up me-1"></i>Subir y Guardar
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal para Ver Soporte de Evidencia -->
+    <div class="modal fade" id="modalSoporte" tabindex="-1" aria-labelledby="modalSoporteLabel" aria-hidden="true">
+      <div class="modal-dialog modal-xl modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+          <div class="modal-header bg-dark text-white py-2">
+            <h6 class="modal-title mb-0" id="modalSoporteLabel"><i class="bi bi-shield-check me-2"></i>Evidencia de Validación en Portal EPS</h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body text-center p-2 bg-light">
+            <img id="soporteImg" src="" alt="Evidencia EPS" class="img-fluid w-100 shadow-sm rounded" style="max-height: 80vh; object-fit: contain;">
+          </div>
+          <div class="modal-footer py-1 d-flex justify-content-between">
+            <span id="soportePaciente" class="small text-muted fw-semibold"></span>
+            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+        function verSoporte(filename, paciente) {
+            if (!filename) return;
+            document.getElementById('soporteImg').src = '/api/evidencia/' + filename + '?t=' + Date.now();
+            document.getElementById('soportePaciente').innerText = 'Paciente: ' + (paciente || '');
+            var myModal = new bootstrap.Modal(document.getElementById('modalSoporte'));
+            myModal.show();
+        }
+
+        function revalidarEps(idZeus, btn) {
+            if (!idZeus) return;
+            var originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Consultando...';
+
+            var table = $('#ordenesTable').DataTable();
+            var allRows = table.rows().data().toArray();
+            var rowObj = allRows.find(function(r) { return r.Id === idZeus; });
+
+            fetch('/api/validar_eps/' + encodeURIComponent(idZeus), { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        table.ajax.reload(null, false);
+                    } else if (rowObj && rowObj.EpsBotCodigo && rowObj.Documento) {
+                        // Respaldo automático con el servidor RPA Hub (puerto 5070)
+                        fetch(_fomagRpaBase() + '/api/ejecutar_prueba', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                eps: rowObj.EpsBotCodigo,
+                                doc_tipo: 'CC',
+                                doc_num: rowObj.Documento,
+                                visual: false
+                            })
+                        })
+                        .then(r2 => r2.json())
+                        .then(() => {
+                            table.ajax.reload(null, false);
+                        })
+                        .catch(err2 => {
+                            alert('No se pudo validar: ' + (data.error || err2));
+                            btn.disabled = false;
+                            btn.innerHTML = originalHtml;
+                        });
+                    } else {
+                        alert('No se pudo validar: ' + (data.error || 'Error desconocido'));
+                        btn.disabled = false;
+                        btn.innerHTML = originalHtml;
+                    }
+                })
+                .catch(err => {
+                    alert('Error de conexión al validar EPS: ' + err);
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                });
+        }
+
+        function abrirModalGestion(idZeus, paciente, observacionActual) {
+            document.getElementById('gestionIdZeus').value = idZeus;
+            document.getElementById('gestionPaciente').innerText = paciente || 'Desconocido';
+            document.getElementById('txtObservacionGestion').value = observacionActual || '';
+            
+            var modalEl = document.getElementById('modalGestion');
+            var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            modal.show();
+            setTimeout(function() {
+                document.getElementById('txtObservacionGestion').focus();
+            }, 400);
+        }
+
+        function agregarTagGestion(texto) {
+            var txt = document.getElementById('txtObservacionGestion');
+            if (txt.value.trim() !== '') {
+                txt.value = txt.value.trim() + ' | ' + texto;
+            } else {
+                txt.value = texto;
+            }
+        }
+
+        function guardarObservacionGestion() {
+            var idZeus = document.getElementById('gestionIdZeus').value;
+            var obs = document.getElementById('txtObservacionGestion').value.trim();
+            var btn = document.getElementById('btnGuardarGestion');
+            
+            if (!idZeus) return;
+            
+            var origHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Guardando...';
+            
+            fetch('/api/guardar_observacion', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id_zeus: idZeus, observacion: obs })
+            })
+            .then(res => res.json())
+            .then(data => {
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+                if (data.success) {
+                    var modalEl = document.getElementById('modalGestion');
+                    var modalInstance = bootstrap.Modal.getInstance(modalEl);
+                    if (modalInstance) modalInstance.hide();
+                    
+                    $('#ordenesTable').DataTable().ajax.reload(null, false);
+                } else {
+                    alert('Error al guardar: ' + (data.error || 'Desconocido'));
+                }
+            })
+            .catch(err => {
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+                alert('Error de conexión al guardar observación: ' + err);
+            });
+        }
+
+        function abrirModalSeguimientoCita(idZeus, paciente, estadoCitaSugerido, fechaCitaActual, numAutActual, obsActual, confirmarAut) {
+            document.getElementById('citaIdZeus').value = idZeus;
+            document.getElementById('citaPaciente').innerText = paciente || '-';
+            document.getElementById('selectEstadoCita').value = estadoCitaSugerido || 'PENDIENTE_CITA_AUT_EPS';
+            document.getElementById('txtFechaCita').value = (fechaCitaActual || '').replace(' ', 'T');
+            document.getElementById('txtAutEpsManual').value = numAutActual || '';
+            document.getElementById('txtObsSeguimientoCita').value = obsActual || '';
+            document.getElementById('chkConfirmarAutEps').checked = !!confirmarAut;
+
+            var modalEl = document.getElementById('modalSeguimientoCita');
+            var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            modal.show();
+        }
+
+        function guardarSeguimientoCita() {
+            var idZeus = document.getElementById('citaIdZeus').value;
+            var estadoCita = document.getElementById('selectEstadoCita').value;
+            var fechaCita = document.getElementById('txtFechaCita').value.replace('T', ' ');
+            var numAut = document.getElementById('txtAutEpsManual').value.trim();
+            var obs = document.getElementById('txtObsSeguimientoCita').value.trim();
+            var confirmarAut = document.getElementById('chkConfirmarAutEps').checked || (estadoCita === 'PENDIENTE_CITA_AUT_EPS');
+
+            var btn = document.getElementById('btnGuardarSeguimientoCita');
+            var origHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Guardando...';
+
+            fetch('/api/guardar_seguimiento_cita', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id_zeus: idZeus,
+                    estado_cita: estadoCita,
+                    fecha_cita: fechaCita,
+                    num_autorizacion: numAut,
+                    observacion: obs,
+                    confirmar_autorizacion: confirmarAut
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+                if (data.success) {
+                    var modalInstance = bootstrap.Modal.getInstance(document.getElementById('modalSeguimientoCita'));
+                    if (modalInstance) modalInstance.hide();
+                    $('#ordenesTable').DataTable().ajax.reload(null, false);
+                } else {
+                    alert('Error al guardar seguimiento: ' + (data.error || ''));
+                }
+            })
+            .catch(err => {
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+                alert('Error de conexión: ' + err);
+            });
+        }
+
+        function abrirModalSubirOrden(idZeus, paciente, ordenNombre) {
+            document.getElementById('subirIdZeus').value = idZeus;
+            document.getElementById('subirPaciente').innerText = paciente || '-';
+            document.getElementById('subirOrdenNombre').innerText = ordenNombre || '-';
+            document.getElementById('inputArchivoOrden').value = '';
+            document.getElementById('chkMarcarAutorizadoAlSubir').checked = true;
+
+            var modalEl = document.getElementById('modalSubirOrden');
+            var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            modal.show();
+        }
+
+        function guardarArchivoOrdenAdjunta() {
+            var idZeus = document.getElementById('subirIdZeus').value;
+            var fileInput = document.getElementById('inputArchivoOrden');
+            if (!fileInput.files || fileInput.files.length === 0) {
+                alert('Seleccione un archivo PDF o imagen para adjuntar.');
+                return;
+            }
+
+            var formData = new FormData();
+            formData.append('archivo', fileInput.files[0]);
+            formData.append('tipo_archivo', document.getElementById('selectTipoArchivo').value);
+            formData.append('marcar_autorizado', document.getElementById('chkMarcarAutorizadoAlSubir').checked ? '1' : '0');
+
+            var btn = document.getElementById('btnSubirArchivoOrden');
+            var origHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Subiendo...';
+
+            fetch('/api/subir_orden_adjunta/' + encodeURIComponent(idZeus), {
+                method: 'POST',
+                body: formData
+            })
+            .then(r => r.json())
+            .then(data => {
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+                if (data.success) {
+                    var modalInstance = bootstrap.Modal.getInstance(document.getElementById('modalSubirOrden'));
+                    if (modalInstance) modalInstance.hide();
+                    $('#ordenesTable').DataTable().ajax.reload(null, false);
+                } else {
+                    alert('Error al subir archivo: ' + (data.error || ''));
+                }
+            })
+            .catch(err => {
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+                alert('Error de conexión: ' + err);
+            });
+        }
+
+        var timerEstadoBarridoModal = null;
+
+        function abrirModalTareaProgramada() {
+            var fFrom = document.getElementById('dateFrom') ? document.getElementById('dateFrom').value : '';
+            var fTo = document.getElementById('dateTo') ? document.getElementById('dateTo').value : '';
+            var lastDate = document.getElementById('stat-last') ? document.getElementById('stat-last').innerText.trim() : '';
+            var defaultDay = fFrom || (lastDate && lastDate !== '-' ? lastDate : '');
+
+            if (document.getElementById('tpFechaIni')) {
+                document.getElementById('tpFechaIni').value = defaultDay;
+                document.getElementById('tpFechaFin').value = fTo || defaultDay;
+            }
+            var banner = document.getElementById('tpAlertaBanner');
+            if (banner) banner.classList.add('d-none');
+            cargarEstadoTareaProgramada();
+            var modalEl = document.getElementById('modalTareaProgramada');
+            var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            modal.show();
+        }
+
+        function mostrarAlertaModal(tipo, mensaje) {
+            var banner = document.getElementById('tpAlertaBanner');
+            var txt = document.getElementById('tpAlertaTexto');
+            if (!banner || !txt) return;
+            banner.className = 'alert alert-' + tipo + ' alert-dismissible fade show py-2 px-3 small mb-3';
+            txt.innerHTML = mensaje;
+            banner.classList.remove('d-none');
+        }
+
+        function aplicarDatosEstado(d) {
+            if (!d) return;
+            var estadoBadge = document.getElementById('tpEstado');
+            var estadoTxt = d.estado || 'PROGRAMADA_ACTIVA';
+            if (estadoBadge) {
+                estadoBadge.innerText = estadoTxt;
+                if (estadoTxt === 'EN_EJECUCION') {
+                    estadoBadge.className = 'badge bg-warning text-dark';
+                } else if (estadoTxt === 'FINALIZADO' || estadoTxt === 'ACTIVO' || estadoTxt === 'PROGRAMADA_ACTIVA') {
+                    estadoBadge.className = 'badge bg-success';
+                } else if (estadoTxt === 'ERROR') {
+                    estadoBadge.className = 'badge bg-danger';
+                } else {
+                    estadoBadge.className = 'badge bg-secondary';
+                }
+            }
+            if (document.getElementById('tpIntervalo') && d.intervalo_minutos) {
+                document.getElementById('tpIntervalo').innerText = 'Cada ' + d.intervalo_minutos + ' minutos';
+            }
+            if (document.getElementById('tpInicio')) document.getElementById('tpInicio').innerText = d.inicio || '-';
+            if (document.getElementById('tpFin')) document.getElementById('tpFin').innerText = d.fin || '-';
+            if (document.getElementById('tpPacientes')) {
+                var total = d.total_pacientes ? (' / ' + d.total_pacientes) : '';
+                document.getElementById('tpPacientes').innerText = (d.pacientes_procesados || 0) + total;
+            }
+            if (document.getElementById('tpOrdenes')) document.getElementById('tpOrdenes').innerText = d.ordenes_actualizadas || 0;
+            if (document.getElementById('tpAutorizados')) document.getElementById('tpAutorizados').innerText = d.autorizados_detectados || 0;
+            if (document.getElementById('tpUltimoPac')) document.getElementById('tpUltimoPac').innerText = d.ultimo_paciente || '-';
+
+            if (d.estado === 'EN_EJECUCION') {
+                if (window.$ && $.fn.DataTable.isDataTable('#ordenesTable')) {
+                    $('#ordenesTable').DataTable().ajax.reload(null, false);
+                }
+            } else if (timerEstadoBarridoModal) {
+                clearInterval(timerEstadoBarridoModal);
+                timerEstadoBarridoModal = null;
+                if (window.$ && $.fn.DataTable.isDataTable('#ordenesTable')) {
+                    $('#ordenesTable').DataTable().ajax.reload(null, false);
+                }
+            }
+        }
+
+        function cargarEstadoTareaProgramada() {
+            var urlRpa = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+                ? 'http://localhost:5070/api/estado_barrido_dia'
+                : 'http://192.168.1.244:5070/api/estado_barrido_dia';
+
+            fetch(urlRpa)
+                .then(r => r.json())
+                .then(d => aplicarDatosEstado(d))
+                .catch(() => {
+                    fetch('/api/estado_tarea_programada')
+                        .then(r => r.json())
+                        .then(d => aplicarDatosEstado(d))
+                        .catch(e => console.error("Error cargando estado:", e));
+                });
+        }
+
+        function dispararBarridoAhora() {
+            var btn = document.getElementById('btnDispararBarrido');
+            var maxPac = document.getElementById('selectMaxPacientesBarrido').value;
+            var fIni = document.getElementById('tpFechaIni') ? document.getElementById('tpFechaIni').value : '';
+            var fFin = document.getElementById('tpFechaFin') ? document.getElementById('tpFechaFin').value : fIni;
+            var epsFiltro = document.getElementById('tpEpsFiltro') ? document.getElementById('tpEpsFiltro').value : 'TODAS';
+
+            if (epsFiltro === 'fomag_transcripcion') {
+                var mTp = bootstrap.Modal.getInstance(document.getElementById('modalTareaProgramada'));
+                if (mTp) mTp.hide();
+                abrirSelectorAutogestionFomag();
+                return;
+            }
+
+            var orig = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Iniciando...';
+
+            var urlRpa = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+                ? 'http://localhost:5070/api/ejecutar_barrido_dia'
+                : 'http://192.168.1.244:5070/api/ejecutar_barrido_dia';
+
+            var payload = {
+                fecha_inicio: fIni,
+                fecha_fin: fFin || fIni,
+                eps_filtro: epsFiltro,
+                max_pacientes: parseInt(maxPac, 10),
+                solo_pendientes: true,
+                visual: false
+            };
+
+            function iniciarSondeo() {
+                cargarEstadoTareaProgramada();
+                if (timerEstadoBarridoModal) clearInterval(timerEstadoBarridoModal);
+                timerEstadoBarridoModal = setInterval(cargarEstadoTareaProgramada, 2500);
+            }
+
+            fetch(urlRpa, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(r => r.json())
+            .then(d => {
+                btn.disabled = false;
+                btn.innerHTML = orig;
+                if (d.success) {
+                    mostrarAlertaModal('success', '<i class="bi bi-play-circle-fill me-1"></i>' + (d.mensaje || 'Barrido iniciado en el motor de bots RPA.'));
+                    iniciarSondeo();
+                } else {
+                    mostrarAlertaModal('warning', '<i class="bi bi-exclamation-triangle-fill me-1"></i>' + (d.error || 'No se pudo iniciar el barrido.'));
+                }
+            })
+            .catch(() => {
+                fetch('/api/ejecutar_barrido_programado', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                })
+                .then(r => r.json())
+                .then(d => {
+                    btn.disabled = false;
+                    btn.innerHTML = orig;
+                    if (d.success) {
+                        mostrarAlertaModal('success', '<i class="bi bi-play-circle-fill me-1"></i>' + (d.mensaje || 'Barrido automático iniciado.'));
+                        iniciarSondeo();
+                    } else {
+                        mostrarAlertaModal('danger', '<i class="bi bi-x-circle-fill me-1"></i>' + (d.error || 'No se pudo iniciar el barrido.'));
+                    }
+                })
+                .catch(err => {
+                    btn.disabled = false;
+                    btn.innerHTML = orig;
+                    mostrarAlertaModal('danger', '<i class="bi bi-x-octagon-fill me-1"></i>Error de conexión al iniciar el barrido.');
+                });
+            });
+        }
+    </script>
+
+    <!-- Modal de Tarea Programada RPA Multi-EPS -->
+    <div class="modal fade" id="modalTareaProgramada" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg" style="border-radius: 12px; overflow: hidden;">
+          <div class="modal-header text-white py-2 px-3" style="background: linear-gradient(135deg, #173872, #234E96);">
+            <h6 class="modal-title mb-0">
+              <i class="bi bi-robot me-2 text-warning"></i>Tarea Programada — Validación Automática Multi-EPS
+            </h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body p-3 bg-light">
+            <div id="tpAlertaBanner" class="alert alert-dismissible fade show py-2 px-3 small d-none mb-3" role="alert">
+              <span id="tpAlertaTexto"></span>
+              <button type="button" class="btn-close py-2" onclick="document.getElementById('tpAlertaBanner').classList.add('d-none');"></button>
+            </div>
+
+            <div class="alert alert-info py-2 px-3 small mb-3">
+              <i class="bi bi-info-circle-fill me-1"></i>
+              Los 4 bots (<strong>Capital Salud, Salud Total, FOMAG y Sanitas</strong>) validan automáticamente las órdenes pendientes agrupando por paciente, descargan los PDFs adjuntos y cambian las órdenes aprobadas a <strong>Pendiente Cita (Aut. Confirmada EPS)</strong>.
+            </div>
+
+            <div class="row g-2 mb-3">
+              <div class="col-6">
+                <div class="p-2 bg-white border rounded">
+                  <small class="text-muted d-block" style="font-size:0.7rem;">Frecuencia Programada</small>
+                  <span id="tpIntervalo" class="fw-bold text-primary small">Cada 15 minutos</span>
+                </div>
+              </div>
+              <div class="col-6">
+                <div class="p-2 bg-white border rounded">
+                  <small class="text-muted d-block" style="font-size:0.7rem;">Estado del Worker</small>
+                  <span id="tpEstado" class="badge bg-success">ACTIVO</span>
+                </div>
+              </div>
+              <div class="col-4">
+                <div class="p-2 bg-white border rounded text-center">
+                  <small class="text-muted d-block" style="font-size:0.68rem;">Pacientes Validados</small>
+                  <span id="tpPacientes" class="fw-bold text-dark">0</span>
+                </div>
+              </div>
+              <div class="col-4">
+                <div class="p-2 bg-white border rounded text-center">
+                  <small class="text-muted d-block" style="font-size:0.68rem;">Órdenes Cruzadas</small>
+                  <span id="tpOrdenes" class="fw-bold text-dark">0</span>
+                </div>
+              </div>
+              <div class="col-4">
+                <div class="p-2 bg-white border rounded text-center">
+                  <small class="text-muted d-block" style="font-size:0.68rem;">Aut. Confirmadas</small>
+                  <span id="tpAutorizados" class="fw-bold text-success">0</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="p-2 bg-white border rounded small mb-3">
+              <div><strong>Último inicio:</strong> <span id="tpInicio">-</span> | <strong>Fin:</strong> <span id="tpFin">-</span></div>
+              <div class="text-truncate"><strong>Último paciente:</strong> <span id="tpUltimoPac">-</span></div>
+            </div>
+
+            <div class="p-2 bg-white border rounded mb-2">
+              <div class="small fw-bold text-primary mb-2"><i class="bi bi-calendar-range me-1"></i>Seleccionar Día o Rango de Fechas a Validar:</div>
+              <div class="row g-2 mb-2">
+                <div class="col-6">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Fecha Inicial</label>
+                  <input type="date" id="tpFechaIni" class="form-control form-control-sm">
+                </div>
+                <div class="col-6">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Fecha Final</label>
+                  <input type="date" id="tpFechaFin" class="form-control form-control-sm">
+                </div>
+              </div>
+              <div class="row g-2 align-items-end">
+                <div class="col-5">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">EPS</label>
+                  <select id="tpEpsFiltro" class="form-select form-select-sm">
+                    <option value="TODAS" selected>Todas las 4 EPS</option>
+                    <option value="fomag">Solo FOMAG (Validar Volantes)</option>
+                    <option value="fomag_transcripcion">✨ Autogestión FOMAG (Transcripción Externa)</option>
+                    <option value="capital_salud">Solo Capital Salud</option>
+                    <option value="salud_total">Solo Salud Total</option>
+                    <option value="colsanitas">Solo Sanitas</option>
+                  </select>
+                </div>
+                <div class="col-4">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Cantidad</label>
+                  <select id="selectMaxPacientesBarrido" class="form-select form-select-sm">
+                    <option value="100" selected>Todo el día</option>
+                    <option value="15">15 pacientes</option>
+                    <option value="30">30 pacientes</option>
+                  </select>
+                </div>
+                <div class="col-3">
+                  <button type="button" id="btnDispararBarrido" onclick="dispararBarridoAhora()" class="btn btn-warning btn-sm w-100 fw-bold text-dark">
+                    <i class="bi bi-play-fill"></i> Ejecutar
+                  </button>
+                </div>
+              </div>
+              <div class="mt-2 pt-2 border-top d-flex justify-content-between align-items-center">
+                <small class="text-muted" style="font-size: 0.72rem;"><i class="bi bi-magic text-primary me-1"></i>¿Radicar Transcripción Externa en FOMAG Horus2?</small>
+                <button type="button" class="btn btn-sm py-0 px-3 fw-bold text-white" style="font-size: 0.72rem; border-radius: 20px; background: linear-gradient(135deg, #0284c7, #0369a1);" onclick="bootstrap.Modal.getInstance(document.getElementById('modalTareaProgramada')).hide(); abrirSelectorAutogestionFomag();">
+                  <i class="bi bi-magic me-1 text-warning"></i>Abrir Autogestión FOMAG
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer py-2 px-3 bg-white d-flex justify-content-between">
+            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="cargarEstadoTareaProgramada()">
+              <i class="bi bi-arrow-repeat me-1"></i>Actualizar Estado
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal de Desglose de Pendiente Cita por Orden Solicitada -->
+    <div class="modal fade" id="modalDesglosePendienteCita" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg" style="border-radius: 12px; overflow: hidden;">
+          <div class="modal-header text-dark py-2 px-3" style="background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-bottom: 2px solid #F59E0B;">
+            <h6 class="modal-title mb-0 fw-bold">
+              <i class="bi bi-calendar2-check-fill text-warning me-2"></i>Desglose de Pendiente Cita (Con Autorización EPS) por Orden Solicitada
+            </h6>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body p-3 bg-light">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <span class="small text-muted">Haz clic en <strong>Filtrar</strong> sobre cualquier procedimiento para ver en la tabla únicamente esos pacientes autorizados pendientes de cita:</span>
+              <span class="badge bg-warning text-dark fs-6">Total: <b id="totalModalPendienteCita">0</b> por cita</span>
+            </div>
+            <div class="table-responsive bg-white rounded border">
+              <table class="table table-hover table-sm align-middle mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th style="width: 85px;">CUPS</th>
+                    <th>Detalle Orden Solicitada</th>
+                    <th>Por Entidad (EPS)</th>
+                    <th class="text-end" style="width: 175px;">Pendientes Cita</th>
+                  </tr>
+                </thead>
+                <tbody id="tbodyDesglosePendienteCita">
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="modal-footer py-2 px-3 bg-white d-flex justify-content-between">
+            <button type="button" class="btn btn-outline-warning text-dark btn-sm fw-semibold" onclick="toggleFiltroPendienteCita(''); bootstrap.Modal.getInstance(document.getElementById('modalDesglosePendienteCita')).hide();">
+              <i class="bi bi-funnel me-1"></i>Ver Todas las Pendientes de Cita
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal de Autogestión de Autorización FOMAG (Transcripción Externa) -->
+    <div class="modal fade" id="modalTranscripcionFomag" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow-lg" style="border-radius: 14px; overflow: hidden;">
+          <div class="modal-header text-white py-2 px-3" style="background: linear-gradient(135deg, #0369a1, #0284c7);">
+            <h6 class="modal-title mb-0 fw-bold">
+              <i class="bi bi-magic me-2 text-warning"></i>Autogestión de Autorización FOMAG — Transcripción Externa (Horus2)
+            </h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body p-3 bg-light">
+            <input type="hidden" id="fomagIdZeus">
+            <input type="hidden" id="fomagUrlPdf">
+            <input type="hidden" id="fomagPdfB64">
+            <input type="hidden" id="fomagPdfNombre">
+
+            <!-- Buscador y Selector rápido de Orden FOMAG -->
+            <div class="p-2 px-3 bg-white border rounded mb-2 shadow-sm">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <label class="form-label small fw-bold text-primary mb-0" style="font-size: 0.74rem;">
+                  <i class="bi bi-person-lines-fill me-1"></i>Seleccionar Orden FOMAG (1 servicio CUPS por solicitud):
+                </label>
+                <span id="fomagConteoFilas" class="badge bg-secondary" style="font-size: 0.65rem;">0 órdenes</span>
+              </div>
+              <div class="row g-2 mb-2">
+                <div class="col-md-8 col-12">
+                  <div class="input-group input-group-sm">
+                    <span class="input-group-text bg-light text-muted"><i class="bi bi-search"></i></span>
+                    <input type="text" id="fomagFiltroInput" class="form-control" placeholder="🔍 Filtrar por cédula (ej. 24248251), nombre, CUPS o fecha..." oninput="filtrarOpcionesFomag(this.value)">
+                    <button class="btn btn-outline-secondary" type="button" onclick="document.getElementById('fomagFiltroInput').value=''; filtrarOpcionesFomag('');" title="Limpiar filtro">
+                      <i class="bi bi-x-lg"></i>
+                    </button>
+                  </div>
+                </div>
+                <div class="col-md-4 col-12 d-flex align-items-center">
+                  <div class="form-check form-switch mb-0">
+                    <input class="form-check-input" type="checkbox" id="fomagSoloFechaTabla" onchange="filtrarOpcionesFomag(document.getElementById('fomagFiltroInput').value)">
+                    <label class="form-check-label small text-muted" for="fomagSoloFechaTabla" style="font-size: 0.70rem;">Solo fecha actual de tabla</label>
+                  </div>
+                </div>
+              </div>
+              <select id="fomagSelectorOrden" class="form-select form-select-sm" onchange="if(this.value) abrirModalTranscripcionFomag(this.value)"></select>
+            </div>
+
+            <!-- Resumen de Paciente y Servicio Único -->
+            <div class="p-2 px-3 bg-white border rounded mb-3 shadow-sm">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1">
+                <div>
+                  <span class="badge bg-primary me-1" id="fomagDocBadge">CC -</span>
+                  <strong class="text-dark" id="fomagPacienteNombre">-</strong>
+                </div>
+                <span class="badge bg-info text-dark border border-info">
+                  <i class="bi bi-1-circle-fill me-1"></i>1 Solicitud por Servicio CUPS
+                </span>
+              </div>
+              <div class="small text-secondary fw-semibold">
+                <i class="bi bi-prescription2 text-primary me-1"></i>Servicio a transcribir:
+                <span class="badge bg-dark ms-1" id="fomagCupsBadge">-</span>
+                <span class="text-dark ms-1" id="fomagOrdenNombre">-</span>
+              </div>
+            </div>
+
+            <!-- Estado del PDF Adjunto y Extracción Automática -->
+            <div class="p-2 px-3 bg-white border rounded mb-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
+              <div class="small">
+                <strong><i class="bi bi-file-earmark-pdf-fill text-danger me-1"></i>Orden PDF Adjunta:</strong>
+                <span id="fomagEstadoPdf" class="ms-1 text-muted">Verificando archivo...</span>
+              </div>
+              <div class="d-flex align-items-center gap-2">
+                <label class="btn btn-outline-primary btn-sm py-0 px-2 mb-0" style="font-size: 0.74rem; cursor: pointer;">
+                  <i class="bi bi-folder2-open me-1"></i>Cargar / Cambiar PDF
+                  <input type="file" id="fomagInputPdfFile" accept="application/pdf" class="d-none" onchange="cargarPdfLocalFomag(this)">
+                </label>
+                <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size: 0.74rem;" onclick="extraerDatosPdfFomag()">
+                  <i class="bi bi-arrow-clockwise me-1"></i>Re-leer PDF
+                </button>
+              </div>
+            </div>
+
+            <div id="fomagAlertaBanner" class="alert py-2 px-3 small d-none mb-3" role="alert"></div>
+
+            <!-- Formulario Proceso de Registro - Transcripción Externa -->
+            <div class="p-3 bg-white border rounded shadow-sm">
+              <div class="small fw-bold text-primary border-bottom pb-1 mb-2">
+                <i class="bi bi-journal-medical me-1"></i>Proceso de Registro — Transcripción Externa
+              </div>
+              <div class="row g-2">
+                <div class="col-md-3 col-6">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Fecha de Orden *</label>
+                  <input type="date" id="fomagFechaOrden" class="form-control form-control-sm">
+                </div>
+                <div class="col-md-3 col-6">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Ámbito *</label>
+                  <select id="fomagAmbito" class="form-select form-select-sm">
+                    <option value="Ambulatorio" selected>Ambulatorio</option>
+                    <option value="Hospitalario">Hospitalario</option>
+                    <option value="Urgencias">Urgencias</option>
+                  </select>
+                </div>
+                <div class="col-md-4 col-8">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Médico que Ordenó *</label>
+                  <select id="fomagMedicoOrdeno" class="form-select form-select-sm">
+                    <option value="Médico especialista externo" selected>Médico Especialista Externo</option>
+                    <option value="Médico general externo">Médico General Externo</option>
+                  </select>
+                </div>
+                <div class="col-md-2 col-4">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Cantidad *</label>
+                  <input type="number" id="fomagCantidad" class="form-control form-control-sm" value="1" min="1" max="99">
+                </div>
+
+                <div class="col-md-4 col-6">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">N° Doc. Médico que Ordenó *</label>
+                  <input type="text" id="fomagMedicoDoc" class="form-control form-control-sm" placeholder="Ej. 1121833421">
+                  <small id="fomagMedicoNombre" class="text-muted d-block text-truncate" style="font-size:0.65rem;"></small>
+                </div>
+                <div class="col-md-3 col-6">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Registro Médico *</label>
+                  <input type="text" id="fomagMedicoReg" class="form-control form-control-sm" placeholder="Ej. 50-12284">
+                </div>
+                <div class="col-md-3 col-6">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Especialidad Médico *</label>
+                  <select id="fomagEspecialidad" class="form-select form-select-sm">
+                    <option value="Fisiatria" selected>Fisiatria</option>
+                    <option value="Neurologia">Neurologia</option>
+                    <option value="Neurocirugia">Neurocirugia</option>
+                    <option value="Neurologia Pediatrica">Neurologia Pediatrica</option>
+                    <option value="Neuropsicologia">Neuropsicologia</option>
+                    <option value="Medicina General">Medicina General</option>
+                    <option value="Medicina Interna">Medicina Interna</option>
+                    <option value="Ortopedia y Traumatologia">Ortopedia y Traumatologia</option>
+                    <option value="Pediatria">Pediatria</option>
+                    <option value="Psiquiatria">Psiquiatria</option>
+                    <option value="Radiologia e Imagenes Diagnosticas">Radiologia e Imagenes Diagnosticas</option>
+                  </select>
+                </div>
+                <div class="col-md-2 col-6">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Finalidad *</label>
+                  <select id="fomagFinalidad" class="form-select form-select-sm">
+                    <option value="Diagnóstico" selected>Diagnóstico</option>
+                    <option value="Terapéutico">Terapéutico</option>
+                    <option value="Rehabilitación">Rehabilitación</option>
+                    <option value="Paliación">Paliación</option>
+                    <option value="No aplica">No aplica</option>
+                  </select>
+                </div>
+
+                <div class="col-md-4">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Diagnóstico(s) CIE-10 * <span class="text-secondary">(ej. M519)</span></label>
+                  <input type="text" id="fomagDiagnosticos" class="form-control form-control-sm" placeholder="Ej. M519">
+                  <div id="fomagChipsDiagnosticos" class="mt-1 d-flex flex-wrap gap-1"></div>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">IPS que Ordena (NIT) *</label>
+                  <input type="text" id="fomagRepNit" class="form-control form-control-sm" value="901119103">
+                  <small class="text-muted" style="font-size:0.65rem;">901119103 | NEUROELECTRODIAGNOSTICO SH DEL LLANO IPS</small>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Sede a Direccionar Orden *</label>
+                  <select id="fomagRepCodigo" class="form-select form-select-sm">
+                    <option value="500010210901" selected>500010210901-NEUROELECTRODIAGNOSTICO SH DEL LLANO IPS - VILLAVICENCIO</option>
+                  </select>
+                  <small class="text-success fw-semibold" style="font-size:0.65rem;"><i class="bi bi-geo-alt-fill"></i> Direccionamiento automático al enviar</small>
+                </div>
+
+                <div class="col-12">
+                  <label class="form-label small text-muted mb-0" style="font-size:0.72rem;">Observaciones / Motivo Direccionamiento *</label>
+                  <input type="text" id="fomagObservaciones" class="form-control form-control-sm" value="Mejor oportunidad">
+                </div>
+              </div>
+            </div>
+
+            <!-- Contenedor de Evidencia / Captura de Pantalla -->
+            <div id="fomagCajaEvidencia" class="mt-3 p-2 bg-white border rounded d-none">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                <span class="small fw-bold text-secondary"><i class="bi bi-camera-fill me-1"></i>Evidencias del Proceso en Horus2 FOMAG:</span>
+                <div id="fomagGaleriaEvidencias" class="d-flex flex-wrap gap-1"></div>
+                <a id="fomagLinkEvidencia" href="#" target="_blank" class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:0.72rem;">Abrir imagen completa</a>
+              </div>
+              <img id="fomagImgEvidencia" src="" alt="Evidencia FOMAG" class="img-fluid rounded border" style="max-height: 360px; width: 100%; object-fit: contain;">
+            </div>
+          </div>
+          <div class="modal-footer py-2 px-3 bg-white d-flex flex-wrap justify-content-between align-items-center">
+            <div class="form-check form-switch mb-0">
+              <input class="form-check-input" type="checkbox" id="fomagModoVisual">
+              <label class="form-check-label small text-secondary" for="fomagModoVisual">Ver navegador en vivo (Windows)</label>
+            </div>
+            <div class="d-flex gap-2">
+              <button type="button" id="btnFomagSimular" class="btn btn-outline-info btn-sm fw-semibold text-dark" onclick="ejecutarTranscripcionFomag(true)">
+                <i class="bi bi-eye-fill me-1"></i>Simular / Probar Llenado
+              </button>
+              <button type="button" id="btnFomagRadicar" class="btn btn-primary btn-sm fw-bold" onclick="ejecutarTranscripcionFomag(false)">
+                <i class="bi bi-send-check-fill me-1"></i>Radicar Solicitud en FOMAG
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+        var _fomagFilaActual = null;
+
+        function _fomagRpaBase() {
+            return (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+                ? 'http://localhost:5070'
+                : 'http://192.168.1.244:5070';
+        }
+
+        function _mostrarAlertaFomag(tipo, html) {
+            var el = document.getElementById('fomagAlertaBanner');
+            if (!el) return;
+            el.className = 'alert alert-' + tipo + ' py-2 px-3 small mb-3';
+            el.innerHTML = html;
+            el.classList.remove('d-none');
+        }
+
+        function _obtenerFilasFomag() {
+            var dt = $('#ordenesTable').DataTable();
+            var filas = dt.rows().data().toArray();
+            var fomagRows = filas.filter(function(r) {
+                return (r.EpsBotCodigo === 'fomag') || /FOMAG|MAGISTERIO|FIDUPREVISORA|PREVISORA/i.test(String(r.Entidad || ''));
+            });
+            // Ordenar por fecha descendente (las más recientes primero: 2026-11-05 de primeritas)
+            fomagRows.sort(function(a, b) {
+                return String(b.Fecha || '').localeCompare(String(a.Fecha || ''));
+            });
+            return fomagRows;
+        }
+
+        function filtrarOpcionesFomag(query) {
+            query = (query || '').toLowerCase().trim();
+            var soloFecha = document.getElementById('fomagSoloFechaTabla') && document.getElementById('fomagSoloFechaTabla').checked;
+            var fTablaFrom = document.getElementById('dateFrom') ? document.getElementById('dateFrom').value : '';
+            var fTablaTo = document.getElementById('dateTo') ? document.getElementById('dateTo').value : '';
+
+            var fomagRows = _obtenerFilasFomag();
+            var filtradas = fomagRows.filter(function(r) {
+                var fRow = (r.Fecha || '').split(' ')[0];
+                if (soloFecha) {
+                    if (fTablaFrom && fRow < fTablaFrom) return false;
+                    if (fTablaTo && fRow > fTablaTo) return false;
+                }
+                if (!query) return true;
+                var haystack = (
+                    (r.Documento || '') + ' ' +
+                    (r.Paciente || '') + ' ' +
+                    (r.Cups || '') + ' ' +
+                    (r.Orden || '') + ' ' +
+                    fRow
+                ).toLowerCase();
+                return haystack.includes(query);
+            });
+
+            var sel = document.getElementById('fomagSelectorOrden');
+            var conteoEl = document.getElementById('fomagConteoFilas');
+            if (conteoEl) conteoEl.innerText = filtradas.length + ' de ' + fomagRows.length + ' órdenes';
+
+            if (!filtradas.length) {
+                sel.innerHTML = '<option value="">Sin coincidencias para "' + query + '"</option>';
+                return;
+            }
+
+            var actualId = _fomagFilaActual ? _fomagFilaActual.Id : '';
+            sel.innerHTML = filtradas.map(function(r) {
+                var tienePdf = (r.ValEpsArchivos || []).some(function(x) { return String(x.nombre_archivo || '').toLowerCase().endsWith('.pdf'); });
+                var tagPdf = tienePdf ? ' [📄 Con Orden PDF]' : '';
+                var fTxt = (r.Fecha || '').split(' ')[0];
+                var isSel = String(r.Id) === String(actualId) ? ' selected' : '';
+                return '<option value="' + r.Id + '"' + isSel + '>' +
+                       fTxt + ' | CC ' + (r.Documento || '') + ' - ' + (r.Paciente || '') + ' | CUPS ' + (r.Cups || '') + ' - ' + (r.Orden || '').substring(0, 42) + tagPdf +
+                       '</option>';
+            }).join('');
+
+            if (actualId && filtradas.some(function(r) { return String(r.Id) === String(actualId); })) {
+                sel.value = actualId;
+            } else if (filtradas.length > 0) {
+                abrirModalTranscripcionFomag(filtradas[0].Id);
+            }
+        }
+
+        function abrirSelectorAutogestionFomag() {
+            var dt = $('#ordenesTable').DataTable();
+            // Buscar primero entre las filas actualmente visibles/filtradas en la tabla
+            var filasVisibles = dt.rows({ search: 'applied' }).data().toArray();
+            var fomagVisibles = filasVisibles.filter(function(r) {
+                return (r.EpsBotCodigo === 'fomag') || /FOMAG|MAGISTERIO|FIDUPREVISORA|PREVISORA/i.test(String(r.Entidad || ''));
+            });
+            if (fomagVisibles.length > 0) {
+                abrirModalTranscripcionFomag(fomagVisibles[0].Id);
+                return;
+            }
+            var fomagRows = _obtenerFilasFomag();
+            if (!fomagRows.length) {
+                alert('No se encontraron órdenes de FOMAG cargadas en la tabla.');
+                return;
+            }
+            abrirModalTranscripcionFomag(fomagRows[0].Id);
+        }
+
+        function abrirModalTranscripcionFomag(idZeus) {
+            var dt = $('#ordenesTable').DataTable();
+            var filas = dt.rows().data().toArray();
+            var fomagRows = _obtenerFilasFomag();
+            var sel = document.getElementById('fomagSelectorOrden');
+            var conteoEl = document.getElementById('fomagConteoFilas');
+            if (conteoEl) conteoEl.innerText = fomagRows.length + ' órdenes FOMAG';
+
+            if (sel) {
+                sel.innerHTML = fomagRows.map(function(r) {
+                    var tienePdf = (r.ValEpsArchivos || []).some(function(x) { return String(x.nombre_archivo || '').toLowerCase().endsWith('.pdf'); });
+                    var tagPdf = tienePdf ? ' [📄 Con Orden PDF]' : '';
+                    var fTxt = (r.Fecha || '').split(' ')[0];
+                    return '<option value="' + r.Id + '"' + (String(r.Id) === String(idZeus) ? ' selected' : '') + '>' +
+                           fTxt + ' | CC ' + (r.Documento || '') + ' - ' + (r.Paciente || '') + ' | CUPS ' + (r.Cups || '') + ' - ' + (r.Orden || '').substring(0, 42) + tagPdf +
+                           '</option>';
+                }).join('');
+                sel.value = idZeus;
+            }
+            var row = filas.find(function(r) { return String(r.Id) === String(idZeus); }) || fomagRows[0];
+            if (!row) {
+                alert('No se encontró la fila de la orden ' + idZeus);
+                return;
+            }
+            _fomagFilaActual = row;
+            document.getElementById('fomagIdZeus').value = row.Id || '';
+            document.getElementById('fomagPdfB64').value = '';
+            document.getElementById('fomagPdfNombre').value = '';
+            document.getElementById('fomagInputPdfFile').value = '';
+            document.getElementById('fomagDocBadge').innerText = 'CC ' + (row.Documento || '');
+            document.getElementById('fomagPacienteNombre').innerText = row.Paciente || '';
+            document.getElementById('fomagCupsBadge').innerText = row.Cups || '';
+            document.getElementById('fomagOrdenNombre').innerText = row.Orden || '';
+            document.getElementById('fomagAlertaBanner').classList.add('d-none');
+            document.getElementById('fomagCajaEvidencia').classList.add('d-none');
+
+            // Buscar PDF adjunto en la fila (prefiriendo el más reciente subido)
+            var archivos = (row.ValEpsArchivos || []).slice().reverse();
+            var pdfs = archivos.filter(function(a) {
+                return String(a.nombre_archivo || '').toLowerCase().endsWith('.pdf');
+            });
+            pdfs.sort(function(a, b) { return (a.tipo === 'ORDEN_PDF' ? -1 : 1); });
+            var pdfOrd = pdfs[0] || null;
+
+            if (pdfOrd) {
+                document.getElementById('fomagUrlPdf').value = pdfOrd.url_descarga || '';
+                document.getElementById('fomagPdfNombre').value = pdfOrd.nombre_archivo || 'orden.pdf';
+                document.getElementById('fomagEstadoPdf').innerHTML =
+                    '<span class="badge bg-success-subtle text-success border border-success">' +
+                    '<i class="bi bi-check-circle-fill me-1"></i>' + (pdfOrd.nombre_archivo || 'Orden PDF') + '</span> ' +
+                    '<a href="' + pdfOrd.url_descarga + '" target="_blank" class="ms-1 text-decoration-none small"><i class="bi bi-box-arrow-up-right"></i> Ver PDF</a>';
+            } else if (row.NroAdmision && row.NroOrden) {
+                // Orden en SIESA — el bot la descargará automáticamente
+                var siesaUrl = NEUROBACK_API_URL + '/gedocumental/ver-pdf-orden/?estudio=' + row.NroAdmision + '&numero=' + row.NroOrden;
+                document.getElementById('fomagUrlPdf').value = siesaUrl;
+                document.getElementById('fomagPdfNombre').value = 'orden_' + row.NroOrden + '_siesa.pdf';
+                document.getElementById('fomagEstadoPdf').innerHTML =
+                    '<span class="badge bg-info-subtle text-info border border-info">' +
+                    '<i class="bi bi-cloud-download me-1"></i>Orden SIESA (se descargará automáticamente)</span> ' +
+                    '<a href="' + siesaUrl + '" target="_blank" class="ms-1 text-decoration-none small"><i class="bi bi-box-arrow-up-right"></i> Ver</a>';
+            } else {
+                document.getElementById('fomagUrlPdf').value = '';
+                document.getElementById('fomagEstadoPdf').innerHTML =
+                    '<span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle-fill me-1"></i>Sin PDF adjunto — súbalo con "Cargar / Cambiar PDF"</span>';
+            }
+
+            // Valores iniciales por defecto mientras extrae del PDF
+            var fRow = (row.Fecha || '').split(' ')[0];
+            document.getElementById('fomagFechaOrden').value = fRow;
+            document.getElementById('fomagAmbito').value = 'Ambulatorio';
+            document.getElementById('fomagMedicoOrdeno').value = 'Médico especialista externo';
+            document.getElementById('fomagCantidad').value = row.Cantidad || 1;
+            document.getElementById('fomagMedicoDoc').value = '';
+            document.getElementById('fomagMedicoNombre').innerText = '';
+            document.getElementById('fomagMedicoReg').value = '';
+            document.getElementById('fomagEspecialidad').value = 'Fisiatria';
+            document.getElementById('fomagFinalidad').value = 'Diagnóstico';
+            document.getElementById('fomagDiagnosticos').value = '';
+            document.getElementById('fomagChipsDiagnosticos').innerHTML = '';
+            document.getElementById('fomagRepNit').value = '901119103';
+            document.getElementById('fomagObservaciones').value = 'Mejor oportunidad';
+
+            var modalEl = document.getElementById('modalTranscripcionFomag');
+            bootstrap.Modal.getOrCreateInstance(modalEl).show();
+
+            extraerDatosPdfFomag();
+        }
+
+        function cargarPdfLocalFomag(input) {
+            if (!input.files || !input.files[0]) return;
+            var file = input.files[0];
+            var reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById('fomagPdfB64').value = e.target.result;
+                document.getElementById('fomagPdfNombre').value = file.name;
+                document.getElementById('fomagEstadoPdf').innerHTML =
+                    '<span class="badge bg-success-subtle text-success border border-success">' +
+                    '<i class="bi bi-file-earmark-check-fill me-1"></i>' + file.name + ' (' + Math.round(file.size / 1024) + ' KB)</span>';
+                extraerDatosPdfFomag();
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function aplicarDatosExtraidosFomag(resp) {
+            if (!resp || !resp.ok) {
+                _mostrarAlertaFomag('warning', '<i class="bi bi-exclamation-triangle-fill me-1"></i>No se pudieron extraer datos automáticos: ' + ((resp && resp.error) || 'Verifique el PDF'));
+                return;
+            }
+            var d = resp.datos || {};
+            if (d.fecha_orden) document.getElementById('fomagFechaOrden').value = d.fecha_orden;
+            if (d.ambito) document.getElementById('fomagAmbito').value = d.ambito;
+            if (d.medico_ordeno) document.getElementById('fomagMedicoOrdeno').value = d.medico_ordeno;
+            if (d.cantidad) document.getElementById('fomagCantidad').value = d.cantidad;
+            if (d.medico_documento) document.getElementById('fomagMedicoDoc').value = d.medico_documento;
+            document.getElementById('fomagMedicoNombre').innerText = d.medico_nombre ? ('Dr(a). ' + d.medico_nombre) : '';
+            if (d.medico_registro) document.getElementById('fomagMedicoReg').value = d.medico_registro;
+            if (d.especialidad) document.getElementById('fomagEspecialidad').value = d.especialidad;
+            if (d.finalidad) document.getElementById('fomagFinalidad').value = d.finalidad;
+            if (d.diagnosticos && d.diagnosticos.length) {
+                document.getElementById('fomagDiagnosticos').value = d.diagnosticos.join(', ');
+            }
+            var chipsHtml = '';
+            (d.diagnosticos_detalle || []).forEach(function(diag) {
+                chipsHtml += '<span class="badge bg-light text-dark border" style="cursor:pointer; font-size:0.65rem;" ' +
+                             'onclick="document.getElementById(\'fomagDiagnosticos\').value=\'' + diag.codigo + '\'" ' +
+                             'title="Clic para usar este CIE-10">' + diag.codigo + ' - ' + diag.nombre.substring(0, 42) + '</span>';
+            });
+            document.getElementById('fomagChipsDiagnosticos').innerHTML = chipsHtml;
+
+            if (resp.tiene_pdf) {
+                document.getElementById('fomagEstadoPdf').innerHTML =
+                    '<span class="badge bg-success-subtle text-success border border-success">' +
+                    '<i class="bi bi-check-circle-fill me-1"></i>' + (resp.pdf_nombre || 'orden.pdf') + ' (' + (resp.pdf_tamano_kb || 0) + ' KB)</span>';
+                _mostrarAlertaFomag('info', '<i class="bi bi-magic me-1"></i>Datos extraídos automáticamente de la orden PDF (<strong>' + (resp.pdf_nombre || 'orden.pdf') + '</strong>). Verifique la especialidad (<strong>' + (d.especialidad || 'Fisiatria') + '</strong>) y presione <strong>Simular</strong> o <strong>Radicar</strong>.');
+            }
+        }
+
+        function extraerDatosPdfFomag() {
+            if (!_fomagFilaActual) return;
+            var payload = {
+                id_zeus: document.getElementById('fomagIdZeus').value,
+                documento: _fomagFilaActual.Documento || '',
+                cups: _fomagFilaActual.Cups || '',
+                url_pdf: document.getElementById('fomagUrlPdf').value,
+                pdf_b64: document.getElementById('fomagPdfB64').value,
+                pdf_nombre: document.getElementById('fomagPdfNombre').value,
+                fecha_orden: (_fomagFilaActual.Fecha || '').split(' ')[0]
+            };
+            _mostrarAlertaFomag('secondary', '<span class="spinner-border spinner-border-sm me-2"></span>Extrayendo datos del médico, diagnóstico CIE-10 y fecha desde el PDF de la orden...');
+
+            fetch(_fomagRpaBase() + '/api/fomag/extraer_orden', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) { aplicarDatosExtraidosFomag(resp); })
+            .catch(function() {
+                fetch('/api/fomag/extraer_orden', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(resp) { aplicarDatosExtraidosFomag(resp); })
+                .catch(function(err) {
+                    _mostrarAlertaFomag('warning', '<i class="bi bi-exclamation-circle me-1"></i>No se pudo conectar al extractor automático. Puede completar los campos manualmente.');
+                });
+            });
+        }
+
+        function ejecutarTranscripcionFomag(simular) {
+            if (!_fomagFilaActual) return;
+            if (!simular && !confirm('¿Confirmar radicación de Transcripción Externa en FOMAG (Horus2) para el CUPS ' + (_fomagFilaActual.Cups || '') + ' de ' + (_fomagFilaActual.Paciente || '') + '?')) {
+                return;
+            }
+            var btnSim = document.getElementById('btnFomagSimular');
+            var btnRad = document.getElementById('btnFomagRadicar');
+            var origSim = btnSim.innerHTML;
+            var origRad = btnRad.innerHTML;
+            btnSim.disabled = true;
+            btnRad.disabled = true;
+
+            if (simular) {
+                btnSim.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Simulando en Horus2...';
+            } else {
+                btnRad.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Radicando en FOMAG...';
+            }
+            _mostrarAlertaFomag('info', '<span class="spinner-border spinner-border-sm me-2"></span>Conectando con Horus2 FOMAG (' + (simular ? 'Modo Simulación — sin enviar' : 'Radicación Real + Ordenamiento CUPS') + ')... Esto toma aprox. 15 a 25 segundos.');
+
+            var payload = {
+                id_zeus: document.getElementById('fomagIdZeus').value,
+                documento: _fomagFilaActual.Documento || '',
+                doc_tipo: 'CC',
+                cups: _fomagFilaActual.Cups || '',
+                cantidad: parseInt(document.getElementById('fomagCantidad').value || '1', 10),
+                fecha_orden: document.getElementById('fomagFechaOrden').value,
+                ambito: document.getElementById('fomagAmbito').value,
+                medico_ordeno: document.getElementById('fomagMedicoOrdeno').value,
+                medico_documento: document.getElementById('fomagMedicoDoc').value,
+                medico_registro: document.getElementById('fomagMedicoReg').value,
+                especialidad: document.getElementById('fomagEspecialidad').value,
+                finalidad: document.getElementById('fomagFinalidad').value,
+                diagnosticos: document.getElementById('fomagDiagnosticos').value,
+                rep_nit: document.getElementById('fomagRepNit').value,
+                rep_codigo: document.getElementById('fomagRepCodigo') ? document.getElementById('fomagRepCodigo').value : '500010210901',
+                observaciones: document.getElementById('fomagObservaciones').value,
+                url_pdf: document.getElementById('fomagUrlPdf').value,
+                pdf_b64: document.getElementById('fomagPdfB64').value,
+                pdf_nombre: document.getElementById('fomagPdfNombre').value,
+                visual: document.getElementById('fomagModoVisual').checked,
+                simular: Boolean(simular)
+            };
+
+            function _procesarRespuesta(res) {
+                btnSim.disabled = false;
+                btnRad.disabled = false;
+                btnSim.innerHTML = origSim;
+                btnRad.innerHTML = origRad;
+
+                if (res && res.soporte_evidencia) {
+                    var evUrl = _fomagRpaBase() + '/api/evidencia/' + res.soporte_evidencia + '?t=' + Date.now();
+                    document.getElementById('fomagImgEvidencia').src = evUrl;
+                    document.getElementById('fomagLinkEvidencia').href = evUrl;
+                    document.getElementById('fomagCajaEvidencia').classList.remove('d-none');
+
+                    var galEl = document.getElementById('fomagGaleriaEvidencias');
+                    if (galEl) {
+                        var evs = res.evidencias_proceso || [];
+                        galEl.innerHTML = evs.map(function(ev) {
+                            var u = _fomagRpaBase() + '/api/evidencia/' + ev.archivo + '?t=' + Date.now();
+                            return '<button type="button" class="btn btn-xs btn-outline-secondary py-0 px-2" style="font-size:0.68rem;" ' +
+                                   'onclick="document.getElementById(\'fomagImgEvidencia\').src=\'' + u + '\'; document.getElementById(\'fomagLinkEvidencia\').href=\'' + u + '\';">' +
+                                   (ev.etapa || 'Paso') + '</button>';
+                        }).join('');
+                    }
+                }
+
+                if (res && res.ok) {
+                    var r = res.resumen || {};
+                    var extraAut = '';
+                    if (res.num_autorizacion) {
+                        extraAut += ' | <strong>Autorización FOMAG:</strong> <span class="badge bg-success">#' + res.num_autorizacion + '</span>';
+                    }
+                    if (res.url_volante_pdf) {
+                        extraAut += ' <a href="' + _fomagRpaBase() + res.url_volante_pdf + '" target="_blank" class="btn btn-xs btn-success py-0 px-2 ms-1" style="font-size:0.7rem;"><i class="bi bi-file-earmark-pdf-fill me-1"></i>Ver Volante PDF</a>';
+                    }
+                    var det = '<div class="fw-bold mb-1"><i class="bi bi-check-circle-fill me-1"></i>' + (res.mensaje || 'Operación exitosa') + '</div>' +
+                              '<div class="small"><strong>Afiliado Horus2:</strong> ' + (r.afiliado_nombre || '-') +
+                              ' | <strong>Especialidad:</strong> ' + (r.especialidad || '-') +
+                              ' | <strong>CUPS Horus2:</strong> ' + (r.cups_horus || '-') +
+                              ' | <strong>Sede Direccionada:</strong> ' + (r.direccionamiento || '-') + extraAut + '</div>';
+                    _mostrarAlertaFomag('success', det);
+                    if (!simular && window.$ && $.fn.DataTable.isDataTable('#ordenesTable')) {
+                        $('#ordenesTable').DataTable().ajax.reload(null, false);
+                    }
+                } else {
+                    _mostrarAlertaFomag('danger', '<i class="bi bi-x-octagon-fill me-1"></i><strong>Error en FOMAG:</strong> ' + ((res && res.error) || 'No se pudo completar la operación.'));
+                }
+            }
+
+            fetch(_fomagRpaBase() + '/api/fomag/radicar_transcripcion', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(function(r) { return r.json(); })
+            .then(_procesarRespuesta)
+            .catch(function() {
+                fetch('/api/fomag/radicar_transcripcion', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                })
+                .then(function(r) { return r.json(); })
+                .then(_procesarRespuesta)
+                .catch(function(err) {
+                    btnSim.disabled = false;
+                    btnRad.disabled = false;
+                    btnSim.innerHTML = origSim;
+                    btnRad.innerHTML = origRad;
+                    _mostrarAlertaFomag('danger', '<i class="bi bi-wifi-off me-1"></i>No se pudo conectar con el servidor de bots RPA.');
+                });
+            });
+        }
+    </script>
+</body>
+</html>

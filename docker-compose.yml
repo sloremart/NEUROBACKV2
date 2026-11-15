@@ -35,8 +35,38 @@ services:
     volumes:
       - rpa_data:/app/data
 
+  demanda_inducida_daemon:
+    build: ./demanda_inducida
+    container_name: demanda_inducida_daemon
+    restart: unless-stopped
+    command: python -u main.py
+    env_file:
+      - path: ./demanda_inducida/.env
+        required: false
+    environment:
+      - TZ=America/Bogota
+    volumes:
+      - demanda_data:/app/data
+
+  demanda_inducida_web:
+    build: ./demanda_inducida
+    container_name: demanda_inducida_web
+    restart: unless-stopped
+    command: python -u app.py
+    ports:
+      - "5050:5000"
+    env_file:
+      - path: ./demanda_inducida/.env
+        required: false
+    environment:
+      - TZ=America/Bogota
+      - NEUROBACK_API_URL=http://192.168.1.211:8009
+    volumes:
+      - demanda_data:/app/data
+
 volumes:
   rpa_data:
+  demanda_data:
 
       
 
