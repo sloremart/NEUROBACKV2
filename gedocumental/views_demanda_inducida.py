@@ -665,9 +665,6 @@ def fomag_datos_admision_view(request):
                     ISNULL(med.nombre, '')                       AS medico_nombre,
                     ISNULL(med.cedula, '')                       AS medico_documento,
                     ISNULL(med.registro, '')                     AS medico_registro,
-                    ISNULL(m.diagnostico, '')                    AS diagnostico1,
-                    ISNULL(m.diagnostico2, '')                   AS diagnostico2,
-                    ISNULL(m.diagnostico3, '')                   AS diagnostico3,
                     ISNULL(CAST(i.cantidad AS INT), 1)           AS cantidad,
                     ISNULL(i.detalle, '')                        AS descripcion_cups
                 FROM ordenes o
@@ -682,10 +679,27 @@ def fomag_datos_admision_view(request):
                 return JsonResponse({"ok": False, "error": "Orden no encontrada en ZeusSalud"})
             rec = dict(zip([c[0] for c in cur.description], row))
 
-        diagnosticos = [
-            d.strip() for d in [rec.get("diagnostico1",""), rec.get("diagnostico2",""), rec.get("diagnostico3","")]
-            if d and str(d).strip()
-        ]
+        # Intentar traer diagnósticos desde ordenes (columnas pueden variar por versión de Zeus)
+        diagnosticos = []
+        try:
+            with connections['zeussalud'].cursor() as cur:
+                cur.execute(f"""
+                    SELECT TOP 1
+                        ISNULL(o.diagnostico, '')   AS diag1,
+                        ISNULL(o.diagnostico2, '')  AS diag2,
+                        ISNULL(o.diagnostico3, '')  AS diag3
+                    FROM ordenes o
+                    WHERE o.numero = {nro_orden}
+                """)
+                drow = cur.fetchone()
+                if drow:
+                    drec = dict(zip([c[0] for c in cur.description], drow))
+                    diagnosticos = [
+                        d.strip() for d in [drec.get("diag1",""), drec.get("diag2",""), drec.get("diag3","")]
+                        if d and str(d).strip()
+                    ]
+        except Exception:
+            pass  # diagnósticos opcionales; el usuario puede llenarlos manualmente
 
         return JsonResponse({
             "ok": True,
