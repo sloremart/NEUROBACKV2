@@ -734,11 +734,28 @@ def fomag_datos_admision_view(request):
         except Exception:
             pass  # diagnósticos opcionales; el usuario puede llenarlos manualmente
 
-        # Buscar especialidad del médico dinámicamente vía INFORMATION_SCHEMA
+        # Buscar especialidad del médico: primero detectar tablas/columnas de especialidad
         especialidad = ""
         try:
             cod_med = str(rec.get("cod_med_raw") or "").strip()
             if cod_med:
+                with connections['zeussalud'].cursor() as cur:
+                    # Buscar tablas que tengan columnas con 'espec' en el nombre
+                    cur.execute("""
+                        SELECT TABLE_NAME, COLUMN_NAME
+                        FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE LOWER(COLUMN_NAME) LIKE '%espec%'
+                          AND TABLE_NAME IN (
+                              SELECT TABLE_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                              WHERE LOWER(COLUMN_NAME) LIKE '%nombre%'
+                                OR LOWER(COLUMN_NAME) LIKE '%descrip%'
+                                OR LOWER(COLUMN_NAME) LIKE '%nombre_espec%'
+                          )
+                        ORDER BY TABLE_NAME, ORDINAL_POSITION
+                    """)
+                    espec_info = [(r[0], r[1]) for r in cur.fetchall()]
+
+                # Buscar el código de especialidad del médico en sis_medi
                 with connections['zeussalud'].cursor() as cur:
                     cur.execute("""
                         SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
@@ -746,14 +763,43 @@ def fomag_datos_admision_view(request):
                           AND LOWER(COLUMN_NAME) LIKE '%espec%'
                         ORDER BY ORDINAL_POSITION
                     """)
-                    espec_cols = [r[0] for r in cur.fetchall()]
-                if espec_cols:
-                    col = espec_cols[0]
+                    medi_espec_cols = [r[0] for r in cur.fetchall()]
+
+                if medi_espec_cols:
+                    cod_col = medi_espec_cols[0]
                     with connections['zeussalud'].cursor() as cur:
-                        cur.execute(f"SELECT TOP 1 ISNULL(CAST({col} AS VARCHAR), '') FROM sis_medi WHERE codigo = {cod_med}")
+                        cur.execute(f"SELECT TOP 1 CAST({cod_col} AS VARCHAR) FROM sis_medi WHERE codigo = {cod_med}")
                         erow = cur.fetchone()
-                        if erow and erow[0]:
-                            especialidad = str(erow[0]).strip()
+                        cod_espec = str(erow[0]).strip() if erow and erow[0] else ""
+
+                    # Intentar resolver el código a nombre en tablas de especialidades
+                    if cod_espec and cod_espec.isdigit():
+                        for tabla, col in espec_info:
+                            try:
+                                with connections['zeussalud'].cursor() as cur:
+                                    # Buscar columna de nombre/descripción en esa tabla
+                                    cur.execute(f"""
+                                        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                                        WHERE TABLE_NAME = '{tabla}'
+                                          AND (LOWER(COLUMN_NAME) LIKE '%nombre%' OR LOWER(COLUMN_NAME) LIKE '%descrip%')
+                                        ORDER BY ORDINAL_POSITION
+                                    """)
+                                    nombre_cols = [r[0] for r in cur.fetchall()]
+                                if nombre_cols:
+                                    with connections['zeussalud'].cursor() as cur:
+                                        cur.execute(f"""
+                                            SELECT TOP 1 ISNULL({nombre_cols[0]}, '')
+                                            FROM {tabla}
+                                            WHERE CAST({col} AS VARCHAR) = '{cod_espec}'
+                                        """)
+                                        nrow = cur.fetchone()
+                                        if nrow and str(nrow[0]).strip():
+                                            especialidad = str(nrow[0]).strip()
+                                            break
+                            except Exception:
+                                continue
+                    elif cod_espec:
+                        especialidad = cod_espec  # dejar el texto si ya es nombre
         except Exception:
             pass
 
