@@ -194,6 +194,26 @@ def demanda_inducida_view(request):
             "NotaGestion":        gestion_map[id_zeus].nota        if id_zeus in gestion_map else "",
         })
 
+    # Enriquecer NroAdmision (m.con_estudio) desde ZeusSalud para las filas que no lo traen
+    try:
+        nros_sin_admision = [item["NroOrden"] for item in data if not item["NroAdmision"] and item["NroOrden"]]
+        if nros_sin_admision:
+            placeholders_a = ", ".join(["%s"] * len(nros_sin_admision))
+            with connections['zeussalud'].cursor() as cur_a:
+                cur_a.execute(f"""
+                    SELECT CAST(o.numero AS VARCHAR) AS NroOrden,
+                           CAST(m.con_estudio AS VARCHAR) AS NroAdmision
+                    FROM ordenes o
+                    JOIN sis_maes m ON o.ingreso = m.con_estudio
+                    WHERE o.numero IN ({placeholders_a})
+                """, nros_sin_admision)
+                admision_map = {str(row[0]): str(row[1]) for row in cur_a.fetchall()}
+            for item in data:
+                if not item["NroAdmision"] and item["NroOrden"] in admision_map:
+                    item["NroAdmision"] = admision_map[item["NroOrden"]]
+    except Exception:
+        pass
+
     # Enriquecer con citas de ZeusSalud:
     # - Excluir pacientes cuya cita ya fue atendida (fecha pasada, no cancelada)
     # - Marcar TieneCita=True para citas futuras pendientes
