@@ -663,7 +663,7 @@ def fomag_datos_admision_view(request):
                 SELECT TOP 1
                     CONVERT(varchar, o.fecha, 23)                AS fecha_orden,
                     ISNULL(med.nombre, '')                       AS medico_nombre,
-                    ISNULL(med.num_id, '')                       AS medico_documento,
+                    ISNULL(med.cedula, '')                       AS medico_documento,
                     ISNULL(med.registro, '')                     AS medico_registro,
                     ISNULL(m.diagnostico, '')                    AS diagnostico1,
                     ISNULL(m.diagnostico2, '')                   AS diagnostico2,
