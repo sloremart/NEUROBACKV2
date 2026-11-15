@@ -47,7 +47,7 @@ from gedocumental.views import (
 )
 from gedocumental.utils.codigoentidad import obtener_hallazgos
 from gedocumental.views_ia import hallazgos_ia, bandeja_cuentas_medicas, documentos_faltantes
-from gedocumental.views_demanda_inducida import demanda_inducida_view, consultar_autorizacion_view, guardar_gestion_llamada
+from gedocumental.views_demanda_inducida import demanda_inducida_view, consultar_autorizacion_view, guardar_gestion_llamada, fomag_autogestion_extraer_view, fomag_autogestion_radicar_view
 from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote, debug_siesa_login, generar_pdf_enfermeria, generar_pdfs_enfermeria_lote, generar_pdf_consulta, generar_pdfs_consultas_lote, ver_pdf_orden, generar_pdf_procedimiento, generar_pdfs_procedimientos_lote
 
 # =============================================================================
@@ -98,9 +98,11 @@ gedocumental_urls = [
     path('radicar-san02/<int:numero_admision>/<str:idusuario>/',           radicar_san02_view,           name='v2-radicar-san02'),
     path('radicar-otros/<int:numero_admision>/<str:idusuario>/',           radicar_other_view,           name='v2-radicar-otros'),
     # ── Demanda Inducida ──────────────────────────────────────────────────────
-    path('demanda-inducida/',                                     demanda_inducida_view,        name='v2-demanda-inducida'),
-    path('consultar-autorizacion/',                               consultar_autorizacion_view,  name='v2-consultar-autorizacion'),
-    path('demanda-gestion/',                                      guardar_gestion_llamada,      name='v2-demanda-gestion'),
+    path('demanda-inducida/',                                     demanda_inducida_view,              name='v2-demanda-inducida'),
+    path('consultar-autorizacion/',                               consultar_autorizacion_view,        name='v2-consultar-autorizacion'),
+    path('demanda-gestion/',                                      guardar_gestion_llamada,            name='v2-demanda-gestion'),
+    path('fomag-autogestion-extraer/',                            fomag_autogestion_extraer_view,     name='v2-fomag-autogestion-extraer'),
+    path('fomag-autogestion-radicar/',                            fomag_autogestion_radicar_view,     name='v2-fomag-autogestion-radicar'),
     # ── Generación PDFs desde SIESA (reemplaza el flujo Antares) ─────────────
     path('generar-pdf-siesa/',       generar_pdf_siesa,          name='v2-generar-pdf-siesa'),
     path('generar-pdfs-siesa/',      generar_pdfs_siesa_lote,    name='v2-generar-pdfs-siesa-lote'),

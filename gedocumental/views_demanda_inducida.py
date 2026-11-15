@@ -12,6 +12,7 @@ from django.utils import timezone
 
 RPA_HUB_URL     = os.getenv("RPA_HUB_URL", "http://localhost:5055")
 DEMANDA_WEB_URL = os.getenv("DEMANDA_WEB_URL", "http://192.168.1.211:5050")
+PLAYGROUND_URL  = os.getenv("PLAYGROUND_URL",  "http://192.168.1.211:5070")
 
 
 def _normalizar_fecha_iso(valor) -> str:
@@ -615,3 +616,53 @@ def guardar_gestion_llamada(request):
         "nota":        obj.nota,
         "fecha":       obj.fecha.isoformat() if obj.fecha else None,
     })
+
+
+def _proxy_playground(endpoint: str, body: dict) -> dict:
+    payload = json.dumps(body).encode()
+    req = urllib.request.Request(
+        f"{PLAYGROUND_URL}{endpoint}",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        return json.loads(resp.read().decode())
+
+
+@csrf_exempt
+@require_POST
+def fomag_autogestion_extraer_view(request):
+    """Proxy a playground.py /api/fomag/extraer_orden — extrae datos del PDF de la orden."""
+    try:
+        body = json.loads(request.body)
+        return JsonResponse(_proxy_playground("/api/fomag/extraer_orden", body))
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read().decode()).get("error", f"Error {e.code}")
+        except Exception:
+            err = f"Error {e.code} del servicio"
+        return JsonResponse({"ok": False, "error": err}, status=502)
+    except urllib.error.URLError as e:
+        return JsonResponse({"ok": False, "error": f"Servicio no disponible: {e.reason}"}, status=503)
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_POST
+def fomag_autogestion_radicar_view(request):
+    """Proxy a playground.py /api/fomag/radicar_transcripcion — radica Transcripción Externa FOMAG."""
+    try:
+        body = json.loads(request.body)
+        return JsonResponse(_proxy_playground("/api/fomag/radicar_transcripcion", body))
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read().decode()).get("error", f"Error {e.code}")
+        except Exception:
+            err = f"Error {e.code} del servicio"
+        return JsonResponse({"ok": False, "error": err}, status=502)
+    except urllib.error.URLError as e:
+        return JsonResponse({"ok": False, "error": f"Servicio no disponible: {e.reason}"}, status=503)
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)

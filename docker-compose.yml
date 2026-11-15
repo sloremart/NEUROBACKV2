@@ -14,6 +14,7 @@ services:
       - REVISAR_CON_IA=${REVISAR_CON_IA:-True}
       - RPA_HUB_URL=http://rpa_bots_api:5055
       - DEMANDA_WEB_URL=http://192.168.1.211:5050
+      - PLAYGROUND_URL=http://192.168.1.211:5070
 
     volumes:
       - /media/disco1/examenes:/media/disco1/examenes
