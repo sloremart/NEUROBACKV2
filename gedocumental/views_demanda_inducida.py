@@ -692,7 +692,8 @@ def fomag_datos_admision_view(request):
                     ISNULL(med.registro, '')                     AS medico_registro,
                     ISNULL(CAST(i.cantidad AS INT), 1)           AS cantidad,
                     ISNULL(i.detalle, '')                        AS descripcion_cups,
-                    o.cod_med                                    AS cod_med_raw
+                    o.cod_med                                    AS cod_med_raw,
+                    ISNULL(CAST(o.ingreso AS VARCHAR), '')       AS nro_admision
                 FROM ordenes o
                 JOIN ordenes_detalle i ON i.numero_orden = o.numero
                 JOIN sis_maes m ON o.ingreso = m.con_estudio
@@ -780,6 +781,8 @@ def fomag_datos_admision_view(request):
 
         return JsonResponse({
             "ok": True,
+            "nro_admision": str(rec.get("nro_admision") or "").strip(),
+            "nro_orden":    nro_orden,
             "datos": {
                 "fecha_orden":      rec.get("fecha_orden", ""),
                 "medico_nombre":    rec.get("medico_nombre", ""),
