@@ -843,11 +843,14 @@ def fomag_autogestion_radicar_view(request):
                 if nro_orden and cups:
                     id_zeus = f"{nro_orden}-{cups}"
                     gestion_body = json.dumps({
+                        "id_zeus": id_zeus,
                         "confirmar_autorizacion": True,
                         "num_autorizacion": nro_aut,
+                        "estado_cita": "PENDIENTE_CITA_AUT_EPS",
+                        "fecha_cita": "",
                     }).encode()
                     gestion_req = urllib.request.Request(
-                        f"{DEMANDA_WEB_URL}/api/guardar_gestion/{id_zeus}",
+                        f"{DEMANDA_WEB_URL}/api/guardar_seguimiento_cita",
                         data=gestion_body,
                         headers={"Content-Type": "application/json"},
                         method="POST",
