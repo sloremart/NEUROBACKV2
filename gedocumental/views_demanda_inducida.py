@@ -727,80 +727,29 @@ def fomag_datos_admision_view(request):
                     drow = cur.fetchone()
                     if drow:
                         drec = dict(zip([c[0] for c in cur.description], drow))
+                        seen = set()
                         diagnosticos = [
                             str(v).strip() for v in drec.values()
-                            if v and str(v).strip()
+                            if v and str(v).strip() and str(v).strip() not in seen and not seen.add(str(v).strip())
                         ]
         except Exception:
             pass  # diagnósticos opcionales; el usuario puede llenarlos manualmente
 
-        # Buscar especialidad del médico y tablas disponibles para debug
+        # Resolver nombre de especialidad del médico via sis_especialidades
         especialidad = ""
-        debug_espec = {}
         try:
             cod_med = str(rec.get("cod_med_raw") or "").strip()
             if cod_med:
-                # 1. Obtener código de especialidad del médico
                 with connections['zeussalud'].cursor() as cur:
-                    cur.execute("""
-                        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-                        WHERE TABLE_NAME = 'sis_medi'
-                          AND LOWER(COLUMN_NAME) LIKE '%espec%'
-                        ORDER BY ORDINAL_POSITION
+                    cur.execute(f"""
+                        SELECT TOP 1 ISNULL(e.nombre, '')
+                        FROM sis_medi m
+                        JOIN sis_especialidades e ON CAST(e.codigo AS VARCHAR) = CAST(m.especialidad AS VARCHAR)
+                        WHERE m.codigo = {cod_med}
                     """)
-                    medi_espec_cols = [r[0] for r in cur.fetchall()]
-                debug_espec["medi_espec_cols"] = medi_espec_cols
-
-                cod_espec = ""
-                if medi_espec_cols:
-                    with connections['zeussalud'].cursor() as cur:
-                        cur.execute(f"SELECT TOP 1 CAST({medi_espec_cols[0]} AS VARCHAR) FROM sis_medi WHERE codigo = {cod_med}")
-                        erow = cur.fetchone()
-                        cod_espec = str(erow[0]).strip() if erow and erow[0] else ""
-                debug_espec["cod_espec"] = cod_espec
-
-                # 2. Buscar tablas con 'espec' en el nombre de tabla
-                with connections['zeussalud'].cursor() as cur:
-                    cur.execute("""
-                        SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
-                        WHERE LOWER(TABLE_NAME) LIKE '%espec%'
-                        ORDER BY TABLE_NAME
-                    """)
-                    tablas_espec = [r[0] for r in cur.fetchall()]
-                debug_espec["tablas_espec"] = tablas_espec
-
-                # 3. Para cada tabla, listar sus columnas
-                cols_por_tabla = {}
-                for t in tablas_espec:
-                    with connections['zeussalud'].cursor() as cur:
-                        cur.execute(f"""
-                            SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-                            WHERE TABLE_NAME = '{t}' ORDER BY ORDINAL_POSITION
-                        """)
-                        cols_por_tabla[t] = [r[0] for r in cur.fetchall()]
-                debug_espec["cols_por_tabla"] = cols_por_tabla
-
-                # 4. Intentar resolver nombre usando tablas detectadas
-                if cod_espec:
-                    for tabla, cols in cols_por_tabla.items():
-                        nombre_cols = [c for c in cols if 'nombre' in c.lower() or 'descrip' in c.lower()]
-                        id_cols = [c for c in cols if 'cod' in c.lower() or 'id' in c.lower() or 'espec' in c.lower()]
-                        if nombre_cols and id_cols:
-                            try:
-                                with connections['zeussalud'].cursor() as cur:
-                                    cur.execute(f"""
-                                        SELECT TOP 1 ISNULL(CAST({nombre_cols[0]} AS VARCHAR), '')
-                                        FROM {tabla}
-                                        WHERE CAST({id_cols[0]} AS VARCHAR) = '{cod_espec}'
-                                    """)
-                                    nrow = cur.fetchone()
-                                    if nrow and str(nrow[0]).strip():
-                                        especialidad = str(nrow[0]).strip()
-                                        break
-                            except Exception:
-                                continue
-                    if not especialidad:
-                        especialidad = cod_espec  # fallback al código
+                    erow = cur.fetchone()
+                    if erow and str(erow[0]).strip():
+                        especialidad = str(erow[0]).strip()
         except Exception:
             pass
 
@@ -816,7 +765,6 @@ def fomag_datos_admision_view(request):
                 "cantidad":         int(rec.get("cantidad") or 1),
                 "descripcion_cups": rec.get("descripcion_cups", ""),
             },
-            "_debug_espec": debug_espec,
         })
     except Exception as e:
         return JsonResponse({"ok": False, "error": str(e)}, status=500)
