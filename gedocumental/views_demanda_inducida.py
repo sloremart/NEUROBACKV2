@@ -832,7 +832,33 @@ def fomag_autogestion_radicar_view(request):
     """Proxy a playground.py /api/fomag/radicar_transcripcion — radica Transcripción Externa FOMAG."""
     try:
         body = json.loads(request.body)
-        return JsonResponse(_proxy_playground("/api/fomag/radicar_transcripcion", body))
+        result = _proxy_playground("/api/fomag/radicar_transcripcion", body)
+
+        # Si el bot tuvo éxito, actualizar estado en el Flask app (SQLite demanda inducida)
+        if result.get("ok"):
+            try:
+                nro_orden = str(body.get("nro_orden") or "").strip()
+                cups = str(body.get("cups") or "").strip().split("-")[0]
+                nro_aut = str(result.get("numero_autorizacion") or "").strip()
+                if nro_orden and cups:
+                    id_zeus = f"{nro_orden}-{cups}"
+                    gestion_body = json.dumps({
+                        "confirmar_autorizacion": bool(nro_aut),
+                        "num_autorizacion": nro_aut,
+                        "val_eps_estado": "CON_VOLANTE" if nro_aut else "AUTORIZADO",
+                    }).encode()
+                    gestion_req = urllib.request.Request(
+                        f"{DEMANDA_WEB_URL}/api/guardar_gestion/{id_zeus}",
+                        data=gestion_body,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(gestion_req, timeout=15):
+                        pass
+            except Exception:
+                pass  # no bloquear la respuesta si falla el guardado
+
+        return JsonResponse(result)
     except urllib.error.HTTPError as e:
         try:
             err = json.loads(e.read().decode()).get("error", f"Error {e.code}")
