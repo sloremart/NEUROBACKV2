@@ -639,6 +639,31 @@ def guardar_gestion_llamada(request):
     })
 
 
+# Mapeo de nombres de especialidad de ZeusSalud al formato exacto que usa Horus2
+_ESPEC_HORUS2 = [
+    (r"FISICA.{0,10}REHABILIT|REHABILIT.{0,10}FISICA|FISIATR",  "Fisiatria"),
+    (r"NEUROLOG.{0,5}PEDIAT|PEDIAT.{0,5}NEUROLOG",               "Neurologia Pediatrica"),
+    (r"NEUROCIRUG",                                               "Neurocirugia"),
+    (r"NEUROPSICOLOG",                                            "Neuropsicologia"),
+    (r"NEUROLOG",                                                 "Neurologia"),
+    (r"PEDIATR",                                                  "Pediatria"),
+    (r"MEDICINA\s+GENERAL|MED\s*GRAL",                           "Medicina General"),
+    (r"ORTOPED",                                                  "Ortopedia"),
+    (r"REUMATOLOG",                                               "Reumatologia"),
+    (r"ONCOLOG",                                                   "Oncologia"),
+]
+
+def _normalizar_especialidad_horus2(nombre: str) -> str:
+    """Convierte el nombre de especialidad de ZeusSalud al formato de Horus2."""
+    t = (nombre or "").upper().strip()
+    import unicodedata
+    t = "".join(c for c in unicodedata.normalize("NFD", t) if unicodedata.category(c) != "Mn")
+    for patron, horus_nombre in _ESPEC_HORUS2:
+        if re.search(patron, t):
+            return horus_nombre
+    return nombre  # si no hay match, devolver el original
+
+
 @csrf_exempt
 @require_POST
 def fomag_datos_admision_view(request):
@@ -749,7 +774,7 @@ def fomag_datos_admision_view(request):
                     """)
                     erow = cur.fetchone()
                     if erow and str(erow[0]).strip():
-                        especialidad = str(erow[0]).strip()
+                        especialidad = _normalizar_especialidad_horus2(str(erow[0]).strip())
         except Exception:
             pass
 
@@ -759,7 +784,7 @@ def fomag_datos_admision_view(request):
                 "fecha_orden":      rec.get("fecha_orden", ""),
                 "medico_nombre":    rec.get("medico_nombre", ""),
                 "medico_documento": rec.get("medico_documento", ""),
-                "medico_registro":  rec.get("medico_registro", ""),
+                "medico_registro":  rec.get("medico_registro", "").strip(),
                 "especialidad":     especialidad,
                 "diagnosticos":     diagnosticos,
                 "cantidad":         int(rec.get("cantidad") or 1),
