@@ -87,15 +87,28 @@ def extraer_datos_orden_pdf(pdf_bytes: bytes, cups: str = "") -> dict:
     if m:
         datos["fecha_orden"] = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
 
-    m = re.search(r"Registro:\s*([0-9A-Za-z\-]+)", texto) or re.search(r"Reg\.\s*Medico:\s*([0-9A-Za-z\-]+)", texto)
+    _t = _sin_tildes(texto)
+    m = (
+        re.search(r"Registro:\s*([0-9A-Za-z\-]+)", texto) or
+        re.search(r"Reg\.?\s*M[eé]dico:\s*([0-9A-Za-z\-]+)", texto, re.I) or
+        re.search(r"Reg\.?\s*Medico:\s*([0-9A-Za-z\-]+)", _t, re.I) or
+        re.search(r"Registro\s+M[eé]dico:\s*([0-9A-Za-z\-]+)", texto, re.I) or
+        re.search(r"R\.M\.:\s*([0-9A-Za-z\-]+)", texto, re.I) or
+        re.search(r"Reg\.?\s*M[eé]dico:\s*\n\s*([0-9A-Za-z\-]+)", texto, re.I) or
+        re.search(r"Reg\.?\s*Medico:\s*\n\s*([0-9A-Za-z\-]+)", _t, re.I)
+    )
     if m:
         datos["medico_registro"] = m.group(1).strip()
 
-    # Pie de la orden: "CC 1121833421 ANGELICA MARIA RODRIGUEZ VELASQUEZ" seguido de "Reg. Medico:"
-    m = re.search(r"\b(?:CC|CE)\s+(\d{5,12})\s+([A-ZÁÉÍÓÚÑ ]+)\s*\n\s*Reg\.?\s*Medico", texto)
+    # Pie de la orden: "CC 1121833421 ANGELICA MARIA RODRIGUEZ VELASQUEZ" seguido de "Reg. Medico: X"
+    m = re.search(r"\b(?:CC|CE)\s+(\d{5,12})\s+([A-ZÁÉÍÓÚÑ ]+)\s*\n\s*Reg\.?\s*M[eé]dico[:\s]*([0-9A-Za-z\-]*)", texto, re.I)
+    if not m:
+        m = re.search(r"\b(?:CC|CE)\s+(\d{5,12})\s+([A-ZÁÉÍÓÚÑ ]+)\s*\n\s*Reg\.?\s*Medico[:\s]*([0-9A-Za-z\-]*)", _t, re.I)
     if m:
         datos["medico_documento"] = m.group(1)
         datos["medico_nombre"] = re.sub(r"\s+", " ", m.group(2)).strip()
+        if m.group(3).strip() and not datos["medico_registro"]:
+            datos["medico_registro"] = m.group(3).strip()
 
     for patron, esp in ESPECIALIDADES_HC:
         if re.search(r"HISTORIA CLINICA[^\n]*\n?[^\n]*" + patron, t_up) or re.search(patron, t_up[:1500]):
