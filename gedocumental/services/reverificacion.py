@@ -30,7 +30,7 @@ from datetime import timedelta
 
 from gedocumental.services.ai_revision import (
     MAX_PAGINAS_LEER, MIN_CARACTERES_TEXTO, TIPOS_SIN_REVISION_IA, _buscar_palabra, _codigos_cups,
-    _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _mismo_codigo_cups, _mismo_paciente,
+    _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _imagen_documentada, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE, TIPOS_NO_REVISADOS,
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida,
     _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
@@ -125,6 +125,14 @@ def _solo_motivo_firma(descripcion) -> bool:
 
 def _menciona_lateralidad(descripcion) -> bool:
     return bool(re.search(r'derech|izquierd|lateralidad|bilateral', _plano(descripcion)))
+
+
+def _lateralidad_compatible(texto: str, datos_admision: dict) -> bool:
+    """Si los CUPS de la admisión dicen el lado (derecho/izquierdo/bilateral), el documento debe nombrarlo."""
+    cups = _plano(' '.join(str(c) for c in (datos_admision.get('cups') or [])))
+    doc = _plano(texto)
+    lados = [l for l in ('derech', 'izquierd', 'bilateral') if l in cups]
+    return all(l in doc for l in lados)
 
 
 def _numero_parecido(a: str, b: str) -> bool:
@@ -479,6 +487,13 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     if not _es_comprobante(tipo) and _solo_procedimiento_adicional(d):
         return DESCARTADO, ("El documento trae un procedimiento adicional a los de la admisión; "
                             "eso no es un error.")
+
+    # RESULTADO de imagen que documenta el estudio del CUPS (modalidad y zona; un CUPS genérico de "miembro
+    # inferior/superior" acepta la articulación concreta: cadera, rodilla...). La lateralidad del informe solo
+    # importa si el CUPS de la admisión la especifica (caso 35203: "RM de cadera derecha" para el CUPS 883522)
+    if (texto and (tipo or '').upper() == 'RESULTADO' and _solo_motivo_procedimiento(d)
+            and _imagen_documentada(texto, datos_admision) and _lateralidad_compatible(texto, datos_admision)):
+        return DESCARTADO, "El RESULTADO documenta el estudio del CUPS de la admisión (misma modalidad y zona)."
 
     if texto and _solo_motivo_procedimiento(d) and not _menciona_lateralidad(d):
         if tipo == 'RESULTADO' and (_consulta_documentada(texto, datos_admision)

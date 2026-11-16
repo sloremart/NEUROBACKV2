@@ -1231,13 +1231,17 @@ def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
 ALTO_MIN_TRAZO_FIRMA = 18   # pt; las letras vectorizadas de un comprobante miden ~7-12 pt
 
 
-def _trazos_de_firma(pagina) -> list:
-    """Curvas con forma de firma manuscrita: altas, no de ancho de página, con varios puntos, abajo de la mitad."""
+def _trazos_de_firma(pagina, en_cualquier_altura: bool = False) -> list:
+    """
+    Curvas con forma de firma manuscrita: altas, no de ancho de página, con varios puntos. En la 1.ª página
+    deben estar abajo de la mitad (arriba van el título y los datos); cuando la firma pasa a la 2.ª página
+    queda al inicio de la hoja (en_cualquier_altura).
+    """
     return [c for c in (pagina.curves or [])
             if ALTO_MIN_TRAZO_FIRMA <= (c['bottom'] - c['top']) <= pagina.height * 0.25
             and (c['x1'] - c['x0']) < pagina.width * 0.6
             and len(c.get('pts') or []) >= 10
-            and c['top'] >= pagina.height * 0.35]
+            and (en_cualquier_altura or c['top'] >= pagina.height * 0.35)]
 
 
 def _detectar_firma_pdf(ruta_absoluta: str) -> bool | None:
@@ -1252,7 +1256,7 @@ def _detectar_firma_pdf(ruta_absoluta: str) -> bool | None:
         import pdfplumber
         with pdfplumber.open(ruta_absoluta) as pdf:
             vistas = 0
-            for pagina in pdf.pages[:3]:
+            for n, pagina in enumerate(pdf.pages[:3]):
                 for img in pagina.images:
                     ancho, alto = img['x1'] - img['x0'], img['bottom'] - img['top']
                     # Una página escaneada completa no es una firma
@@ -1277,7 +1281,8 @@ def _detectar_firma_pdf(ruta_absoluta: str) -> bool | None:
                         return True
                 # PDF "impreso" con todo convertido a vectores (sin texto ni imágenes, caso 33421): las letras
                 # son curvas pequeñas (< 15 pt de alto); un trazo de firma es una curva alta en la mitad inferior
-                if not rotulos and not pagina.chars and _trazos_de_firma(pagina):
+                # (en la 2.ª página en adelante la firma puede quedar arriba: casos 32828, 35203)
+                if not rotulos and not pagina.chars and _trazos_de_firma(pagina, en_cualquier_altura=n > 0):
                     return True
             return False if vistas else None
     except Exception as exc:
@@ -1431,7 +1436,9 @@ def _solo_motivo_procedimiento(descripcion) -> bool:
     import re
     import unicodedata
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
-    sobre_procedimiento = re.search(r'procedimiento|cups|estudio|servicio|no se especifica|no incluye|no aparece', d)
+    # También "El documento reporta RESONANCIA DE CADERA..., mientras que la admisión es RESONANCIA..." (35203)
+    sobre_procedimiento = re.search(r'procedimiento|cups|estudio|servicio|no se especifica|no incluye|no aparece|'
+                                    r'resonancia|tomograf|radiograf|ecograf|\brx\b|\btac\b|\brm\b', d)
     return bool(sobre_procedimiento and not _hay_otros_motivos(d))
 
 
@@ -1914,6 +1921,14 @@ _ZONAS = ('CRANEO', 'CEREBRO', 'ENCEFALO', 'CARA', 'SENOS PARANASALES', 'ORBITA'
           'CADERA', 'COXO', 'RODILLA', 'TOBILLO', 'PIE', 'HOMBRO', 'CODO', 'MUNECA', 'MANO', 'FEMUR', 'TIBIA',
           'HUMERO', 'ANTEBRAZO', 'PIERNA', 'MAMA', 'TIROIDES', 'RENAL', 'RINON', 'HIGADO', 'PROSTATA',
           'OBSTETRIC', 'ARTICULACION', 'VESICULA', 'TESTICUL', 'CAROTID')
+# CUPS genéricos por miembro ("RM de articulaciones de miembro inferior (específico)"): el informe nombra la
+# articulación o segmento concreto (cadera, rodilla...), caso 35203
+_ZONAS_MIEMBRO = {
+    'MIEMBRO INFERIOR': ('CADERA', 'COXO', 'RODILLA', 'TOBILLO', 'PIE', 'PIES', 'FEMUR', 'TIBIA', 'PERONE',
+                         'PIERNA', 'MUSLO', 'CALCANE', 'TARSO', 'METATARS', 'ARTICULACION SACROILIACA'),
+    'MIEMBRO SUPERIOR': ('HOMBRO', 'CODO', 'MUNECA', 'MANO', 'MANOS', 'HUMERO', 'ANTEBRAZO', 'BRAZO', 'RADIO',
+                         'CUBITO', 'CARPO', 'METACARP', 'DEDO', 'CLAVICULA', 'ESCAPULA'),
+}
 
 
 def _imagen_documentada(texto: str, datos_admision: dict) -> bool:
@@ -1942,6 +1957,10 @@ def _imagen_documentada(texto: str, datos_admision: dict) -> bool:
                 zonas = [z for z in _ZONAS if z in c]
                 if not zonas or any(z in doc for z in zonas):
                     return True
+                # Miembro inferior/superior: vale cualquier articulación o segmento de ese miembro
+                for miembro, partes in _ZONAS_MIEMBRO.items():
+                    if miembro in c and any(f' {p}' in doc for p in partes):
+                        return True
                 break
     return False
 

@@ -439,6 +439,41 @@ class FirmaVectorialTests(SimpleTestCase):
     def test_trazo_alto_en_el_encabezado_no_es_firma(self):
         self.assertIsNone(self._detectar(self.LETRAS + [self._curva(40, 30, 80, 40, pts=40)]))
 
+    def test_firma_al_inicio_de_la_segunda_pagina(self):
+        """Casos 32828 y 35203: la firma pasa a la 2.ª hoja y queda arriba."""
+        from gedocumental.services.ai_revision import _detectar_firma_pdf
+        hoja = lambda curvas: SimpleNamespace(width=595, height=842, images=[], chars=[], curves=curvas,
+                                              extract_words=lambda: [])
+        pdf = mock.MagicMock()
+        pdf.__enter__.return_value = SimpleNamespace(pages=[
+            hoja(self.LETRAS), hoja([self._curva(60, 40, 200, 60, pts=80)])])
+        with mock.patch('pdfplumber.open', return_value=pdf):
+            self.assertTrue(_detectar_firma_pdf('/tmp/35203C.pdf'))
+
+
+class ResultadoMiembroInferiorTests(SimpleTestCase):
+    """Caso 35203: CUPS 883522 'RM de articulaciones de miembro inferior' y el informe es de cadera derecha."""
+
+    ADM = dict(ADMISION, cups=['883522 - RESONANCIA MAGNÉTICA DE ARTICULACIONES DE MIEMBRO INFERIOR '
+                               '(ESPECÍFICO) (cant. 1)'])
+    DESC = ("El documento reporta RESONANCIA DE CADERA DERECHA CONTRASTADA, mientras que la admisión es "
+            "RESONANCIA MAGNÉTICA DE ARTICULACIONES DE MIEMBRO INFERIOR.")
+
+    def test_cadera_es_miembro_inferior(self):
+        texto = "RESULTADO DE IMAGENES DIAGNOSTICAS LECTURA RESONANCIA DE CADERA DERECHA CONTRASTADA " * 3
+        decision = evaluar_hallazgo('RESULTADO', self.DESC, self.ADM, texto=texto)
+        self.assertEqual(decision[0], 'DESCARTADO')
+
+    def test_hombro_no_es_miembro_inferior(self):
+        texto = "RESULTADO DE IMAGENES DIAGNOSTICAS LECTURA RESONANCIA DE HOMBRO DERECHO " * 3
+        desc = self.DESC.replace('CADERA DERECHA CONTRASTADA', 'HOMBRO DERECHO')
+        self.assertIsNone(evaluar_hallazgo('RESULTADO', desc, self.ADM, texto=texto))
+
+    def test_lado_del_cups_debe_coincidir(self):
+        adm = dict(ADMISION, cups=['883522 - RESONANCIA DE MIEMBRO INFERIOR IZQUIERDO (cant. 1)'])
+        texto = "RESULTADO DE IMAGENES DIAGNOSTICAS LECTURA RESONANCIA DE RODILLA DERECHA " * 3
+        self.assertIsNone(evaluar_hallazgo('RESULTADO', self.DESC, adm, texto=texto))
+
 
 class CantidadCeroLeidaTests(SimpleTestCase):
     """Caso 35942: Sanitas, CUPS 879420 cantidad 1 (columna corrida); la IA leyó 0."""
