@@ -408,6 +408,38 @@ class AutorizacionDeMasConOrdenTests(SimpleTestCase):
         self.assertFalse(_autorizacion_de_mas_con_orden(self.DESC, self.ADM, '883101:1'))
 
 
+def _curva(x0, top, ancho, alto, pts=12):
+    return {'x0': x0, 'x1': x0 + ancho, 'top': top, 'bottom': top + alto, 'pts': [(0, 0)] * pts}
+
+
+class FirmaVectorialTests(SimpleTestCase):
+    """Comprobante firmado en tablet e 'impreso' a PDF: todo son vectores, sin texto ni imágenes (caso 33421)."""
+
+    _curva = staticmethod(_curva)
+
+    def _detectar(self, curvas):
+        from gedocumental.services.ai_revision import _detectar_firma_pdf
+        pagina = SimpleNamespace(width=595, height=842, images=[], chars=[], curves=curvas,
+                                 extract_words=lambda: [])
+        pdf = mock.MagicMock()
+        pdf.__enter__.return_value = SimpleNamespace(pages=[pagina])
+        with mock.patch('pdfplumber.open', return_value=pdf):
+            return _detectar_firma_pdf('/tmp/33421C.pdf')
+
+    # Letras vectorizadas: muchas curvas pequeñas por toda la página
+    LETRAS = [_curva(40 + (i % 60) * 8, 60 + (i // 60) * 14, 7, 9) for i in range(1700)]
+
+    def test_firma_en_trazos_vectoriales(self):
+        firma = [self._curva(80, 640, 120, 45, pts=60), self._curva(150, 650, 40, 30, pts=20)]
+        self.assertTrue(self._detectar(self.LETRAS + firma))
+
+    def test_sin_firma_solo_letras(self):
+        self.assertIsNone(self._detectar(self.LETRAS))
+
+    def test_trazo_alto_en_el_encabezado_no_es_firma(self):
+        self.assertIsNone(self._detectar(self.LETRAS + [self._curva(40, 30, 80, 40, pts=40)]))
+
+
 class CantidadCeroLeidaTests(SimpleTestCase):
     """Caso 35942: Sanitas, CUPS 879420 cantidad 1 (columna corrida); la IA leyó 0."""
     ADM = dict(ADMISION, paciente='OLGA LILIANA TOLE MONTES', identificacion='CC 40428075',

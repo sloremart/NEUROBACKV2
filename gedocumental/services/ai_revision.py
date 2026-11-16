@@ -1228,6 +1228,18 @@ def _mismo_paciente(resultado: dict, datos_admision: dict) -> bool:
     return True
 
 
+ALTO_MIN_TRAZO_FIRMA = 18   # pt; las letras vectorizadas de un comprobante miden ~7-12 pt
+
+
+def _trazos_de_firma(pagina) -> list:
+    """Curvas con forma de firma manuscrita: altas, no de ancho de página, con varios puntos, abajo de la mitad."""
+    return [c for c in (pagina.curves or [])
+            if ALTO_MIN_TRAZO_FIRMA <= (c['bottom'] - c['top']) <= pagina.height * 0.25
+            and (c['x1'] - c['x0']) < pagina.width * 0.6
+            and len(c.get('pts') or []) >= 10
+            and c['top'] >= pagina.height * 0.35]
+
+
 def _detectar_firma_pdf(ruta_absoluta: str) -> bool | None:
     """
     Comprobantes digitales de Zeus: la firma del paciente va como imagen dentro del PDF.
@@ -1263,6 +1275,10 @@ def _detectar_firma_pdf(ruta_absoluta: str) -> bool | None:
                               and len(c.get('pts') or []) >= 4]
                     if trazos:
                         return True
+                # PDF "impreso" con todo convertido a vectores (sin texto ni imágenes, caso 33421): las letras
+                # son curvas pequeñas (< 15 pt de alto); un trazo de firma es una curva alta en la mitad inferior
+                if not rotulos and not pagina.chars and _trazos_de_firma(pagina):
+                    return True
             return False if vistas else None
     except Exception as exc:
         logger.warning("No se pudo analizar la firma de %s: %s", ruta_absoluta, exc)
