@@ -842,15 +842,26 @@ def fomag_autogestion_radicar_view(request):
             try:
                 nro_orden = str(body.get("nro_orden") or "").strip()
                 cups = str(body.get("cups") or "").strip().split("-")[0]
-                nro_aut = str(result.get("numero_autorizacion") or "").strip()
+                nro_aut = str(result.get("num_autorizacion") or "").strip()
+                volante_url = str(result.get("volante_pdf_url") or "").strip()
+                volante_nombre = str(result.get("volante_pdf_nombre") or "").strip()
                 if nro_orden and cups:
                     id_zeus = f"{nro_orden}-{cups}"
+                    archivos = []
+                    if volante_url:
+                        archivos = [{
+                            "tipo": "ORDEN_PDF",
+                            "nombre_archivo": volante_nombre or f"volante_fomag_{cups}.pdf",
+                            "nombre_original": volante_nombre or f"Orden FOMAG {cups}.pdf",
+                            "url_descarga": f"{PLAYGROUND_URL}{volante_url}",
+                        }]
                     gestion_body = json.dumps({
                         "id_zeus": id_zeus,
                         "confirmar_autorizacion": True,
                         "num_autorizacion": nro_aut,
                         "estado_cita": "PENDIENTE_CITA_AUT_EPS",
                         "fecha_cita": "",
+                        "val_eps_archivos": archivos,
                     }).encode()
                     gestion_req = urllib.request.Request(
                         f"{DEMANDA_WEB_URL}/api/guardar_seguimiento_cita",
