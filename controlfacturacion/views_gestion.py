@@ -313,17 +313,24 @@ CAUSAS = {
     'hallazgo_resultado':  'Hallazgo en el resultado (coord. médica)',
     'faltan_documentos':   'Faltan documentos',
     'sin_revision_ia':     'Pendiente revisión IA',
+    'antes_ia':            'Cargada antes de la IA: revisión manual de Cuentas Médicas',
     'pendiente_cm':        'Pre-auditada: pendiente aprobación Cuentas Médicas',
     'aprobada_cm':         'Aprobada por Cuentas Médicas: pendiente facturar',
 }
+AREA_CUENTAS_MEDICAS = 'CUENTAS MÉDICAS'
+AREA_FACTURACION = 'FACTURACIÓN'
 
 
 def _causas_sin_factura(ids, zeus: dict) -> dict:
     """
-    {admision_id: {'causa', 'causa_texto', 'detalle': [..]}} — en qué etapa está detenido el estudio,
-    en orden de prioridad (lo primero que hay que resolver). Mismas reglas de la bandeja de Cuentas
-    Médicas y de documentos faltantes: el particular no exige documentos; MRC no exige autorización.
+    {admision_id: {'causa', 'causa_texto', 'detalle': [..], 'responsable_causa_id', 'responsable_causa'}}
+    — en qué etapa está detenido el estudio, en orden de prioridad (lo primero que hay que resolver), y
+    quién lo debe resolver. Mismas reglas de la bandeja de Cuentas Médicas y de documentos faltantes:
+    el particular no exige documentos; MRC no exige autorización.
+    Responsable: hallazgos → usuario del hallazgo (quien cargó el documento; el RESULTADO, coordinación
+    médica); faltantes y devueltas → quien cargó los documentos; lo demás → el área (Cuentas Médicas).
     """
+    from django.db.models import Min as _Min
     from gedocumental.models import ObservacionesArchivos, RevisionIA
     from gedocumental.services.ai_revision import TIPOS_NO_REVISADOS, TIPOS_SIN_REVISION_IA
     from gedocumental.services.validacion_paciente import CONTRATOS_SIN_AUTORIZACION
@@ -332,22 +339,32 @@ def _causas_sin_factura(ids, zeus: dict) -> dict:
     archivos = list(
         ArchivoFacturacion.objects.filter(Admision_id__in=ids)
         .exclude(Tipo__in=TIPOS_SIN_REVISION_IA)
-        .values('IdArchivo', 'Admision_id', 'Tipo', 'RevisionPrimera')
+        .values('IdArchivo', 'Admision_id', 'Tipo', 'RevisionPrimera', 'FechaCreacionArchivo', 'Usuario_id')
     )
     revisados = set(
         RevisionIA.objects.filter(IdArchivo__in=[a['IdArchivo'] for a in archivos])
         .values_list('IdArchivo', flat=True)
     )
+    # Momento en que arrancó la revisión con IA: lo cargado antes nunca se revisó (lo revisa CM a mano)
+    inicio_ia = RevisionIA.objects.aggregate(m=_Min('Fecha'))['m']
     hallazgos: dict = defaultdict(list)
-    for aid, tipo_doc, desc in (RevisionIA.objects.filter(AdmisionId__in=ids, Resuelta=False)
-                                .exclude(TipoHallazgo='OK').exclude(TipoDocumento__in=TIPOS_NO_REVISADOS)
-                                .values_list('AdmisionId', 'TipoDocumento', 'Descripcion')):
-        hallazgos[aid].append((tipo_doc or '', _reparar_texto((desc or '').strip())))
-    devueltas = set(
-        ObservacionesArchivos.objects.filter(ObservacionCuentasMedicas=True, IdArchivo__Admision_id__in=ids,
-                                             IdArchivo__RevisionPrimera=False)
-        .values_list('IdArchivo__Admision_id', flat=True)
-    )
+    for aid, tipo_doc, desc, uid in (RevisionIA.objects.filter(AdmisionId__in=ids, Resuelta=False)
+                                     .exclude(TipoHallazgo='OK').exclude(TipoDocumento__in=TIPOS_NO_REVISADOS)
+                                     .order_by('Fecha')
+                                     .values_list('AdmisionId', 'TipoDocumento', 'Descripcion', 'UsuarioId')):
+        hallazgos[aid].append((tipo_doc or '', _reparar_texto((desc or '').strip()), uid))
+    devueltas: dict = {}
+    for aid, uid in (ObservacionesArchivos.objects
+                     .filter(ObservacionCuentasMedicas=True, IdArchivo__Admision_id__in=ids,
+                             IdArchivo__RevisionPrimera=False)
+                     .values_list('IdArchivo__Admision_id', 'IdArchivo__Usuario_id')):
+        devueltas.setdefault(aid, uid)
+
+    User = get_user_model()
+    ids_usuarios = {a['Usuario_id'] for a in archivos if a['Usuario_id']}
+    ids_usuarios |= {u for lista in hallazgos.values() for _, _, u in lista if u}
+    ids_usuarios |= {u for u in devueltas.values() if u}
+    nombres = {u.id: _nombre_usuario(u) for u in User.objects.filter(id__in=ids_usuarios)}
 
     por_adm: dict = defaultdict(list)
     for a in archivos:
@@ -359,10 +376,14 @@ def _causas_sin_factura(ids, zeus: dict) -> dict:
         tipos = {(a['Tipo'] or '').upper() for a in arcs}
         contrato = (zeus.get(aid, {}).get('contrato') or '').upper()
         h = hallazgos.get(aid, [])
-        h_adm = [f"{t}: {d}" for t, d in h if t in TIPOS_ADMISIONES]
+        h_adm = [(f"{t}: {d}", u) for t, d, u in h if t in TIPOS_ADMISIONES]
         # "Ausencia del reporte" ya no aplica si el RESULTADO está cargado (el cron lo cierra en su ciclo)
-        h_res = [f"{t}: {d}" for t, d in h if t == TIPO_COORDINACION
+        h_res = [(f"{t}: {d}", u) for t, d, u in h if t == TIPO_COORDINACION
                  and not ('RESULTADO' in tipos and d.lower().startswith('ausencia del reporte'))]
+        # Quien cargó los documentos de admisión (no el RESULTADO, que lo sube coordinación médica)
+        cargue = sorted((a for a in arcs if a['Usuario_id'] and (a['Tipo'] or '').upper() != 'RESULTADO'),
+                        key=lambda a: a['FechaCreacionArchivo'])
+        admisionista = cargue[0]['Usuario_id'] if cargue else None
 
         requeridos = [] if 'PARTICULAR' in contrato else [
             t for t in ('ORDEN', 'AUTORIZACION', 'COMPROBANTE')
@@ -370,23 +391,40 @@ def _causas_sin_factura(ids, zeus: dict) -> dict:
         ]
         faltan = [t for t in requeridos if t not in tipos]
         evaluados = [a for a in arcs if (a['Tipo'] or '').upper() not in ('FACTURA', *TIPOS_NO_REVISADOS)]
-        sin_ia = sorted({(a['Tipo'] or '').upper() for a in evaluados if a['IdArchivo'] not in revisados})
+        no_revisados = [a for a in evaluados if a['IdArchivo'] not in revisados]
+        sin_ia = sorted({(a['Tipo'] or '').upper() for a in no_revisados})
+        antes_ia = bool(no_revisados) and inicio_ia is not None and all(
+            a['FechaCreacionArchivo'] and a['FechaCreacionArchivo'] < inicio_ia for a in no_revisados)
 
+        responsable_id, area = None, AREA_CUENTAS_MEDICAS
         if aid in devueltas:
             causa, detalle = 'devuelta_cm', []
+            responsable_id = devueltas[aid] or admisionista
         elif h_adm:
-            causa, detalle = 'hallazgo_admisiones', h_adm
+            causa, detalle = 'hallazgo_admisiones', [x for x, _ in h_adm]
+            responsable_id = h_adm[0][1] or admisionista
         elif h_res:
-            causa, detalle = 'hallazgo_resultado', h_res
+            causa, detalle = 'hallazgo_resultado', [x for x, _ in h_res]
+            responsable_id = h_res[0][1] or getattr(settings, 'USUARIO_COORDINACION_MEDICA_ID', None)
         elif faltan:
             causa, detalle = 'faltan_documentos', faltan
+            responsable_id = admisionista
+            area = 'SIN USUARIO DE CARGUE'   # nadie cargó documentos de admisión (solo el sistema)
+        elif antes_ia:
+            causa, detalle = 'antes_ia', sin_ia
         elif sin_ia:
             causa, detalle = 'sin_revision_ia', sin_ia
         elif arcs and all(a['RevisionPrimera'] for a in evaluados or arcs):
-            causa, detalle = 'aprobada_cm', []
+            causa, detalle, area = 'aprobada_cm', [], AREA_FACTURACION
         else:
             causa, detalle = 'pendiente_cm', []
-        resultado[aid] = {'causa': causa, 'causa_texto': CAUSAS[causa], 'detalle': detalle}
+        resultado[aid] = {
+            'causa': causa, 'causa_texto': CAUSAS[causa], 'detalle': detalle,
+            'responsable_causa_id': responsable_id,
+            'responsable_causa': nombres.get(responsable_id) if responsable_id else area,
+        }
+        if responsable_id and not resultado[aid]['responsable_causa']:
+            resultado[aid]['responsable_causa'] = f"Usuario {responsable_id}"
     return resultado
 
 
@@ -422,11 +460,23 @@ def bandeja_realizados(request):
         data.append(fila)
     data.sort(key=lambda x: x['dias_pendiente'] or 0, reverse=True)
     resumen = defaultdict(int)
+    responsables: dict = {}
     for fila in data:
         resumen[fila.get('causa')] += 1
+        nombre = fila.get('responsable_causa') or 'Sin responsable'
+        r = responsables.setdefault(nombre, {'responsable': nombre, 'responsable_id': fila.get('responsable_causa_id'),
+                                             'total': 0, 'valor': 0.0, 'causas': defaultdict(int)})
+        r['total'] += 1
+        r['valor'] += fila['valor_total']
+        r['causas'][fila.get('causa')] += 1
+    lista_responsables = sorted(
+        ({**r, 'causas': [{'causa': k, 'texto': CAUSAS[k], 'total': r['causas'][k]} for k in CAUSAS if r['causas'].get(k)]}
+         for r in responsables.values()),
+        key=lambda r: r['valor'], reverse=True)
     return JsonResponse({'success': True, 'data': data, 'total': len(data),
                          'causas': [{'causa': k, 'texto': CAUSAS[k], 'total': resumen[k]}
-                                    for k in CAUSAS if resumen.get(k)]})
+                                    for k in CAUSAS if resumen.get(k)],
+                         'responsables': lista_responsables})
 
 
 # ── Bandeja 2: Facturados sin radicar ────────────────────────────────────────
