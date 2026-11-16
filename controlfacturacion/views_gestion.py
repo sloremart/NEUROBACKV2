@@ -96,6 +96,15 @@ def _datos_zeus(admision_ids) -> dict:
                     sm.EPSPaciente                                          AS cod_eps,
                     sm.ufuncional                                           AS ufuncional,
                     LTRIM(RTRIM(COALESCE(uf.descripcion, ''))) AS servicio_nombre,
+                    CASE WHEN ISNULL(sm.Prefijo, '') <> ''
+                         THEN LTRIM(RTRIM(sm.Prefijo)) + ' ' + LTRIM(RTRIM(ISNULL(sm.NumeroFactura, '')))
+                         ELSE '' END                                        AS factura_zeus,
+                    sm.vlr_factura                                          AS vlr_factura,
+                    CAST(sm.fecha_usuario AS DATE)                          AS fecha_factura_zeus,
+                    LTRIM(RTRIM(ISNULL(sm.nom_egreso, '')))                 AS facturador,
+                    CAST(ISNULL(sm.radicado, 0) AS INT)                     AS radicado_zeus,
+                    CAST(sm.fecha_radicado AS DATE)                         AS fecha_radicado_zeus,
+                    LTRIM(RTRIM(ISNULL(sm.remision, '')))                   AS remision_zeus,
                     (SELECT SUM(COALESCE(sd.total, 0)) FROM sis_deta sd
                       WHERE sd.estudio = sm.con_estudio)                    AS valor_total
                 FROM sis_maes sm
@@ -290,19 +299,56 @@ def _fecha_factura(admision_ids) -> dict:
     )
 
 
+# Zeus (como el dashboard de facturación): facturada = Prefijo FES; radicada = radicado=1 con fecha de
+# radicación y número de remisión. Sin radicar = ninguno de los tres.
+FACTURADA_ZEUS_SQL = "ISNULL(sm.Prefijo, '') = 'FES' AND ISNULL(sm.estado, '') <> 'N'"
+SIN_RADICAR_ZEUS_SQL = ("ISNULL(sm.radicado, 0) = 0 AND sm.fecha_radicado IS NULL "
+                        "AND NULLIF(LTRIM(RTRIM(ISNULL(sm.remision, ''))), '') IS NULL")
+
+
 def _facturas_sin_radicar(fecha_inicio: str, fecha_fin: str) -> list[int]:
-    """Admisiones con FACTURA sin radicar, existentes en Zeus en el rango, sin MRC ni particulares."""
-    candidatos = set(
-        ArchivoFacturacion.objects.filter(Tipo='FACTURA', Radicado=False,
-                                          FechaCreacionArchivo__date__gte=fecha_inicio)
-        .values_list('Admision_id', flat=True)
+    """
+    Admisiones facturadas en Zeus (FES) y aún no radicadas (sin radicado, fecha de radicación ni remisión),
+    con ingreso en el rango. Sin MRC ni particulares (no se radican por admisión).
+    """
+    excluir = ' '.join(
+        f"AND UPPER(ISNULL(ct.alias, '') + ' ' + ISNULL(ct.nombre, '')) NOT LIKE '%%{c}%%'"
+        for c in CONTRATOS_SIN_RADICACION
     )
-    # Si algún archivo de la admisión quedó radicado, la admisión ya se radicó
-    radicadas = set(
-        ArchivoFacturacion.objects.filter(Admision_id__in=candidatos, Radicado=True)
-        .values_list('Admision_id', flat=True)
-    )
-    return _zeus_en_rango(candidatos - radicadas, fecha_inicio, fecha_fin, excluir_sin_radicacion=True)
+    with connections['zeussalud'].cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT sm.con_estudio
+            FROM sis_maes sm
+            LEFT JOIN contratos ct ON sm.contrato = ct.codigo
+            WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
+              AND {FACTURADA_ZEUS_SQL}
+              AND {SIN_RADICAR_ZEUS_SQL}
+              {excluir}
+            """,
+            [fecha_inicio, fecha_fin],
+        )
+        return [int(r[0]) for r in cur.fetchall()]
+
+
+# Etapa en GE Documental de una admisión facturada sin radicar
+ETAPAS_RADICACION = {
+    'sin_resultado':          'Falta el RESULTADO',
+    'sin_factura_pdf':        'Falta cargar la FACTURA',
+    'pendiente_renombrar':    'Lista: pendiente renombrar en GE Documental',
+    'renombrada_sin_radicar': 'Renombrada: pendiente radicar en Zeus',
+}
+
+
+def _etapa_radicacion(arcs: dict) -> str:
+    """arcs: {TIPO: [...], 'radicado': bool} de _archivos_por_admision (radicado = renombrado en GE Documental)."""
+    if arcs.get('radicado'):
+        return 'renombrada_sin_radicar'
+    if not arcs.get('RESULTADO'):
+        return 'sin_resultado'
+    if not arcs.get('FACTURA'):
+        return 'sin_factura_pdf'
+    return 'pendiente_renombrar'
 
 
 # ── Causa por la que un estudio realizado sigue sin factura ───────────────────
@@ -484,21 +530,45 @@ def bandeja_realizados(request):
 
 @api_view(['GET'])
 def bandeja_radicados(request):
-    """Estudios con FACTURA sin radicar (días desde el cargue de la factura). Sin MRC ni particulares."""
+    """
+    Admisiones facturadas en Zeus (FES) sin radicar (sin radicado, fecha de radicación ni remisión), con la
+    etapa en GE Documental (resultado, factura cargada, renombrado). Días desde la factura en Zeus.
+    Valor = valor de la factura. Sin MRC ni particulares.
+    """
     fecha_inicio, fecha_fin = _rango(request)
     ids = _facturas_sin_radicar(fecha_inicio, fecha_fin)
     if not ids:
-        return JsonResponse({'success': True, 'data': [], 'total': 0})
+        return JsonResponse({'success': True, 'data': [], 'total': 0, 'causas': []})
 
     zeus = _datos_zeus(ids)
     archivos = _archivos_por_admision(ids)
     casos = _casos_por_admision(ids, 'radicados')
     fechas_factura = _fecha_factura(ids)
 
-    data = [_enrich(aid, zeus, archivos, casos.get(aid), _dias_desde(fechas_factura.get(aid)))
-            for aid in ids]
+    data = []
+    resumen = defaultdict(int)
+    for aid in ids:
+        z = zeus.get(aid, {})
+        fila = _enrich(aid, zeus, archivos, casos.get(aid),
+                       _dias_desde(z.get('fecha_factura_zeus') or fechas_factura.get(aid)))
+        etapa = _etapa_radicacion(archivos.get(aid, {}))
+        resumen[etapa] += 1
+        fila.update({
+            'causa':          etapa,
+            'causa_texto':    ETAPAS_RADICACION[etapa],
+            'detalle':        [],
+            'usuario_cargue': _reparar_texto(z.get('facturador') or ''),   # quien facturó en Zeus
+            'factura':        z.get('factura_zeus') or '',
+            'fecha_factura':  z['fecha_factura_zeus'].isoformat() if z.get('fecha_factura_zeus') else None,
+            'renombrado':     bool(archivos.get(aid, {}).get('radicado')),
+        })
+        if z.get('vlr_factura'):
+            fila['valor_total'] = float(z['vlr_factura'])
+        data.append(fila)
     data.sort(key=lambda x: x['dias_pendiente'] or 0, reverse=True)
-    return JsonResponse({'success': True, 'data': data, 'total': len(data)})
+    return JsonResponse({'success': True, 'data': data, 'total': len(data),
+                         'causas': [{'causa': k, 'texto': ETAPAS_RADICACION[k], 'total': resumen[k]}
+                                    for k in ETAPAS_RADICACION if resumen.get(k)]})
 
 
 # ── Bandeja 3: Devoluciones ───────────────────────────────────────────────────
@@ -763,8 +833,8 @@ def represamiento_cuentas_medicas(request):
             'al_dia': 0, 'vencidos': 0, 'dias_promedio': 0.0,
             'casos': [],
         })
-        valor = float(z.get('valor_total') or 0)
-        dias = _dias_desde(fechas_factura.get(aid))
+        valor = float(z.get('vlr_factura') or z.get('valor_total') or 0)
+        dias = _dias_desde(z.get('fecha_factura_zeus') or fechas_factura.get(aid))
         g['admisiones'] += 1
         g['valor_total'] += valor
         if dias is not None and dias > DIAS_VENCIDO:
