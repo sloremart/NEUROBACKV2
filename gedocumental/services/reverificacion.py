@@ -224,6 +224,9 @@ def necesita_pdf(tipo_documento: str, descripcion: str) -> bool:
         return True
     if _cantidades_esperadas(d):
         return True
+    # RESULTADO de imagen: la lateralidad se compara contra el CUPS (_lateralidad_compatible), caso 35203
+    if (tipo_documento or '').upper() == 'RESULTADO' and _solo_motivo_procedimiento(d):
+        return True
     return _solo_motivo_procedimiento(d) and not _menciona_lateralidad(d)
 
 

@@ -1281,8 +1281,11 @@ def _detectar_firma_pdf(ruta_absoluta: str) -> bool | None:
                         return True
                 # PDF "impreso" con todo convertido a vectores (sin texto ni imágenes, caso 33421): las letras
                 # son curvas pequeñas (< 15 pt de alto); un trazo de firma es una curva alta en la mitad inferior
-                # (en la 2.ª página en adelante la firma puede quedar arriba: casos 32828, 35203)
-                if not rotulos and not pagina.chars and _trazos_de_firma(pagina, en_cualquier_altura=n > 0):
+                if not rotulos and not pagina.chars and _trazos_de_firma(pagina):
+                    return True
+                # La firma pasó a la 2.ª página (casos 32828, 35203): queda arriba de la hoja, que solo trae la
+                # firma y el rótulo "Firma del paciente: {{FirmaPaciente(0)}}" (puede venir como texto)
+                if n > 0 and len(pagina.chars or []) < 120 and _trazos_de_firma(pagina, en_cualquier_altura=True):
                     return True
             return False if vistas else None
     except Exception as exc:

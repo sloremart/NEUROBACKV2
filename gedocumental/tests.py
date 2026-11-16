@@ -450,6 +450,21 @@ class FirmaVectorialTests(SimpleTestCase):
         with mock.patch('pdfplumber.open', return_value=pdf):
             self.assertTrue(_detectar_firma_pdf('/tmp/35203C.pdf'))
 
+    def test_firma_en_segunda_pagina_con_rotulo_en_texto(self):
+        from gedocumental.services.ai_revision import _detectar_firma_pdf
+        rotulo = [{'text': 'Firma', 'top': 140, 'bottom': 150, 'x0': 60, 'x1': 90}]
+        pagina2 = SimpleNamespace(width=595, height=842, images=[], chars=[{}] * 40,
+                                  curves=[self._curva(60, 40, 200, 60, pts=80)], extract_words=lambda: rotulo)
+        hoja1 = SimpleNamespace(width=595, height=842, images=[], chars=[], curves=self.LETRAS,
+                                extract_words=lambda: [])
+        pdf = mock.MagicMock()
+        pdf.__enter__.return_value = SimpleNamespace(pages=[hoja1, pagina2])
+        with mock.patch('pdfplumber.open', return_value=pdf):
+            self.assertTrue(_detectar_firma_pdf('/tmp/32828C.pdf'))
+
+    def test_resultado_con_lado_se_relee(self):
+        self.assertTrue(necesita_pdf('RESULTADO', ResultadoMiembroInferiorTests.DESC))
+
 
 class ResultadoMiembroInferiorTests(SimpleTestCase):
     """Caso 35203: CUPS 883522 'RM de articulaciones de miembro inferior' y el informe es de cadera derecha."""
