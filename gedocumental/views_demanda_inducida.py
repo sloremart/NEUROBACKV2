@@ -887,3 +887,69 @@ def fomag_autogestion_radicar_view(request):
         return JsonResponse({"ok": False, "error": f"Servicio no disponible: {e.reason}"}, status=503)
     except Exception as e:
         return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+
+@csrf_exempt
+def fomag_reparar_archivos_view(request):
+    """
+    Repara val_eps_archivos en Flask para órdenes radicadas antes del fix.
+    GET  ?documento=35493336&cups=890226  → busca el id_zeus y muestra info actual
+    POST {documento, cups, volante_url, volante_nombre} → actualiza val_eps_archivos
+    """
+    try:
+        if request.method == "GET":
+            documento = request.GET.get("documento", "").strip()
+            cups = request.GET.get("cups", "").strip().split("-")[0]
+        else:
+            body = json.loads(request.body)
+            documento = str(body.get("documento") or "").strip()
+            cups = str(body.get("cups") or "").strip().split("-")[0]
+
+        if not documento or not cups:
+            return JsonResponse({"ok": False, "error": "documento y cups son requeridos"}, status=400)
+
+        # Buscar la orden en Flask
+        ordenes_req = urllib.request.urlopen(f"{DEMANDA_WEB_URL}/api/ordenes", timeout=15)
+        ordenes_data = json.loads(ordenes_req.read().decode())
+        id_zeus = None
+        fila_actual = None
+        for row in (ordenes_data.get("data") or []):
+            doc_row = str(row.get("Documento") or "").strip()
+            cups_row = str(row.get("Cups") or "").strip().split("-")[0]
+            if doc_row == documento and cups_row == cups:
+                id_zeus = row.get("Id")
+                fila_actual = row
+                break
+
+        if not id_zeus:
+            return JsonResponse({"ok": False, "error": f"No se encontró orden doc={documento} cups={cups} en Flask"})
+
+        if request.method == "GET":
+            return JsonResponse({"ok": True, "id_zeus": id_zeus, "archivos_actuales": fila_actual.get("ValEpsArchivos"), "estado": fila_actual.get("ValEpsEstado")})
+
+        # POST: actualizar archivos
+        body = json.loads(request.body)
+        volante_url = str(body.get("volante_url") or "").strip()
+        volante_nombre = str(body.get("volante_nombre") or "").strip()
+        if not volante_url:
+            return JsonResponse({"ok": False, "error": "volante_url es requerido"}, status=400)
+
+        archivos = [{
+            "tipo": "ORDEN_PDF",
+            "nombre_archivo": volante_nombre or f"volante_fomag_{cups}.pdf",
+            "nombre_original": volante_nombre or f"Orden FOMAG {cups}.pdf",
+            "url_descarga": f"{PLAYGROUND_URL}{volante_url}" if volante_url.startswith("/") else volante_url,
+        }]
+        gestion_body = json.dumps({"id_zeus": id_zeus, "val_eps_archivos": archivos}).encode()
+        gestion_req = urllib.request.Request(
+            f"{DEMANDA_WEB_URL}/api/guardar_seguimiento_cita",
+            data=gestion_body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(gestion_req, timeout=15) as resp:
+            flask_result = json.loads(resp.read().decode())
+        return JsonResponse({"ok": True, "id_zeus": id_zeus, "archivos_guardados": archivos, "flask_response": flask_result})
+
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
