@@ -305,6 +305,91 @@ def _facturas_sin_radicar(fecha_inicio: str, fecha_fin: str) -> list[int]:
     return _zeus_en_rango(candidatos - radicadas, fecha_inicio, fecha_fin, excluir_sin_radicacion=True)
 
 
+# ── Causa por la que un estudio realizado sigue sin factura ───────────────────
+
+CAUSAS = {
+    'devuelta_cm':         'Devuelta por Cuentas Médicas',
+    'hallazgo_admisiones': 'Hallazgos de admisiones',
+    'hallazgo_resultado':  'Hallazgo en el resultado (coord. médica)',
+    'faltan_documentos':   'Faltan documentos',
+    'sin_revision_ia':     'Pendiente revisión IA',
+    'pendiente_cm':        'Pre-auditada: pendiente aprobación Cuentas Médicas',
+    'aprobada_cm':         'Aprobada por Cuentas Médicas: pendiente facturar',
+}
+
+
+def _causas_sin_factura(ids, zeus: dict) -> dict:
+    """
+    {admision_id: {'causa', 'causa_texto', 'detalle': [..]}} — en qué etapa está detenido el estudio,
+    en orden de prioridad (lo primero que hay que resolver). Mismas reglas de la bandeja de Cuentas
+    Médicas y de documentos faltantes: el particular no exige documentos; MRC no exige autorización.
+    """
+    from gedocumental.models import ObservacionesArchivos, RevisionIA
+    from gedocumental.services.ai_revision import TIPOS_NO_REVISADOS, TIPOS_SIN_REVISION_IA
+    from gedocumental.services.validacion_paciente import CONTRATOS_SIN_AUTORIZACION
+
+    ids = list(ids)
+    archivos = list(
+        ArchivoFacturacion.objects.filter(Admision_id__in=ids)
+        .exclude(Tipo__in=TIPOS_SIN_REVISION_IA)
+        .values('IdArchivo', 'Admision_id', 'Tipo', 'RevisionPrimera')
+    )
+    revisados = set(
+        RevisionIA.objects.filter(IdArchivo__in=[a['IdArchivo'] for a in archivos])
+        .values_list('IdArchivo', flat=True)
+    )
+    hallazgos: dict = defaultdict(list)
+    for aid, tipo_doc, desc in (RevisionIA.objects.filter(AdmisionId__in=ids, Resuelta=False)
+                                .exclude(TipoHallazgo='OK').exclude(TipoDocumento__in=TIPOS_NO_REVISADOS)
+                                .values_list('AdmisionId', 'TipoDocumento', 'Descripcion')):
+        hallazgos[aid].append((tipo_doc or '', _reparar_texto((desc or '').strip())))
+    devueltas = set(
+        ObservacionesArchivos.objects.filter(ObservacionCuentasMedicas=True, IdArchivo__Admision_id__in=ids,
+                                             IdArchivo__RevisionPrimera=False)
+        .values_list('IdArchivo__Admision_id', flat=True)
+    )
+
+    por_adm: dict = defaultdict(list)
+    for a in archivos:
+        por_adm[a['Admision_id']].append(a)
+
+    resultado = {}
+    for aid in ids:
+        arcs = por_adm.get(aid, [])
+        tipos = {(a['Tipo'] or '').upper() for a in arcs}
+        contrato = (zeus.get(aid, {}).get('contrato') or '').upper()
+        h = hallazgos.get(aid, [])
+        h_adm = [f"{t}: {d}" for t, d in h if t in TIPOS_ADMISIONES]
+        # "Ausencia del reporte" ya no aplica si el RESULTADO está cargado (el cron lo cierra en su ciclo)
+        h_res = [f"{t}: {d}" for t, d in h if t == TIPO_COORDINACION
+                 and not ('RESULTADO' in tipos and d.lower().startswith('ausencia del reporte'))]
+
+        requeridos = [] if 'PARTICULAR' in contrato else [
+            t for t in ('ORDEN', 'AUTORIZACION', 'COMPROBANTE')
+            if not (t == 'AUTORIZACION' and any(c in contrato for c in CONTRATOS_SIN_AUTORIZACION))
+        ]
+        faltan = [t for t in requeridos if t not in tipos]
+        evaluados = [a for a in arcs if (a['Tipo'] or '').upper() not in ('FACTURA', *TIPOS_NO_REVISADOS)]
+        sin_ia = sorted({(a['Tipo'] or '').upper() for a in evaluados if a['IdArchivo'] not in revisados})
+
+        if aid in devueltas:
+            causa, detalle = 'devuelta_cm', []
+        elif h_adm:
+            causa, detalle = 'hallazgo_admisiones', h_adm
+        elif h_res:
+            causa, detalle = 'hallazgo_resultado', h_res
+        elif faltan:
+            causa, detalle = 'faltan_documentos', faltan
+        elif sin_ia:
+            causa, detalle = 'sin_revision_ia', sin_ia
+        elif arcs and all(a['RevisionPrimera'] for a in evaluados or arcs):
+            causa, detalle = 'aprobada_cm', []
+        else:
+            causa, detalle = 'pendiente_cm', []
+        resultado[aid] = {'causa': causa, 'causa_texto': CAUSAS[causa], 'detalle': detalle}
+    return resultado
+
+
 # ── Bandeja 1: Realizados sin factura ────────────────────────────────────────
 
 @api_view(['GET'])
@@ -328,11 +413,20 @@ def bandeja_realizados(request):
     zeus = _datos_zeus(ids)
     archivos = _archivos_por_admision(ids)
     casos = _casos_por_admision(ids, 'realizados')
+    causas = _causas_sin_factura(ids, zeus)
 
-    data = [_enrich(aid, zeus, archivos, casos.get(aid), _dias_desde(zeus.get(aid, {}).get('fecha_ing')))
-            for aid in ids]
+    data = []
+    for aid in ids:
+        fila = _enrich(aid, zeus, archivos, casos.get(aid), _dias_desde(zeus.get(aid, {}).get('fecha_ing')))
+        fila.update(causas.get(aid, {}))
+        data.append(fila)
     data.sort(key=lambda x: x['dias_pendiente'] or 0, reverse=True)
-    return JsonResponse({'success': True, 'data': data, 'total': len(data)})
+    resumen = defaultdict(int)
+    for fila in data:
+        resumen[fila.get('causa')] += 1
+    return JsonResponse({'success': True, 'data': data, 'total': len(data),
+                         'causas': [{'causa': k, 'texto': CAUSAS[k], 'total': resumen[k]}
+                                    for k in CAUSAS if resumen.get(k)]})
 
 
 # ── Bandeja 2: Facturados sin radicar ────────────────────────────────────────
