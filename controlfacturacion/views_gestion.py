@@ -19,6 +19,7 @@ Notas:
   - Consultar (GET) no crea registros: el CasoGestion se crea al gestionar el caso (actualizar/devolución).
 """
 
+import re
 from collections import defaultdict
 from datetime import date, datetime
 
@@ -31,6 +32,8 @@ from django.utils import timezone
 from rest_framework.decorators import api_view
 
 from gedocumental.models import ArchivoFacturacion
+from gedocumental.services.ai_revision import _reparar_texto
+from gedocumental.views_ia import procedimientos_por_admision
 from .models import CasoGestion
 
 
@@ -85,8 +88,9 @@ def _datos_zeus(admision_ids) -> dict:
                     LTRIM(RTRIM(COALESCE(sp.primer_nom,'') + ' ' + COALESCE(sp.segundo_nom,'') + ' '
                           + COALESCE(sp.primer_ape,'') + ' ' + COALESCE(sp.segundo_ape,''))) AS paciente,
                     LTRIM(RTRIM(COALESCE(sp.num_id,'')))                   AS documento,
-                    LTRIM(RTRIM(COALESCE(NULLIF(LTRIM(RTRIM(ct.alias)), ''), ct.nombre,
-                                         se.nombre, sm.EPSPaciente, '')))  AS eps,
+                    LTRIM(RTRIM(COALESCE(se.nombre, sm.EPSPaciente, '')))  AS eps,
+                    LTRIM(RTRIM(COALESCE(NULLIF(LTRIM(RTRIM(ct.alias)), ''), ct.nombre, ''))) AS contrato,
+                    LTRIM(RTRIM(COALESCE(m.especialidad, '')))             AS especialidad,
                     CAST(sm.fecha_ing AS DATE)                              AS fecha_ing,
                     sm.tipoUsuario                                          AS regimen,
                     sm.EPSPaciente                                          AS cod_eps,
@@ -99,15 +103,50 @@ def _datos_zeus(admision_ids) -> dict:
                 LEFT JOIN contratos ct    ON sm.contrato = ct.codigo
                 LEFT JOIN sis_empre se    ON sm.EPSPaciente = se.codigo
                 LEFT JOIN Ufuncionales uf ON uf.id = sm.ufuncional
+                LEFT JOIN Medicos m       ON m.codigo = sm.cod_medico
                 WHERE sm.con_estudio IN ({ids_str})
                 """
             )
             cols = [d[0] for d in cur.description]
             for r in cur.fetchall():
                 fila = dict(zip(cols, r))
-                fila['paciente'] = ' '.join((fila['paciente'] or '').split())
+                fila['paciente'] = _reparar_texto(' '.join((fila['paciente'] or '').split()))
+                fila['eps'] = _reparar_texto(fila['eps'] or '')
+                fila['contrato'] = _reparar_texto(fila['contrato'] or '')
                 resultado[int(r[0])] = fila
+
+    # Procedimientos (CUPS) de cada admisión: desglosan el servicio (consulta 1ª vez/control por especialidad)
+    procedimientos = procedimientos_por_admision(list(resultado.keys())) if resultado else {}
+    for aid, fila in resultado.items():
+        fila['procedimientos'] = procedimientos.get(aid, '')
+        fila['servicio_nombre'] = _servicio_detallado(fila)
     return resultado
+
+
+# Consultas: CUPS 8902xx = primera vez, 8903xx = control; los dos últimos dígitos dan la especialidad
+_ESPECIALIDAD_CONSULTA = {
+    '74': 'NEUROLOGÍA',
+    '75': 'NEUROPEDIATRÍA',
+    '64': 'FISIATRÍA',
+}
+
+
+def _servicio_detallado(fila: dict) -> str:
+    """Servicio de la admisión lo más desglosado posible (consulta externa por especialidad y 1ª vez/control)."""
+    base = (fila.get('servicio_nombre') or '').strip()
+    if fila.get('ufuncional') != 1 and 'CONSULTA' not in base.upper():
+        return base or _servicio_nombre(fila.get('ufuncional'))
+    codigos = re.findall(r'(?:^|;\s*)(890[23]\d\d)\b', fila.get('procedimientos') or '')
+    if codigos:
+        c = codigos[0]
+        especialidad = _ESPECIALIDAD_CONSULTA.get(c[-2:]) or (fila.get('especialidad') or '').upper() or 'ESPECIALISTA'
+        return f"CONSULTA {especialidad} {'1ª VEZ' if c[3] == '2' else 'CONTROL'}"
+    if fila.get('especialidad'):
+        esp = fila['especialidad'].upper()
+        nombre = ('NEUROPEDIATRÍA' if 'PEDIATR' in esp else 'NEUROLOGÍA' if 'NEUROLOG' in esp
+                  else 'FISIATRÍA' if 'REHABILITACI' in esp or 'FISIATR' in esp else esp)
+        return f"CONSULTA {nombre}"
+    return base or 'CONSULTA EXTERNA'
 
 
 def _zeus_en_rango(admision_ids, fecha_inicio: str, fecha_fin: str,
@@ -200,6 +239,8 @@ def _enrich(admision_id: int, zeus: dict, archivos: dict, caso: CasoGestion | No
         'paciente':              z.get('paciente', ''),
         'documento':             z.get('documento', ''),
         'eps':                   z.get('eps', ''),
+        'contrato':              z.get('contrato', ''),
+        'procedimientos':        z.get('procedimientos', ''),
         'fecha_ingreso':         z['fecha_ing'].isoformat() if z.get('fecha_ing') else None,
         'regimen':               z.get('regimen', ''),
         'valor_total':           float(z.get('valor_total') or 0),
@@ -381,6 +422,9 @@ def detalle_caso(request, admision_id: int):
             'paciente':    z.get('paciente', ''),
             'documento':   z.get('documento', ''),
             'eps':         z.get('eps', ''),
+            'contrato':    z.get('contrato', ''),
+            'servicio':    z.get('servicio_nombre', ''),
+            'procedimientos': z.get('procedimientos', ''),
             'fecha_ing':   z['fecha_ing'].isoformat() if z.get('fecha_ing') else None,
             'regimen':     z.get('regimen', ''),
             'valor_total': float(z.get('valor_total') or 0),
@@ -506,6 +550,8 @@ def represamiento_admisiones(request):
             'con_estudio':     aid,
             'paciente':        z.get('paciente', ''),
             'eps':             z.get('eps', ''),
+            'contrato':        z.get('contrato', ''),
+            'procedimientos':  z.get('procedimientos', ''),
             'servicio':        _servicio_nombre(z.get('ufuncional'), z.get('servicio_nombre')),
             'valor_total':     valor,
             'fecha_ing':       z['fecha_ing'].isoformat() if z.get('fecha_ing') else None,
@@ -585,6 +631,8 @@ def represamiento_cuentas_medicas(request):
             'con_estudio':     aid,
             'paciente':        z.get('paciente', ''),
             'eps':             z.get('eps', ''),
+            'contrato':        z.get('contrato', ''),
+            'procedimientos':  z.get('procedimientos', ''),
             'servicio':        _servicio_nombre(z.get('ufuncional'), z.get('servicio_nombre')),
             'valor_total':     valor,
             'fecha_ing':       z['fecha_ing'].isoformat() if z.get('fecha_ing') else None,
