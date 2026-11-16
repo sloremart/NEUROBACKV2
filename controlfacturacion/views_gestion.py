@@ -306,63 +306,89 @@ SIN_RADICAR_ZEUS_SQL = ("ISNULL(sm.radicado, 0) = 0 AND sm.fecha_radicado IS NUL
                         "AND NULLIF(LTRIM(RTRIM(ISNULL(sm.remision, ''))), '') IS NULL")
 
 
-def _facturas_sin_radicar(fecha_inicio: str, fecha_fin: str) -> list[int]:
-    """
-    Admisiones facturadas que siguen pendientes de radicar, con ingreso en el rango; sin MRC ni particulares.
-      Facturada: tiene la FACTURA cargada en GE Documental o la factura FES en Zeus (en Zeus el prefijo puede
-                 llegar después: hay admisiones con la factura ya cargada y la admisión aún abierta).
-      Pendiente: en Zeus sin radicado, sin fecha de radicación y sin remisión (las remisionadas no aparecen),
-                 y no anulada.
-    """
+# Zeus sin fecha de radicación ni remisión
+SIN_REMISION_ZEUS_SQL = ("sm.fecha_radicado IS NULL "
+                         "AND NULLIF(LTRIM(RTRIM(ISNULL(sm.remision, ''))), '') IS NULL")
+
+
+def _zeus_filtrar(ids, fecha_inicio: str, fecha_fin: str, condicion: str = '') -> set:
+    """Admisiones de `ids` que existen en Zeus con ingreso en el rango, no anuladas, sin MRC ni particulares."""
     excluir = ' '.join(
         f"AND UPPER(ISNULL(ct.alias, '') + ' ' + ISNULL(ct.nombre, '')) NOT LIKE '%%{c}%%'"
         for c in CONTRATOS_SIN_RADICACION
     )
-    base = f"""
-        SELECT sm.con_estudio
-        FROM sis_maes sm
-        LEFT JOIN contratos ct ON sm.contrato = ct.codigo
-        WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
-          AND ISNULL(sm.estado, '') <> 'N'
-          AND {SIN_RADICAR_ZEUS_SQL}
-          {excluir}
+    encontrados: set = set()
+    with connections['zeussalud'].cursor() as cur:
+        for bloque in _bloques(ids):
+            cur.execute(
+                f"""
+                SELECT sm.con_estudio
+                FROM sis_maes sm
+                LEFT JOIN contratos ct ON sm.contrato = ct.codigo
+                WHERE sm.con_estudio IN ({', '.join(str(x) for x in bloque)})
+                  AND CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
+                  AND ISNULL(sm.estado, '') <> 'N'
+                  {('AND ' + condicion) if condicion else ''}
+                  {excluir}
+                """,
+                [fecha_inicio, fecha_fin],
+            )
+            encontrados.update(int(r[0]) for r in cur.fetchall())
+    return encontrados
+
+
+def _con_hallazgos_pendientes(ids) -> set:
+    """Admisiones con algún hallazgo IA sin resolver (sin contar HC/adicionales, que no se revisan)."""
+    from gedocumental.models import RevisionIA
+    from gedocumental.services.ai_revision import TIPOS_NO_REVISADOS
+    con: set = set()
+    tipos_cargados = defaultdict(set)
+    for aid, tipo in ArchivoFacturacion.objects.filter(Admision_id__in=list(ids)).values_list('Admision_id', 'Tipo'):
+        tipos_cargados[aid].add((tipo or '').upper())
+    for aid, tipo_doc, desc in (RevisionIA.objects.filter(AdmisionId__in=list(ids), Resuelta=False)
+                                .exclude(TipoHallazgo='OK').exclude(TipoDocumento__in=TIPOS_NO_REVISADOS)
+                                .values_list('AdmisionId', 'TipoDocumento', 'Descripcion')):
+        # "Ausencia del reporte" ya no aplica si el RESULTADO está cargado
+        if (tipo_doc or '').upper() == 'RESULTADO' and 'RESULTADO' in tipos_cargados[aid] \
+                and (desc or '').lower().startswith('ausencia del reporte'):
+            continue
+        con.add(aid)
+    return con
+
+
+def _facturas_sin_radicar(fecha_inicio: str, fecha_fin: str) -> dict:
     """
-    pendientes: set = set()
-    con_factura_ge = set(
+    {admision_id: etapa} de las admisiones pendientes de radicar (ingreso en el rango; sin MRC ni particulares):
+      pendiente_renombrar:    tiene FACTURA y RESULTADO, ningún hallazgo pendiente (cuenta también las que la
+                              IA no revisó) y aún no está renombrada en GE Documental (Radicado=0 en archivos).
+      renombrada_sin_radicar: ya renombrada (Radicado=1) pero en Zeus sin fecha de radicación ni remisión.
+    """
+    con_factura = set(
         ArchivoFacturacion.objects.filter(Tipo='FACTURA', FechaCreacionArchivo__date__gte=fecha_inicio)
         .values_list('Admision_id', flat=True)
     )
-    with connections['zeussalud'].cursor() as cur:
-        cur.execute(base + " AND ISNULL(sm.Prefijo, '') = 'FES'", [fecha_inicio, fecha_fin])
-        pendientes.update(int(r[0]) for r in cur.fetchall())
-        for bloque in _bloques(con_factura_ge):
-            cur.execute(base + f" AND sm.con_estudio IN ({', '.join(str(x) for x in bloque)})",
-                        [fecha_inicio, fecha_fin])
-            pendientes.update(int(r[0]) for r in cur.fetchall())
-    return sorted(pendientes)
+    con_resultado = set(
+        ArchivoFacturacion.objects.filter(Tipo='RESULTADO', Admision_id__in=con_factura)
+        .values_list('Admision_id', flat=True)
+    )
+    renombradas = set(
+        ArchivoFacturacion.objects.filter(Radicado=True, Admision_id__in=con_factura)
+        .values_list('Admision_id', flat=True)
+    )
+    por_renombrar = (con_factura & con_resultado) - renombradas
+    por_renombrar -= _con_hallazgos_pendientes(por_renombrar)
+
+    etapas = {a: 'pendiente_renombrar' for a in _zeus_filtrar(por_renombrar, fecha_inicio, fecha_fin)}
+    etapas.update({a: 'renombrada_sin_radicar'
+                   for a in _zeus_filtrar(renombradas, fecha_inicio, fecha_fin, SIN_REMISION_ZEUS_SQL)})
+    return etapas
 
 
-# Etapa en GE Documental de una admisión facturada sin radicar
+# Etapa de una admisión facturada sin radicar
 ETAPAS_RADICACION = {
-    'sin_resultado':          'Falta el RESULTADO',
-    'sin_factura_pdf':        'Falta cargar la FACTURA',
-    'pendiente_renombrar':    'Lista: pendiente auditar y renombrar en GE Documental',
-    'renombrada_sin_radicar': 'Renombrada: pendiente radicar en Zeus',
+    'pendiente_renombrar':    'Sin hallazgos: pendiente renombrar en GE Documental',
+    'renombrada_sin_radicar': 'Renombrada: sin fecha de radicación ni remisión en Zeus',
 }
-
-
-def _etapa_radicacion(arcs: dict) -> str:
-    """
-    arcs: {TIPO: [...], 'radicado': bool} de _archivos_por_admision (radicado = renombrado en GE Documental).
-    Si no está renombrada, la etapa es lo que le falta en GE Documental (aunque Zeus ya la tenga radicada).
-    """
-    if arcs.get('radicado'):
-        return 'renombrada_sin_radicar'
-    if not arcs.get('RESULTADO'):
-        return 'sin_resultado'
-    if not arcs.get('FACTURA'):
-        return 'sin_factura_pdf'
-    return 'pendiente_renombrar'
 
 
 # ── Causa por la que un estudio realizado sigue sin factura ───────────────────
@@ -550,7 +576,8 @@ def bandeja_radicados(request):
     Valor = valor de la factura. Sin MRC ni particulares.
     """
     fecha_inicio, fecha_fin = _rango(request)
-    ids = _facturas_sin_radicar(fecha_inicio, fecha_fin)
+    etapas = _facturas_sin_radicar(fecha_inicio, fecha_fin)
+    ids = sorted(etapas)
     if not ids:
         return JsonResponse({'success': True, 'data': [], 'total': 0, 'causas': []})
 
@@ -565,7 +592,7 @@ def bandeja_radicados(request):
         z = zeus.get(aid, {})
         fila = _enrich(aid, zeus, archivos, casos.get(aid),
                        _dias_desde(z.get('fecha_factura_zeus') or fechas_factura.get(aid)))
-        etapa = _etapa_radicacion(archivos.get(aid, {}))
+        etapa = etapas[aid]
         resumen[etapa] += 1
         fila.update({
             'causa':          etapa,
@@ -824,7 +851,7 @@ def represamiento_cuentas_medicas(request):
     Los días se cuentan desde el cargue de la factura; vencidos = más de DIAS_VENCIDO días.
     """
     fecha_inicio, fecha_fin = _rango(request)
-    ids = _facturas_sin_radicar(fecha_inicio, fecha_fin)
+    ids = sorted(_facturas_sin_radicar(fecha_inicio, fecha_fin))
     if not ids:
         return JsonResponse({'data': [], 'totales': {}})
 
