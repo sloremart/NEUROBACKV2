@@ -845,8 +845,10 @@ def fomag_autogestion_radicar_view(request):
                 nro_aut = str(result.get("num_autorizacion") or "").strip()
                 volante_url = str(result.get("volante_pdf_url") or "").strip()
                 volante_nombre = str(result.get("volante_pdf_nombre") or "").strip()
-                if nro_orden and cups:
+                id_zeus = str(body.get("id_zeus") or "").strip()
+                if not id_zeus and nro_orden and cups:
                     id_zeus = f"{nro_orden}-{cups}"
+                if id_zeus:
                     archivos = []
                     if volante_url:
                         archivos = [{
