@@ -422,6 +422,7 @@ def _causas_sin_factura(ids, zeus: dict) -> dict:
             'causa': causa, 'causa_texto': CAUSAS[causa], 'detalle': detalle,
             'responsable_causa_id': responsable_id,
             'responsable_causa': nombres.get(responsable_id) if responsable_id else area,
+            'usuario_cargue': nombres.get(admisionista, '') if admisionista else '',
         }
         if responsable_id and not resultado[aid]['responsable_causa']:
             resultado[aid]['responsable_causa'] = f"Usuario {responsable_id}"
