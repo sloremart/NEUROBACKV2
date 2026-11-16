@@ -308,27 +308,38 @@ SIN_RADICAR_ZEUS_SQL = ("ISNULL(sm.radicado, 0) = 0 AND sm.fecha_radicado IS NUL
 
 def _facturas_sin_radicar(fecha_inicio: str, fecha_fin: str) -> list[int]:
     """
-    Admisiones facturadas en Zeus (FES) que siguen pendientes de radicar: sin radicado, sin fecha de radicación
-    y sin remisión. Las ya remisionadas no aparecen. Con ingreso en el rango; sin MRC ni particulares.
+    Admisiones facturadas que siguen pendientes de radicar, con ingreso en el rango; sin MRC ni particulares.
+      Facturada: tiene la FACTURA cargada en GE Documental o la factura FES en Zeus (en Zeus el prefijo puede
+                 llegar después: hay admisiones con la factura ya cargada y la admisión aún abierta).
+      Pendiente: en Zeus sin radicado, sin fecha de radicación y sin remisión (las remisionadas no aparecen),
+                 y no anulada.
     """
     excluir = ' '.join(
         f"AND UPPER(ISNULL(ct.alias, '') + ' ' + ISNULL(ct.nombre, '')) NOT LIKE '%%{c}%%'"
         for c in CONTRATOS_SIN_RADICACION
     )
+    base = f"""
+        SELECT sm.con_estudio
+        FROM sis_maes sm
+        LEFT JOIN contratos ct ON sm.contrato = ct.codigo
+        WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
+          AND ISNULL(sm.estado, '') <> 'N'
+          AND {SIN_RADICAR_ZEUS_SQL}
+          {excluir}
+    """
+    pendientes: set = set()
+    con_factura_ge = set(
+        ArchivoFacturacion.objects.filter(Tipo='FACTURA', FechaCreacionArchivo__date__gte=fecha_inicio)
+        .values_list('Admision_id', flat=True)
+    )
     with connections['zeussalud'].cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT sm.con_estudio
-            FROM sis_maes sm
-            LEFT JOIN contratos ct ON sm.contrato = ct.codigo
-            WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
-              AND {FACTURADA_ZEUS_SQL}
-              AND {SIN_RADICAR_ZEUS_SQL}
-              {excluir}
-            """,
-            [fecha_inicio, fecha_fin],
-        )
-        return [int(r[0]) for r in cur.fetchall()]
+        cur.execute(base + " AND ISNULL(sm.Prefijo, '') = 'FES'", [fecha_inicio, fecha_fin])
+        pendientes.update(int(r[0]) for r in cur.fetchall())
+        for bloque in _bloques(con_factura_ge):
+            cur.execute(base + f" AND sm.con_estudio IN ({', '.join(str(x) for x in bloque)})",
+                        [fecha_inicio, fecha_fin])
+            pendientes.update(int(r[0]) for r in cur.fetchall())
+    return sorted(pendientes)
 
 
 # Etapa en GE Documental de una admisión facturada sin radicar
