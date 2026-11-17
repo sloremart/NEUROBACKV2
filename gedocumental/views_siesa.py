@@ -31,6 +31,7 @@ import requests
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from django.db import connections
+from django.db.models import Q
 from django.views.decorators.http import require_GET
 from rest_framework.decorators import api_view
 
@@ -1627,6 +1628,10 @@ def _puede_generar_resultado(estudio: int, force: bool):
         return True, ""
     if not force:
         return False, "ya tiene RESULTADO"
+    # Ya aprobado por Cuentas Médicas o renombrado para radicar: nunca se reemplaza (casos FES 22950-24282)
+    if ArchivoFacturacion.objects.filter(Admision_id=estudio).filter(
+            Q(RevisionPrimera=True, Tipo="RESULTADO") | Q(Radicado=True)).exists():
+        return False, "RESULTADO ya aprobado por Cuentas Médicas o admisión renombrada"
     if existentes.exclude(NombreArchivo=f"{estudio}R.pdf", Usuario__isnull=True).exists():
         return False, "tiene RESULTADO subido por un usuario"
     return True, ""
