@@ -5,7 +5,8 @@ Documentos que el admisionista debe cargar en cada admisión, según el contrato
   Capital Salud, Compensar, Ejército, FOMAG, Multisalud, Oncolife, Policía, Salud Total, Sanitas
   (y por defecto cualquier otro contrato) .......... ORDEN + AUTORIZACION + COMPROBANTE
   Colsanitas ....................................... AUTORIZACION + COMPROBANTE; ORDEN solo en consultas
-  IPS Consultorio (la orden viene en la autorización) ORDEN o AUTORIZACION + COMPROBANTE
+  IPS Consultorio y Equipo Interdisciplinario
+  (la orden viene en la autorización) .............. ORDEN o AUTORIZACION + COMPROBANTE
   MRC .............................................. ORDEN + COMPROBANTE (no lleva autorización)
   Particular ....................................... no se validan documentos
 
@@ -17,6 +18,8 @@ import unicodedata
 from django.db import connections
 
 ORDEN, AUTORIZACION, COMPROBANTE = 'ORDEN', 'AUTORIZACION', 'COMPROBANTE'
+# Contratos en los que la orden viene en el mismo documento que la autorización: basta con cualquiera de los dos
+CONTRATOS_ORDEN_O_AUTORIZACION = ('IPS CONSULTORIO', 'EQUIPO INTERDISCIPLINARIO')
 UFUNCIONAL_CONSULTA = 1   # CONSULTA EXTERNA en Zeus
 
 
@@ -34,7 +37,7 @@ def requisitos(contrato: str, es_consulta: bool) -> list[tuple[str, ...]]:
         return []
     if 'COLSANITAS' in c:
         return ([(ORDEN,)] if es_consulta else []) + [(AUTORIZACION,), (COMPROBANTE,)]
-    if 'IPS CONSULTORIO' in c:
+    if any(n in c for n in CONTRATOS_ORDEN_O_AUTORIZACION):
         return [(ORDEN, AUTORIZACION), (COMPROBANTE,)]
     if 'MRC' in c:
         return [(ORDEN,), (COMPROBANTE,)]

@@ -510,6 +510,9 @@ class DocumentosRequeridosTests(SimpleTestCase):
         self.assertEqual(self.f(c, False, {'AUTORIZACION', 'COMPROBANTE'}), [])
         self.assertEqual(self.f(c, False, {'ORDEN', 'COMPROBANTE'}), [])
         self.assertEqual(self.f(c, False, {'COMPROBANTE'}), ['ORDEN o AUTORIZACION'])
+        equipo = 'EQUIPO INTERDISCIPLINARIO PARA EL MEJORAMIENTO DE LA CALIDAD'
+        self.assertEqual(self.f(equipo, False, {'ORDEN', 'COMPROBANTE'}), [])
+        self.assertEqual(self.f(equipo, True, {'AUTORIZACION', 'COMPROBANTE'}), [])
 
     def test_mrc_y_particular(self):
         self.assertEqual(self.f('SANITAS MRC SUBSIDIADO', False, {'ORDEN', 'COMPROBANTE'}), [])
