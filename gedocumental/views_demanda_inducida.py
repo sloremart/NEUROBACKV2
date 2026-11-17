@@ -712,6 +712,55 @@ def capacidad_instalada_view(request):
             cols2 = [c[0] for c in cur.description]
             servicios = [dict(zip(cols2, row)) for row in cur.fetchall()]
 
+            # 3. Bloqueados por fecha + consultorio + médico
+            cur.execute("""
+                SELECT
+                    CONVERT(VARCHAR(10), pmd.Fecha, 23) AS fecha,
+                    LTRIM(RTRIM(con.nombre))             AS consultorio,
+                    pmd.Medico                           AS cod_medi,
+                    COUNT(*)                             AS bloqueados
+                FROM programacion_medico_detalle pmd
+                JOIN programacion_medico pm
+                    ON pm.id = pmd.IdProgramacionMedico AND pm.activo = 1
+                JOIN programacion_medico_relacion pmr
+                    ON pmr.id_programacion = pm.id
+                JOIN consultorios con
+                    ON con.id = pmr.id_consultorio
+                WHERE CAST(pmd.Fecha AS DATE) >= %s
+                  AND CAST(pmd.Fecha AS DATE) <= %s
+                  AND ISNULL(pmd.Bloqueado, 0) = 1
+                GROUP BY CONVERT(VARCHAR(10), pmd.Fecha, 23), con.nombre, pmd.Medico
+                ORDER BY fecha, bloqueados DESC
+            """, [fecha_ini, fecha_fin])
+            cols3 = [c[0] for c in cur.description]
+            bloqueados_detalle = [dict(zip(cols3, row)) for row in cur.fetchall()]
+
+            # 4. Disponibles por fecha + consultorio (solo días con cupos libres)
+            cur.execute("""
+                SELECT
+                    CONVERT(VARCHAR(10), pmd.Fecha, 23) AS fecha,
+                    LTRIM(RTRIM(con.nombre))             AS consultorio,
+                    pm.id_sede,
+                    COUNT(*)                             AS disponibles
+                FROM programacion_medico_detalle pmd
+                JOIN programacion_medico pm
+                    ON pm.id = pmd.IdProgramacionMedico AND pm.activo = 1
+                JOIN programacion_medico_relacion pmr
+                    ON pmr.id_programacion = pm.id
+                JOIN consultorios con
+                    ON con.id = pmr.id_consultorio
+                WHERE CAST(pmd.Fecha AS DATE) >= %s
+                  AND CAST(pmd.Fecha AS DATE) <= %s
+                  AND pmd.IdCita IS NULL
+                  AND ISNULL(pmd.Bloqueado, 0)       = 0
+                  AND ISNULL(pmd.SinProgramacion, 0) = 0
+                GROUP BY CONVERT(VARCHAR(10), pmd.Fecha, 23), con.nombre, pm.id_sede
+                HAVING COUNT(*) > 0
+                ORDER BY fecha, disponibles DESC
+            """, [fecha_ini, fecha_fin])
+            cols4 = [c[0] for c in cur.description]
+            disponibles_detalle = [dict(zip(cols4, row)) for row in cur.fetchall()]
+
         total_programado = sum(c['total_programado'] for c in consultorios)
         total_agendados  = sum(c['agendados']        for c in consultorios)
         total_disponibles= sum(c['disponibles']      for c in consultorios)
@@ -729,8 +778,10 @@ def capacidad_instalada_view(request):
                 "bloqueados":       total_bloqueados,
                 "pct_ocupacion": round(total_agendados / total_programado * 100, 1) if total_programado else 0,
             },
-            "consultorios": consultorios,
-            "servicios":    servicios,
+            "consultorios":       consultorios,
+            "servicios":          servicios,
+            "bloqueados_detalle": bloqueados_detalle,
+            "disponibles_detalle": disponibles_detalle,
         })
 
     except Exception as e:
