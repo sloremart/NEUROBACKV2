@@ -328,29 +328,25 @@ def _ya_existe_resultado(estudio: int) -> bool:
 
 def _registrar_en_bd(estudio: int, nombre: str, ruta_relativa: str):
     """
-    Registra el PDF generado en la tabla archivos (upsert para evitar duplicados).
-    Si la admisión ya tiene más de un RESULTADO (ej. uno importado de la carpeta de exámenes
-    y otro de SIESA), se actualiza el generado por SIESA ({estudio}R.pdf) o, si no hay, el primero.
+    Registra el PDF generado por el sistema en la tabla archivos.
+    - Si ya existe el registro del sistema ({estudio}R.pdf), solo actualiza el archivo: NO toca la fecha de
+      creación (si no, el resultado vuelve a entrar en la ventana de regeneración y se regenera sin fin) ni
+      la aprobación de Cuentas Médicas ni el renombrado (Radicado).
+    - Nunca reemplaza un RESULTADO con otro nombre (subido por una persona o importado de la carpeta de
+      exámenes): en ese caso crea su propio registro.
     """
-    campos = {
-        "NombreArchivo": nombre,
-        "RutaArchivo": ruta_relativa,
-        "NumeroAdmision": str(estudio),
-        "FechaCreacionArchivo": datetime.now(),
-        "FechaCreacionAntares": datetime.now(),
-        "RevisionPrimera": False,
-        "RevisionSegunda": False,
-        "RevisionTercera": False,
-        "Radicado": False,
-    }
-    existentes = ArchivoFacturacion.objects.filter(Admision_id=estudio, Tipo="RESULTADO").order_by("IdArchivo")
-    archivo = existentes.filter(NombreArchivo=nombre).first() or existentes.first()
+    archivo = (ArchivoFacturacion.objects
+               .filter(Admision_id=estudio, Tipo="RESULTADO", NombreArchivo=nombre).order_by("IdArchivo").first())
     if archivo is None:
-        ArchivoFacturacion.objects.create(Admision_id=estudio, Tipo="RESULTADO", **campos)
+        ArchivoFacturacion.objects.create(
+            Admision_id=estudio, Tipo="RESULTADO", NombreArchivo=nombre, RutaArchivo=ruta_relativa,
+            NumeroAdmision=str(estudio), FechaCreacionArchivo=datetime.now(), FechaCreacionAntares=datetime.now(),
+            RevisionPrimera=False, RevisionSegunda=False, RevisionTercera=False, Radicado=False,
+        )
         return
-    for campo, valor in campos.items():
-        setattr(archivo, campo, valor)
-    archivo.save()
+    archivo.RutaArchivo = ruta_relativa
+    archivo.FechaCreacionAntares = datetime.now()
+    archivo.save(update_fields=["RutaArchivo", "FechaCreacionAntares"])
 
 
 def _estudios_por_fecha(fecha_inicio: str, fecha_fin: str):
@@ -411,9 +407,10 @@ def generar_pdf_siesa(request):
             status=400,
         )
 
-    if not force and _ya_existe_resultado(estudio):
+    puede, motivo = _puede_generar_resultado(estudio, force)
+    if not puede:
         return JsonResponse(
-            {"success": True, "detail": f"El PDF del estudio {estudio} ya existe.", "regenerado": False},
+            {"success": True, "detail": f"Estudio {estudio}: {motivo}; no se generó.", "regenerado": False},
             status=200,
         )
 
@@ -588,7 +585,9 @@ def generar_pdfs_siesa_lote(request):
     resultados = {"generados": [], "omitidos": [], "errores": []}
 
     for con_estudio, autoid in estudios:
-        if not force and _ya_existe_resultado(con_estudio):
+        # Nunca reemplaza un RESULTADO subido por una persona (ni con force)
+        puede, _motivo = _puede_generar_resultado(con_estudio, force)
+        if not puede:
             resultados["omitidos"].append(con_estudio)
             continue
 
@@ -1425,9 +1424,9 @@ def generar_pdf_enfermeria(request):
     except ValueError:
         return JsonResponse({"success": False, "detail": "El parámetro 'estudio' debe ser numérico."}, status=400)
 
-    if not force and _ya_existe_resultado(estudio):
+    if not _puede_generar_resultado(estudio, force)[0]:
         return JsonResponse(
-            {"success": True, "detail": f"El PDF del estudio {estudio} ya existe.", "regenerado": False},
+            {"success": True, "detail": f"El estudio {estudio} ya tiene RESULTADO; no se generó.", "regenerado": False},
             status=200,
         )
 
@@ -1485,7 +1484,7 @@ def generar_pdfs_enfermeria_lote(request):
     resultados = {"generados": [], "omitidos": [], "errores": []}
 
     for con_estudio in estudios:
-        if not force and _ya_existe_resultado(con_estudio):
+        if not _puede_generar_resultado(con_estudio, force)[0]:
             resultados["omitidos"].append(con_estudio)
             continue
         try:

@@ -87,6 +87,17 @@ class Command(BaseCommand):
         paso('registrar_sin_autorizacion', self._registrar_sin_autorizacion, o['ventana_faltantes'])
         paso('registrar_datos_incompletos', self._registrar_datos_incompletos, o['ventana_faltantes'])
 
+    @staticmethod
+    def _pdf_completo(archivo) -> bool:
+        """True si el PDF guardado ya trae la firma del informe ('ATENDIDO POR'); ante cualquier duda, True."""
+        try:
+            import pdfplumber
+            with pdfplumber.open(archivo.RutaArchivo.path) as pdf:
+                texto = ' '.join((p.extract_text() or '') for p in pdf.pages[:6])
+        except Exception:
+            return True   # sin poder leerlo no se regenera (no arriesgar sobrescribir)
+        return 'ATENDIDO POR' in texto.upper() or len(texto.strip()) < 50
+
     # ── 0. Regenerar RESULTADOS de imagen generados con informe incompleto ───
     def _regenerar_incompletos_siesa(self, dias):
         """
@@ -94,16 +105,21 @@ class Command(BaseCommand):
         en detalleshc no tiene 'ATENDIDO POR:' (señal de que el médico no había
         terminado de dictar cuando se generó el PDF) y los regenera desde SIESA.
         """
+        from gedocumental.views_siesa import _puede_generar_resultado
+
         desde = datetime.now() - timedelta(days=dias)
 
-        # IDs de admisiones con RESULTADO ya registrado en gedocumental
-        admisiones_con_resultado = list(
-            ArchivoFacturacion.objects.filter(Tipo=TIPO, FechaCreacionArchivo__gte=desde)
-            .values_list('Admision_id', flat=True)
-            .distinct()
-        )
+        # Solo el RESULTADO que generó el sistema ({estudio}R.pdf, sin usuario) y solo si la admisión no tiene
+        # otro RESULTADO subido por una persona: nunca se sobrescribe un resultado cargado a mano.
+        candidatos = {}
+        for a in ArchivoFacturacion.objects.filter(Tipo=TIPO, FechaCreacionArchivo__gte=desde, Usuario__isnull=True):
+            if a.NombreArchivo == f"{a.Admision_id}R.pdf" and _puede_generar_resultado(a.Admision_id, True)[0]:
+                candidatos[a.Admision_id] = a
+        # Y solo si el PDF guardado está incompleto (su texto no trae 'ATENDIDO POR:'); antes bastaba con que
+        # alguna fila de detalleshc no lo tuviera y el mismo resultado se regeneraba cada media hora
+        admisiones_con_resultado = [adm for adm, a in candidatos.items() if not self._pdf_completo(a)]
         if not admisiones_con_resultado:
-            self.stdout.write("Regeneración SIESA: sin RESULTADOS recientes que verificar.")
+            self.stdout.write("Regeneración SIESA: sin RESULTADOS del sistema incompletos.")
             return
 
         # Buscar los que tienen informe incompleto en detalleshc
