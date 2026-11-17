@@ -47,7 +47,7 @@ from gedocumental.views import (
 )
 from gedocumental.utils.codigoentidad import obtener_hallazgos
 from gedocumental.views_ia import hallazgos_ia, bandeja_cuentas_medicas, documentos_faltantes
-from gedocumental.views_demanda_inducida import demanda_inducida_view, consultar_autorizacion_view, guardar_gestion_llamada, fomag_autogestion_extraer_view, fomag_autogestion_radicar_view, fomag_datos_admision_view, fomag_reparar_archivos_view
+from gedocumental.views_demanda_inducida import demanda_inducida_view, consultar_autorizacion_view, guardar_gestion_llamada, fomag_autogestion_extraer_view, fomag_autogestion_radicar_view, fomag_datos_admision_view, fomag_reparar_archivos_view, colsanitas_subir_sesion_view, capacidad_instalada_view
 from gedocumental.views_siesa import generar_pdf_siesa, generar_pdfs_siesa_lote, debug_siesa_login, generar_pdf_enfermeria, generar_pdfs_enfermeria_lote, generar_pdf_consulta, generar_pdfs_consultas_lote, ver_pdf_orden, generar_pdf_procedimiento, generar_pdfs_procedimientos_lote
 
 # =============================================================================
@@ -105,6 +105,8 @@ gedocumental_urls = [
     path('fomag-autogestion-radicar/',                            fomag_autogestion_radicar_view,     name='v2-fomag-autogestion-radicar'),
     path('fomag-datos-admision/',                                 fomag_datos_admision_view,          name='v2-fomag-datos-admision'),
     path('fomag-reparar-archivos/',                               fomag_reparar_archivos_view,         name='v2-fomag-reparar-archivos'),
+    path('colsanitas-subir-sesion/',                              colsanitas_subir_sesion_view,         name='v2-colsanitas-subir-sesion'),
+    path('capacidad-instalada/',                                  capacidad_instalada_view,              name='v2-capacidad-instalada'),
     # ── Generación PDFs desde SIESA (reemplaza el flujo Antares) ─────────────
     path('generar-pdf-siesa/',       generar_pdf_siesa,          name='v2-generar-pdf-siesa'),
     path('generar-pdfs-siesa/',      generar_pdfs_siesa_lote,    name='v2-generar-pdfs-siesa-lote'),

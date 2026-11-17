@@ -639,6 +639,104 @@ def guardar_gestion_llamada(request):
     })
 
 
+@require_GET
+def capacidad_instalada_view(request):
+    """
+    GET /api/v2/gedocumental/capacidad-instalada/?mes=2026-11
+    Capacidad real desde ZeusSalud: slots programados vs agendados por consultorio y servicio.
+    """
+    import calendar as _cal
+    mes_param = request.GET.get("mes", "")
+    try:
+        if mes_param and len(mes_param) >= 7:
+            year, month = int(mes_param[:4]), int(mes_param[5:7])
+        else:
+            today = date.today()
+            year, month = today.year, today.month
+    except (ValueError, IndexError):
+        today = date.today()
+        year, month = today.year, today.month
+
+    fecha_ini = date(year, month, 1).isoformat()
+    fecha_fin = date(year, month, _cal.monthrange(year, month)[1]).isoformat()
+
+    try:
+        with connections['zeussalud'].cursor() as cur:
+            # 1. Capacidad por consultorio
+            cur.execute("""
+                SELECT
+                    con.id                          AS con_id,
+                    LTRIM(RTRIM(con.nombre))         AS consultorio,
+                    pm.id_sede,
+                    COUNT(*)                         AS total_programado,
+                    SUM(CASE WHEN pmd.IdCita IS NULL
+                              AND ISNULL(pmd.Bloqueado,0)        = 0
+                              AND ISNULL(pmd.SinProgramacion,0)  = 0
+                         THEN 1 ELSE 0 END)          AS disponibles,
+                    SUM(CASE WHEN pmd.IdCita IS NOT NULL
+                         THEN 1 ELSE 0 END)          AS agendados,
+                    SUM(CASE WHEN ISNULL(pmd.Bloqueado,0) = 1
+                         THEN 1 ELSE 0 END)          AS bloqueados
+                FROM programacion_medico_detalle pmd
+                JOIN programacion_medico pm
+                    ON pm.id = pmd.IdProgramacionMedico AND pm.activo = 1
+                JOIN programacion_medico_relacion pmr
+                    ON pmr.id_programacion = pm.id
+                JOIN consultorios con
+                    ON con.id = pmr.id_consultorio
+                WHERE CAST(pmd.Fecha AS DATE) >= %s
+                  AND CAST(pmd.Fecha AS DATE) <= %s
+                GROUP BY con.id, con.nombre, pm.id_sede
+                ORDER BY pm.id_sede, agendados DESC
+            """, [fecha_ini, fecha_fin])
+            cols = [c[0] for c in cur.description]
+            consultorios = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+            # 2. Citas por servicio (asunto)
+            cur.execute("""
+                SELECT
+                    sa.id                          AS asunto_id,
+                    LTRIM(RTRIM(sa.nombre))         AS servicio,
+                    pm.id_sede,
+                    COUNT(*)                        AS agendados
+                FROM citas c
+                JOIN sis_asunto sa ON sa.id = c.asunto
+                JOIN programacion_medico pm
+                    ON pm.id_programacion = c.id_programacion AND pm.activo = 1
+                WHERE CAST(c.fecha AS DATE) >= %s
+                  AND CAST(c.fecha AS DATE) <= %s
+                  AND ISNULL(c.estado, 'P') NOT IN ('C', 'X')
+                GROUP BY sa.id, sa.nombre, pm.id_sede
+                ORDER BY agendados DESC
+            """, [fecha_ini, fecha_fin])
+            cols2 = [c[0] for c in cur.description]
+            servicios = [dict(zip(cols2, row)) for row in cur.fetchall()]
+
+        total_programado = sum(c['total_programado'] for c in consultorios)
+        total_agendados  = sum(c['agendados']        for c in consultorios)
+        total_disponibles= sum(c['disponibles']      for c in consultorios)
+        total_bloqueados = sum(c['bloqueados']        for c in consultorios)
+
+        return JsonResponse({
+            "ok":       True,
+            "mes":      f"{year:04d}-{month:02d}",
+            "fecha_ini": fecha_ini,
+            "fecha_fin": fecha_fin,
+            "resumen": {
+                "total_programado": total_programado,
+                "agendados":        total_agendados,
+                "disponibles":      total_disponibles,
+                "bloqueados":       total_bloqueados,
+                "pct_ocupacion": round(total_agendados / total_programado * 100, 1) if total_programado else 0,
+            },
+            "consultorios": consultorios,
+            "servicios":    servicios,
+        })
+
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+
 # Mapeo de nombres de especialidad de ZeusSalud al formato exacto que usa Horus2
 _ESPEC_HORUS2 = [
     (r"FISICA.{0,10}REHABILIT|REHABILIT.{0,10}FISICA|FISIATR",  "Fisiatria"),
@@ -885,6 +983,27 @@ def fomag_autogestion_radicar_view(request):
         return JsonResponse({"ok": False, "error": err}, status=502)
     except urllib.error.URLError as e:
         return JsonResponse({"ok": False, "error": f"Servicio no disponible: {e.reason}"}, status=503)
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+
+@csrf_exempt
+def colsanitas_subir_sesion_view(request):
+    """Proxy: recibe el storage_state JSON de Colsanitas y lo envía al servicio Flask."""
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "error": "Método no permitido"}, status=405)
+    try:
+        data = json.loads(request.body)
+        payload = json.dumps(data).encode()
+        req = urllib.request.Request(
+            f"{DEMANDA_WEB_URL}/api/subir_sesion_colsanitas",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode())
+        return JsonResponse(result)
     except Exception as e:
         return JsonResponse({"ok": False, "error": str(e)}, status=500)
 
