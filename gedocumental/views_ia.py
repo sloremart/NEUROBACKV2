@@ -22,6 +22,8 @@ from rest_framework.response import Response
 from gedocumental.models import RevisionIA
 from gedocumental.services.ai_revision import TIPOS_NO_REVISADOS, TIPOS_SIN_REVISION_IA, _reparar_texto
 from gedocumental.views import get_admisiones_zeus_bulk
+from gedocumental.services.documentos_requeridos import (cumple as doc_cumple, datos_admisiones,
+                                                         faltantes as doc_faltantes)
 
 
 def procedimientos_por_admision(admision_ids) -> dict:
@@ -248,6 +250,7 @@ def bandeja_cuentas_medicas(request):
                 )
                 contratos.update({int(e): n for e, n in cursor.fetchall() if n})
         validaciones = validar_datos_pacientes_bulk(ids)
+        reglas_docs = datos_admisiones(ids)
         usuarios = dict(
             CustomUser.objects.filter(id__in={r['usuario_id'] for r in por_admision.values() if r['usuario_id']})
             .values_list('id', 'nombre')
@@ -270,7 +273,10 @@ def bandeja_cuentas_medicas(request):
             revisados = ia_revisados.get(adm_id, 0)
             cargados = tipos_cargados.get(adm_id, set())
             tiene_resultado = 'RESULTADO' in cargados
-            faltantes_doc = [t for t in DOCUMENTOS_REQUERIDOS if t not in cargados]
+            # Documentos exigidos según el contrato (Colsanitas, IPS Consultorio, MRC, particular...)
+            req = reglas_docs.get(adm_id, {'contrato': contratos.get(adm_id, ''), 'es_consulta': False})
+            faltantes_doc = doc_faltantes(req['contrato'], req['es_consulta'], cargados) + \
+                ([] if tiene_resultado else ['RESULTADO'])
             val = validaciones.get(adm_id)
             completo = val['completo'] if val else None
             fecha_ing = adm[6] if adm else None
@@ -283,9 +289,10 @@ def bandeja_cuentas_medicas(request):
                 estado_ia = 'documentos_incompletos'
             elif not tiene_resultado:
                 estado_ia = 'esperando_resultado'
-            elif revisados >= docs and set(DOCUMENTOS_REQUERIDOS) <= tipos_ok_ia.get(adm_id, set()):
-                # Pre-auditada solo si la IA revisó y aprobó los 4 documentos requeridos
-                # (evita que entren admisiones antiguas con 0/0 documentos por revisar)
+            elif (revisados >= docs and 'RESULTADO' in tipos_ok_ia.get(adm_id, set())
+                  and doc_cumple(req['contrato'], req['es_consulta'], tipos_ok_ia.get(adm_id, set()))):
+                # Pre-auditada solo si la IA revisó y aprobó los documentos exigidos por el contrato y el
+                # RESULTADO (evita que entren admisiones antiguas con 0/0 documentos por revisar)
                 estado_ia = 'listas'
             else:
                 estado_ia = 'sin_revision_ia'
@@ -331,9 +338,8 @@ def bandeja_cuentas_medicas(request):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Admisiones con documentos faltantes, para el panel del admisionista: admisiones a las que el usuario
-# les subió documentos (aún no aprobados por Cuentas Médicas) y les falta ORDEN, AUTORIZACION o COMPROBANTE.
-# El RESULTADO no cuenta: lo sube la coordinación médica. Particulares no aparecen (no se validan); MRC y
-# demás contratos sin autorización no exigen la AUTORIZACION.
+# les subió documentos (aún no aprobados por Cuentas Médicas) y les falta algún documento exigido por su
+# contrato (services/documentos_requeridos.py). El RESULTADO no cuenta: lo sube la coordinación médica.
 #
 # GET api/v2/gedocumental/documentos-faltantes/?usuario_id=3&dias=60   (cargues de los últimos N días)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -344,7 +350,6 @@ DOCUMENTOS_ADMISIONES = ('ORDEN', 'AUTORIZACION', 'COMPROBANTE')
 def documentos_faltantes(request):
     from django.db.models import Max
     from gedocumental.models import ArchivoFacturacion
-    from gedocumental.services.validacion_paciente import CONTRATOS_SIN_AUTORIZACION
 
     try:
         usuario_id = request.query_params.get('usuario_id')
@@ -368,8 +373,17 @@ def documentos_faltantes(request):
         cargados = {}
         for adm_id, tipo in ArchivoFacturacion.objects.filter(Admision_id__in=ids).values_list('Admision_id', 'Tipo'):
             cargados.setdefault(adm_id, set()).add((tipo or '').upper())
-        faltan = {a: [t for t in DOCUMENTOS_ADMISIONES if t not in cargados.get(a, set())] for a in ids}
-        faltan = {a: f for a, f in faltan.items() if f}
+        # Documentos exigidos según el contrato (services/documentos_requeridos.py): Colsanitas sin orden en
+        # procedimientos, IPS Consultorio orden o autorización, MRC sin autorización, particular no se valida
+        reglas = datos_admisiones(ids)
+        faltan = {}
+        for a in ids:
+            r = reglas.get(a)
+            if r is None:
+                continue   # no está en Zeus
+            f = doc_faltantes(r['contrato'], r['es_consulta'], cargados.get(a, set()))
+            if f:
+                faltan[a] = f
 
         admisiones, contratos = {}, {}
         if faltan:
@@ -378,18 +392,10 @@ def documentos_faltantes(request):
                 for i in range(0, len(bloque_ids), 500):
                     admisiones.update(get_admisiones_zeus_bulk(cursor, bloque_ids[i:i + 500]))
             contratos = contratos_por_admision(list(faltan.keys()))
-        # Particular: sus documentos no se validan (no aparece). MRC y demás contratos sin autorización
-        # (CONTRATOS_SIN_AUTORIZACION): no se exige la AUTORIZACION
+        # Particular por código de entidad (PAR...) aunque el contrato no lo diga: no se valida
         for adm_id in list(faltan):
-            contrato = contratos.get(adm_id, '').upper()
             adm = admisiones.get(adm_id)
-            codigo_entidad = ((adm[2] or '').strip().upper() if adm else '')
-            if 'PARTICULAR' in contrato or codigo_entidad.startswith('PAR'):
-                del faltan[adm_id]
-                continue
-            if any(c in contrato for c in CONTRATOS_SIN_AUTORIZACION):
-                faltan[adm_id] = [t for t in faltan[adm_id] if t != 'AUTORIZACION']
-            if not faltan[adm_id]:
+            if adm and (adm[2] or '').strip().upper().startswith('PAR'):
                 del faltan[adm_id]
 
         ahora = datetime.now()

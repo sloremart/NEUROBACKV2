@@ -466,6 +466,35 @@ class FirmaVectorialTests(SimpleTestCase):
         self.assertTrue(necesita_pdf('RESULTADO', ResultadoMiembroInferiorTests.DESC))
 
 
+class DocumentosRequeridosTests(SimpleTestCase):
+    """Documentos exigidos por contrato (pestaña Documentos faltantes, bandeja CM, Gestión de facturación)."""
+
+    def f(self, contrato, consulta, tipos):
+        from gedocumental.services.documentos_requeridos import faltantes
+        return faltantes(contrato, consulta, tipos)
+
+    def test_eps_exige_los_tres(self):
+        for contrato in ('CAPITAL SALUD SUBSIDIADO', 'SANITAS EVENTO CONTRIBUTIVO', 'FOMAG', 'SALUD TOTAL CONTRIBUTIVO',
+                         'EJERCITO', 'COMPENSAR', 'MULTISALUD IPS', 'IPS ONCOLIFE', 'POLICIA ESTUDIOS DEL SUEÑO'):
+            self.assertEqual(self.f(contrato, False, set()), ['ORDEN', 'AUTORIZACION', 'COMPROBANTE'], contrato)
+
+    def test_colsanitas_procedimiento_sin_orden(self):
+        self.assertEqual(self.f('COLSANITAS PLAN INTEGRAL', False, {'AUTORIZACION', 'COMPROBANTE'}), [])
+
+    def test_colsanitas_consulta_exige_orden(self):
+        self.assertEqual(self.f('COLSANITAS PLAN MODULAR', True, {'AUTORIZACION', 'COMPROBANTE'}), ['ORDEN'])
+
+    def test_ips_consultorio_orden_o_autorizacion(self):
+        c = 'IPS CONSULTORIO MEDICO SALUD OCUPACIONAL S.A.S'
+        self.assertEqual(self.f(c, False, {'AUTORIZACION', 'COMPROBANTE'}), [])
+        self.assertEqual(self.f(c, False, {'ORDEN', 'COMPROBANTE'}), [])
+        self.assertEqual(self.f(c, False, {'COMPROBANTE'}), ['ORDEN o AUTORIZACION'])
+
+    def test_mrc_y_particular(self):
+        self.assertEqual(self.f('SANITAS MRC SUBSIDIADO', False, {'ORDEN', 'COMPROBANTE'}), [])
+        self.assertEqual(self.f('PARTICULAR TARIFA PLENA', False, set()), [])
+
+
 class ResultadoMiembroInferiorTests(SimpleTestCase):
     """Caso 35203: CUPS 883522 'RM de articulaciones de miembro inferior' y el informe es de cadera derecha."""
 

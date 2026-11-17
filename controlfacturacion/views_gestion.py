@@ -356,8 +356,6 @@ def _con_hallazgos_pendientes(ids) -> set:
     return con
 
 
-# Documentos que debe tener una admisión para renombrarla (MRC y particulares no entran a esta bandeja)
-DOCUMENTOS_RADICACION = ('ORDEN', 'AUTORIZACION', 'COMPROBANTE', 'RESULTADO', 'FACTURA')
 FECHA_HISTORICO = '2000-01-01'
 
 
@@ -383,7 +381,8 @@ def _facturas_sin_radicar(fecha_inicio: str, fecha_fin: str) -> dict:
     with connections['zeussalud'].cursor() as cur:
         cur.execute(
             f"""
-            SELECT sm.con_estudio, CASE WHEN {SIN_REMISION_ZEUS_SQL} THEN 1 ELSE 0 END
+            SELECT sm.con_estudio, CASE WHEN {SIN_REMISION_ZEUS_SQL} THEN 1 ELSE 0 END,
+                   LTRIM(RTRIM(ISNULL(NULLIF(LTRIM(RTRIM(ct.alias)), ''), ISNULL(ct.nombre, '')))), sm.ufuncional
             FROM sis_maes sm
             LEFT JOIN contratos ct ON sm.contrato = ct.codigo
             WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
@@ -392,7 +391,9 @@ def _facturas_sin_radicar(fecha_inicio: str, fecha_fin: str) -> dict:
             """,
             [fecha_inicio, fecha_fin],
         )
-        sin_remision = {int(r[0]): bool(r[1]) for r in cur.fetchall()}
+        filas = cur.fetchall()
+    sin_remision = {int(r[0]): bool(r[1]) for r in filas}
+    regla = {int(r[0]): (r[2] or '', r[3] == 1) for r in filas}   # (contrato, es_consulta)
     if not sin_remision:
         return {}
 
@@ -408,7 +409,10 @@ def _facturas_sin_radicar(fecha_inicio: str, fecha_fin: str) -> dict:
         if radicado:
             renombradas.add(aid)
 
-    por_renombrar = {a for a, t in tipos.items() if a not in renombradas and set(DOCUMENTOS_RADICACION) <= t}
+    # Resultado y factura siempre; orden/autorización/comprobante según el contrato (documentos_requeridos)
+    from gedocumental.services.documentos_requeridos import cumple as doc_cumple
+    por_renombrar = {a for a, t in tipos.items()
+                     if a not in renombradas and {'RESULTADO', 'FACTURA'} <= t and doc_cumple(*regla[a], t)}
     por_renombrar -= _con_hallazgos_pendientes(por_renombrar)
     etapas = {a: 'pendiente_renombrar' for a in por_renombrar}
     etapas.update({a: 'renombrada_sin_radicar' for a in renombradas if sin_remision[a]})
@@ -450,7 +454,7 @@ def _causas_sin_factura(ids, zeus: dict) -> dict:
     from django.db.models import Min as _Min
     from gedocumental.models import ObservacionesArchivos, RevisionIA
     from gedocumental.services.ai_revision import TIPOS_NO_REVISADOS, TIPOS_SIN_REVISION_IA
-    from gedocumental.services.validacion_paciente import CONTRATOS_SIN_AUTORIZACION
+    from gedocumental.services.documentos_requeridos import faltantes as doc_faltantes
 
     ids = list(ids)
     archivos = list(
@@ -502,11 +506,8 @@ def _causas_sin_factura(ids, zeus: dict) -> dict:
                         key=lambda a: a['FechaCreacionArchivo'])
         admisionista = cargue[0]['Usuario_id'] if cargue else None
 
-        requeridos = [] if 'PARTICULAR' in contrato else [
-            t for t in ('ORDEN', 'AUTORIZACION', 'COMPROBANTE')
-            if not (t == 'AUTORIZACION' and any(c in contrato for c in CONTRATOS_SIN_AUTORIZACION))
-        ]
-        faltan = [t for t in requeridos if t not in tipos]
+        # Documentos exigidos según el contrato (services/documentos_requeridos.py)
+        faltan = doc_faltantes(contrato, zeus.get(aid, {}).get('ufuncional') == 1, tipos)
         evaluados = [a for a in arcs if (a['Tipo'] or '').upper() not in ('FACTURA', *TIPOS_NO_REVISADOS)]
         no_revisados = [a for a in evaluados if a['IdArchivo'] not in revisados]
         sin_ia = sorted({(a['Tipo'] or '').upper() for a in no_revisados})
