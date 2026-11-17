@@ -31,7 +31,6 @@ import requests
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from django.db import connections
-from django.db.models import Q
 from django.views.decorators.http import require_GET
 from rest_framework.decorators import api_view
 
@@ -1623,17 +1622,11 @@ def _puede_generar_resultado(estudio: int, force: bool):
     Sin force: solo si la admisión no tiene RESULTADO. Con force: además puede reemplazar el que
     generó el sistema ({estudio}R.pdf sin usuario), nunca uno subido por una persona.
     """
-    existentes = ArchivoFacturacion.objects.filter(Admision_id=estudio, Tipo="RESULTADO")
-    if not existentes.exists():
-        return True, ""
-    if not force:
-        return False, "ya tiene RESULTADO"
-    # Ya aprobado por Cuentas Médicas o renombrado para radicar: nunca se reemplaza (casos FES 22950-24282)
-    if ArchivoFacturacion.objects.filter(Admision_id=estudio).filter(
-            Q(RevisionPrimera=True, Tipo="RESULTADO") | Q(Radicado=True)).exists():
-        return False, "RESULTADO ya aprobado por Cuentas Médicas o admisión renombrada"
-    if existentes.exclude(NombreArchivo=f"{estudio}R.pdf", Usuario__isnull=True).exists():
-        return False, "tiene RESULTADO subido por un usuario"
+    # Un RESULTADO ya cargado (por una persona o por el sistema) NUNCA se reemplaza, ni con force: el
+    # 17/11/2026 la regeneración reemplazó ~100 resultados ya auditados por Cuentas Médicas. Si hay que
+    # cambiarlo, se usa el botón Reemplazar de GE Documental.
+    if ArchivoFacturacion.objects.filter(Admision_id=estudio, Tipo="RESULTADO").exists():
+        return False, "ya tiene RESULTADO (no se reemplaza)"
     return True, ""
 
 

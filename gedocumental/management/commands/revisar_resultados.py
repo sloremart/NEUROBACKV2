@@ -81,7 +81,8 @@ class Command(BaseCommand):
             # Primero la revisión IA de los RESULTADOS (lo que alimenta la bandeja de Cuentas Médicas)
             paso('revisar_resultados', self._revisar_resultados, o['dias'], o['limite'])
             paso('revisar_sin_revision', self._revisar_sin_revision, o['dias'], o['limite'])
-            paso('regenerar_incompletos_siesa', self._regenerar_incompletos_siesa, o['dias_siesa'])
+            # Ya NO se regeneran resultados: el 17/11/2026 la regeneración reemplazó ~100 resultados ya
+            # auditados por Cuentas Médicas. Un RESULTADO cargado no se reemplaza automáticamente nunca.
             paso('procedimiento_cambiado', self._revisar_procedimiento_cambiado, o['limite'])
         paso('registrar_faltantes', self._registrar_faltantes, o['ventana_faltantes'])
         paso('registrar_sin_autorizacion', self._registrar_sin_autorizacion, o['ventana_faltantes'])
