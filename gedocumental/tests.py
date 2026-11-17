@@ -466,6 +466,27 @@ class FirmaVectorialTests(SimpleTestCase):
         self.assertTrue(necesita_pdf('RESULTADO', ResultadoMiembroInferiorTests.DESC))
 
 
+class AplicacionMedicamentoTests(SimpleTestCase):
+    """Caso 33971: FOMAG autoriza 992990 x2 (Alirocumab) y la admisión factura 1 aplicación."""
+
+    ADM = dict(ADMISION, cups=['992990 - INYECCIÓN O INFUSIÓN DE OTRA SUSTANCIA TERAPÉUTICA O PROFILÁCTICA (cant. 1)'])
+    DESC = "Cantidad autorizada en el documento es 2, se esperaba 1 para el procedimiento 992990."
+
+    def test_autorizacion_con_mas_aplicaciones_no_es_hallazgo(self):
+        decision = evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM)
+        self.assertEqual(decision[0], 'DESCARTADO')
+
+    def test_autorizacion_con_menos_si_es_hallazgo(self):
+        adm = dict(ADMISION, cups=['992990 - INYECCIÓN O INFUSIÓN DE OTRA SUSTANCIA TERAPÉUTICA (cant. 3)'])
+        desc = "Cantidad autorizada en el documento es 2, se esperaba 3 para el procedimiento 992990."
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm))
+
+    def test_otro_procedimiento_no_aplica(self):
+        adm = dict(ADMISION, cups=['883101 - RESONANCIA MAGNÉTICA DE CEREBRO (cant. 1)'])
+        desc = "Cantidad autorizada en el documento es 2, se esperaba 1 para el procedimiento 883101."
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm))
+
+
 class DocumentosRequeridosTests(SimpleTestCase):
     """Documentos exigidos por contrato (pestaña Documentos faltantes, bandeja CM, Gestión de facturación)."""
 

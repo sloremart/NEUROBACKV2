@@ -34,7 +34,7 @@ from gedocumental.services.ai_revision import (
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE, TIPOS_NO_REVISADOS,
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida,
     _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
-    _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden,
+    _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden, _autorizacion_aplicacion_de_mas,
     obtener_contexto_admision, cantidades_orden,
 )
 
@@ -448,6 +448,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     if (tipo or '').upper() == 'AUTORIZACION' and _autorizacion_de_mas_con_orden(d, datos_admision):
         return DESCARTADO, ("La autorización trae más cantidad que la admisión, pero la orden pide lo mismo que la "
                             "admisión: el error es de la autorización, la admisión está bien.")
+
+    if (tipo or '').upper() == 'AUTORIZACION' and _autorizacion_aplicacion_de_mas(d, datos_admision):
+        return DESCARTADO, ("Aplicación de medicamentos: la autorización cubre más aplicaciones que las que factura "
+                            "esta admisión; las demás se usan en las siguientes citas.")
 
     if not _es_comprobante(tipo) and _cantidad_cero_leida(d):
         return DESCARTADO, ("La IA leyó cantidad 0 para un CUPS que está en el documento; una autorización "

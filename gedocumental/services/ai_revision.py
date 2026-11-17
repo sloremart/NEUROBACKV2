@@ -870,8 +870,11 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     # la autorización y la admisión está bien (caso 36734: autorización 883101 x2, orden y admisión x1)
     if ((tipo_documento or '').upper() == 'AUTORIZACION' and resultado["tipo"] != "OK"
             and resultado.get("paciente_coincide") != "NO"
-            and _autorizacion_de_mas_con_orden(resultado.get("descripcion"), datos_admision,
-                                               resultado.get("cantidades_documento"))):
+            and (_autorizacion_de_mas_con_orden(resultado.get("descripcion"), datos_admision,
+                                                resultado.get("cantidades_documento"))
+                 # Aplicación de medicamentos: la autorización cubre varias aplicaciones (caso 33971)
+                 or _autorizacion_aplicacion_de_mas(resultado.get("descripcion"), datos_admision,
+                                                    resultado.get("cantidades_documento")))):
         logger.info("AUTORIZACION con más cantidad; la orden coincide con la admisión: se descarta '%s'",
                     resultado.get("descripcion"))
         resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cantidad_orden=True)
@@ -1768,6 +1771,46 @@ def _autorizacion_de_mas_con_orden(descripcion, datos_admision: dict, cantidades
     numeros = [int(n) for n in re.findall(r'(?<!\d)(?<!\d[.,])(\d{1,3})(?!\d)(?![.,]\d)', str(descripcion))]
     if autorizacion:
         return any(autorizacion.get(c, 0) > zeus[c] for c in reclamados)
+    return len(numeros) == 2 and numeros[0] > numeros[1]
+
+
+_APLICACION_MEDICAMENTO = r'INYECC|INFUSI|APLICACION DE|ADMINISTRACION DE MEDICAMENTO'
+
+
+def _autorizacion_aplicacion_de_mas(descripcion, datos_admision: dict, cantidades_autorizacion='') -> bool:
+    """
+    Aplicación de medicamentos (CUPS 9929xx "inyección o infusión de otra sustancia terapéutica"): la EPS
+    autoriza VARIAS aplicaciones y cada admisión factura la que se aplicó ese día. Si la autorización trae MÁS
+    que la admisión no es hallazgo, aunque la orden no diga cantidad (caso 33971: FOMAG autoriza 992990 x2,
+    admisión x1). Si trae menos, sigue siendo hallazgo.
+    """
+    import re
+    import unicodedata
+    if not _solo_motivo_cantidad(descripcion):
+        return False
+    zeus = _cantidades_por_cups(datos_admision)
+    textos = {}
+    for c in datos_admision.get('cups') or []:
+        m = re.search(r'^\s*(\S+)\s*-\s*(.*)', str(c))
+        if m:
+            textos[m.group(1).upper()] = unicodedata.normalize('NFKD', m.group(2)).encode('ascii', 'ignore').decode().upper()
+    aplicacion = {c for c in zeus if c.startswith('9929') or re.search(_APLICACION_MEDICAMENTO, textos.get(c, ''))}
+    if not aplicacion:
+        return False
+    reclamados = [c for c in re.findall(r'\b(\d{6})\b', str(descripcion)) if c in zeus]
+    autorizacion = _parsear_cantidades(cantidades_autorizacion)
+    if not reclamados:
+        reclamados = [c for c in autorizacion if c in zeus] or list(zeus)
+    if not set(reclamados) <= aplicacion:
+        return False   # el hallazgo habla de otro procedimiento
+    if autorizacion and any(c in autorizacion for c in reclamados):
+        return all(autorizacion.get(c, zeus[c]) >= zeus[c] for c in reclamados) and \
+            any(autorizacion.get(c, 0) > zeus[c] for c in reclamados)
+    # Sin cantidades leídas: la descripción debe decir que el documento trae MÁS ("es 2, se esperaba 1")
+    pares = re.findall(r'(?<!\d)(\d{1,3})(?![\d.,]\d)[^;]{0,40}?se esperaba(?:n)?\s+(\d{1,3})', str(descripcion))
+    if pares:
+        return all(int(doc) > int(esp) for doc, esp in pares)
+    numeros = [int(n) for n in re.findall(r'(?<!\d)(?<!\d[.,])(\d{1,3})(?!\d)(?![.,]\d)', str(descripcion))]
     return len(numeros) == 2 and numeros[0] > numeros[1]
 
 
