@@ -739,7 +739,7 @@ def capacidad_instalada_view(request):
             cols = [c[0] for c in cur.description]
             consultorios = [dict(zip(cols, row)) for row in cur.fetchall()]
 
-            # 2. Citas por servicio (asunto) — vinculado al médico de la cita
+            # 2a. Citas activas por servicio (estado no cancelado)
             cur.execute("""
                 SELECT
                     sa.id                                       AS asunto_id,
@@ -763,30 +763,58 @@ def capacidad_instalada_view(request):
             cols2 = [c[0] for c in cur.description]
             servicios = [dict(zip(cols2, row)) for row in cur.fetchall()]
 
+            # 2b. Citas canceladas/incumplidas por servicio
+            cur.execute("""
+                SELECT
+                    LTRIM(RTRIM(sa.nombre)) AS servicio,
+                    COUNT(*)               AS canceladas
+                FROM citas c
+                JOIN sis_asunto sa ON sa.id = c.asunto
+                JOIN programacion_medico pm
+                    ON pm.id_programacion = c.id_programacion AND pm.activo = 1
+                WHERE CAST(c.fecha AS DATE) >= %s
+                  AND CAST(c.fecha AS DATE) <= %s
+                  AND ISNULL(c.estado, 'P') IN ('C', 'X')
+                GROUP BY sa.nombre
+            """, [fecha_ini, fecha_fin])
+            _canceladas_map = {row[0]: row[1] for row in cur.fetchall()}
+
             # Comparativo: capacidad Excel vs agenda sistema por servicio
             from collections import defaultdict
             _agenda       = defaultdict(int)
             _confirmadas  = defaultdict(int)
+            _canceladas   = defaultdict(int)
             for s in servicios:
                 _agenda[s['servicio']]      += s['agendados']
                 _confirmadas[s['servicio']] += s['confirmadas']
+            for svc, cnt in _canceladas_map.items():
+                _canceladas[svc] += cnt
 
-            _comp = {k: {'servicio': k, 'capacidad_excel': v, 'agendados': 0, 'confirmadas': 0}
+            _comp = {k: {'servicio': k, 'capacidad_excel': v, 'agendados': 0, 'confirmadas': 0, 'canceladas': 0}
                      for k, v in _CAPACIDAD_EXCEL.items()}
+            # merge activos
             for db_svc, ag in _agenda.items():
                 key = _mapear_servicio_excel(db_svc)
                 if key:
-                    _comp[key]['agendados']     += ag
-                    _comp[key]['confirmadas']   += _confirmadas[db_svc]
+                    _comp[key]['agendados']   += ag
+                    _comp[key]['confirmadas'] += _confirmadas[db_svc]
                 else:
-                    _comp.setdefault(db_svc, {'servicio': db_svc, 'capacidad_excel': 0, 'agendados': 0, 'confirmadas': 0})
+                    _comp.setdefault(db_svc, {'servicio': db_svc, 'capacidad_excel': 0, 'agendados': 0, 'confirmadas': 0, 'canceladas': 0})
                     _comp[db_svc]['agendados']   += ag
                     _comp[db_svc]['confirmadas'] += _confirmadas[db_svc]
+            # merge cancelados
+            for db_svc, cant in _canceladas.items():
+                key = _mapear_servicio_excel(db_svc)
+                dest = key if key else db_svc
+                if dest not in _comp:
+                    _comp[dest] = {'servicio': dest, 'capacidad_excel': 0, 'agendados': 0, 'confirmadas': 0, 'canceladas': 0}
+                _comp[dest]['canceladas'] += cant
 
             comparativo = []
             for item in _comp.values():
                 cap = item['capacidad_excel']
                 ag  = item['agendados']
+                item['disponibles'] = max(cap - ag, 0) if cap else None
                 item['pct_ocupacion'] = round(ag / cap * 100, 1) if cap else None
                 comparativo.append(item)
             comparativo.sort(key=lambda x: (x['capacidad_excel'] == 0, -(x['agendados'] or 0)))
