@@ -695,11 +695,10 @@ def capacidad_instalada_view(request):
             # 2. Citas por servicio (asunto)
             cur.execute("""
                 SELECT
-                    sa.id                                      AS asunto_id,
-                    LTRIM(RTRIM(sa.nombre))                    AS servicio,
-                    ISNULL(LTRIM(RTRIM(sa.cups)), '')           AS cups,
+                    sa.id                          AS asunto_id,
+                    LTRIM(RTRIM(sa.nombre))         AS servicio,
                     pm.id_sede,
-                    COUNT(*)                                   AS agendados
+                    COUNT(*)                        AS agendados
                 FROM citas c
                 JOIN sis_asunto sa ON sa.id = c.asunto
                 JOIN programacion_medico pm
@@ -707,7 +706,7 @@ def capacidad_instalada_view(request):
                 WHERE CAST(c.fecha AS DATE) >= %s
                   AND CAST(c.fecha AS DATE) <= %s
                   AND ISNULL(c.estado, 'P') NOT IN ('C', 'X')
-                GROUP BY sa.id, sa.nombre, sa.cups, pm.id_sede
+                GROUP BY sa.id, sa.nombre, pm.id_sede
                 ORDER BY agendados DESC
             """, [fecha_ini, fecha_fin])
             cols2 = [c[0] for c in cur.description]
