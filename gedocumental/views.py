@@ -2983,30 +2983,37 @@ def radicar_policia_view(request, numero_admision, idusuario):
         merger.write(temp_pdf_path)
         merger.close()
 
-        # Archivos adicionales: JSON, TXT, XML
+        # Archivos adicionales: XML, JSON (RIPS), TXT (CUV) desde SIESA
         carpeta_json_txt = os.path.join('/mnt/prueba/DocsFESIESA', f'Factura-FES{factura_numero}')
         adicionales = []
         if os.path.exists(carpeta_json_txt):
             for nombre in os.listdir(carpeta_json_txt):
                 ruta_origen = os.path.join(carpeta_json_txt, nombre)
-                if nombre.lower().endswith('.json'):
+                ext = os.path.splitext(nombre)[1].lower()
+                nombre_base = os.path.splitext(nombre)[0].upper()
+
+                if ext == '.xml':
+                    nuevo_nombre = f"XML_901119103_{prefijo}{factura_numero}.xml"
+                elif ext == '.json':
                     with open(ruta_origen, 'r', encoding='utf-8') as f:
                         contenido_json = f.read()
                     contenido_stripped = contenido_json.lstrip()
+                    nombres_validos = {f'FES{factura_numero}'.upper(), f'{prefijo}{factura_numero}'.upper()}
                     if not (contenido_stripped.startswith('{"numDocumentoIdObligado') or
-                            os.path.splitext(nombre)[0].upper() == f'FES{factura_numero}'.upper()):
+                            nombre_base in nombres_validos):
                         continue
-                    nuevo_nombre = f"FES{factura_numero}.json"
-                elif nombre.lower().endswith('.txt'):
-                    nuevo_nombre = f"ResultadosLocales_FES{factura_numero}.txt"
+                    nuevo_nombre = f"RIPS_901119103_FES{factura_numero}.json"
+                elif ext == '.txt':
+                    nuevo_nombre = f"CUV_901119103_FES{factura_numero}.json"
                 else:
-                    nuevo_nombre = nombre  # XML u otros se dejan igual
+                    continue
+
                 ruta_destino = os.path.join(carpeta_usuario, nuevo_nombre)
                 shutil.copy(ruta_origen, ruta_destino)
                 adicionales.append(ruta_destino)
 
         # Crear ZIP con PDF y archivos adicionales
-        zip_path = os.path.join(carpeta_usuario, f"FES{factura_numero}.zip")
+        zip_path = os.path.join(carpeta_usuario, f"901119103_FES{factura_numero}.zip")
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             zipf.write(temp_pdf_path, os.path.basename(temp_pdf_path))
             for adicional in adicionales:
