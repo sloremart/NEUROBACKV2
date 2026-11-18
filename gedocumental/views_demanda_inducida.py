@@ -692,21 +692,24 @@ def capacidad_instalada_view(request):
             cols = [c[0] for c in cur.description]
             consultorios = [dict(zip(cols, row)) for row in cur.fetchall()]
 
-            # 2. Citas por servicio (asunto)
+            # 2. Citas por servicio (asunto) — vinculado al médico de la cita
             cur.execute("""
                 SELECT
-                    sa.id                          AS asunto_id,
-                    LTRIM(RTRIM(sa.nombre))         AS servicio,
+                    sa.id                                       AS asunto_id,
+                    LTRIM(RTRIM(sa.nombre))                     AS servicio,
+                    ISNULL(c.cod_medi, '')                      AS cod_medi,
+                    LTRIM(RTRIM(ISNULL(m.nombre, c.cod_medi)))  AS medico,
                     pm.id_sede,
-                    COUNT(*)                        AS agendados
+                    COUNT(*)                                    AS agendados
                 FROM citas c
                 JOIN sis_asunto sa ON sa.id = c.asunto
                 JOIN programacion_medico pm
                     ON pm.id_programacion = c.id_programacion AND pm.activo = 1
+                LEFT JOIN Medicos m ON m.codigo = c.cod_medi
                 WHERE CAST(c.fecha AS DATE) >= %s
                   AND CAST(c.fecha AS DATE) <= %s
                   AND ISNULL(c.estado, 'P') NOT IN ('C', 'X')
-                GROUP BY sa.id, sa.nombre, pm.id_sede
+                GROUP BY sa.id, sa.nombre, c.cod_medi, m.nombre, pm.id_sede
                 ORDER BY agendados DESC
             """, [fecha_ini, fecha_fin])
             cols2 = [c[0] for c in cur.description]
