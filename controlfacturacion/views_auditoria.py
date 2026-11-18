@@ -159,7 +159,8 @@ def construir(periodo: str) -> dict:
         base_hallazgo = {'sis_deta_id': sid, 'estudio': l['estudio'], 'fecha': l['fecha'],
                          'paciente': l['paciente'], 'documento': l['documento'], 'cups': l['cod_servicio'],
                          'examen': l['descripcion'],
-                         'medico_zeus': medicos.get(l['cod_medico_zeus'], {}).get('nombre', 'Sin médico')}
+                         'medico_zeus': medicos.get(l['cod_medico_zeus'], {}).get('nombre', 'Sin médico'),
+                         'cod_medico_zeus': l['cod_medico_zeus']}
         emparejados = pareja.get(sid) or otro_cups.get(sid)
         if emparejados:
             e = emparejados[0]
@@ -223,6 +224,10 @@ def construir(periodo: str) -> dict:
             'cod_medico_lumier': e.cod_medico,
         })
     for x in hallazgos:
+        x.setdefault('cod_medico_zeus', None)
+        x.setdefault('cod_medico_lumier', None)
+        # Nombre del médico de Lumier como está en Zeus (Lumier lo escribe distinto: 'William  García  Rossi')
+        x['medico_lumier_zeus'] = medicos.get(x['cod_medico_lumier'], {}).get('nombre', '') if x['cod_medico_lumier'] else ''
         r = resoluciones.get(x['clave'])
         x['decision'] = r.decision if r else ''
         x['nota'] = r.nota if r else ''
