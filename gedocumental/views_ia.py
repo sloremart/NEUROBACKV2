@@ -66,6 +66,51 @@ def contratos_por_admision(admision_ids) -> dict:
     return resultado
 
 
+_RESOLUCIONES = {'CORREGIDO': 'Corregido', 'REEMPLAZADO': 'Nueva revisión', 'ARCHIVO_ELIMINADO': 'Archivo eliminado'}
+
+
+def _hallazgos_excel(data):
+    """Hallazgos en .xlsx: cada dato en su celda (el CSV se descuadraba al abrirlo en Excel)."""
+    from io import BytesIO
+    from django.http import HttpResponse
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    columnas = [
+        ('Fecha', 17), ('Horas sin corregir', 12), ('Admisión', 10), ('Paciente', 32),
+        ('Procedimiento (CUPS)', 50), ('Identificación', 15), ('EPS / Contrato', 32), ('Documento', 16),
+        ('Hallazgo', 15), ('Descripción', 70), ('Responsable', 26), ('Estado', 16),
+    ]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Hallazgos IA'
+    ws.append([c for c, _ in columnas])
+    for celda, (_, ancho) in zip(ws[1], columnas):
+        celda.font = Font(bold=True, color='FFFFFF')
+        celda.fill = PatternFill('solid', fgColor='381A73')
+        ws.column_dimensions[celda.column_letter].width = ancho
+    for d in data:
+        estado = (_RESOLUCIONES.get(d['Resolucion'] or '', 'Resuelto') if d['Resuelta'] else 'Pendiente')
+        ws.append([
+            datetime.fromisoformat(d['Fecha']).replace(tzinfo=None), d['HorasAbierto'], d['Admision'],
+            d['Paciente'], d['Procedimiento'], d['Identificacion'], d['Entidad'], d['TipoDocumento'],
+            d['TipoHallazgo'], d['Descripcion'], d['Usuario'], estado,
+        ])
+    for fila in ws.iter_rows(min_row=2):
+        fila[0].number_format = 'dd/mm/yyyy hh:mm'
+        for celda in fila:
+            celda.alignment = Alignment(vertical='top', wrap_text=celda.column in (5, 10))
+    ws.freeze_panes = 'A2'
+    ws.auto_filter.ref = ws.dimensions
+
+    salida = BytesIO()
+    wb.save(salida)
+    resp = HttpResponse(salida.getvalue(),
+                        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    resp['Content-Disposition'] = f'attachment; filename="hallazgos_ia_{datetime.now():%Y%m%d}.xlsx"'
+    return resp
+
+
 @api_view(['GET'])
 def hallazgos_ia(request):
     try:
@@ -145,6 +190,9 @@ def hallazgos_ia(request):
                 'NotaResolucion':  h.NotaResolucion,
                 'HorasAbierto':    horas_abierto,
             })
+
+        if p.get('formato') == 'xlsx':
+            return _hallazgos_excel(data)
 
         return Response({
             'success': True,
