@@ -171,3 +171,100 @@ class CodigoSoat(models.Model):
         class Meta:
             db_table = 'codigossoat'
             managed = False
+
+# ── Auditoría de honorarios médicos ──────────────────────────────────────────
+
+class TarifaHonorario(models.Model):
+    """Honorario de un médico por CUPS (importado del Excel 'Cups Neuro - Honorarios médicos', editable)."""
+    GRUPOS = [('TODOS', 'Todas las entidades'), ('PARTICULAR', 'Particular'),
+              ('ENTIDADES', 'Entidades / otras entidades'), ('SANITAS', 'Sanitas (evento y MRC)')]
+    TIPOS = [('FIJO', 'Valor fijo'), ('PORCENTAJE', '% del valor facturado'),
+             ('POR_PUNTO', 'Valor por punto'), ('ESCALONADO', 'Según número de procedimientos')]
+
+    area          = models.CharField(max_length=60, blank=True, default='')       # hoja del Excel
+    encabezado    = models.CharField(max_length=120, blank=True, default='')      # médico como está en el Excel
+    cod_medico    = models.IntegerField(null=True, blank=True, db_index=True)     # Medicos.codigo en Zeus
+    medico        = models.CharField(max_length=150, blank=True, default='')
+    cups          = models.CharField(max_length=20, db_index=True)
+    descripcion   = models.CharField(max_length=255, blank=True, default='')
+    grupo         = models.CharField(max_length=12, choices=GRUPOS, default='TODOS')
+    tipo          = models.CharField(max_length=12, choices=TIPOS, default='FIJO')
+    valor         = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    porcentaje    = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    max_puntos    = models.IntegerField(null=True, blank=True)
+    escalas       = models.CharField(max_length=200, blank=True, default='')      # "400000,500000,600000"
+    por_unidad    = models.BooleanField(default=False)    # multiplica por la cantidad (cada nervio, extremidad...)
+    solo_contrato = models.CharField(max_length=60, blank=True, default='')       # ej. IPS CONSULTORIO
+    texto_original = models.CharField(max_length=120, blank=True, default='')
+    activo        = models.BooleanField(default=True)
+    actualizado   = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'auditoria_tarifa'
+        ordering = ['area', 'medico', 'cups']
+
+
+class AuditoriaLinea(models.Model):
+    """Decisión del auditor sobre una línea de servicio de Zeus (sis_deta.id)."""
+    ESTADOS = [('PENDIENTE', 'Pendiente'), ('OK', 'OK'), ('GLOSA', 'Glosa')]
+
+    sis_deta_id    = models.IntegerField(unique=True)
+    periodo        = models.CharField(max_length=7, db_index=True)    # YYYY-MM
+    cod_medico     = models.IntegerField(null=True, blank=True, db_index=True)
+    estado         = models.CharField(max_length=10, choices=ESTADOS, default='PENDIENTE')
+    valor_ajustado = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    observacion    = models.TextField(blank=True, default='')
+    usuario        = models.CharField(max_length=150, blank=True, default='')
+    fecha          = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'auditoria_linea'
+
+
+class AuditoriaCierre(models.Model):
+    """Auditoría de un médico en un mes, cerrada (ya no se edita)."""
+    periodo    = models.CharField(max_length=7)
+    cod_medico = models.IntegerField()
+    total      = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    usuario    = models.CharField(max_length=150, blank=True, default='')
+    fecha      = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'auditoria_cierre'
+        unique_together = [('periodo', 'cod_medico')]
+
+
+class LumierEstudio(models.Model):
+    """Estudio de imágenes del informe de Lumier (radiólogo que lo leyó)."""
+    periodo       = models.CharField(max_length=7, db_index=True)
+    fecha         = models.DateField()
+    documento     = models.CharField(max_length=30, db_index=True)
+    paciente      = models.CharField(max_length=200, blank=True, default='')
+    cups          = models.CharField(max_length=20)
+    examen        = models.CharField(max_length=255, blank=True, default='')
+    cantidad      = models.IntegerField(default=1)
+    contrato      = models.CharField(max_length=255, blank=True, default='')
+    estado        = models.CharField(max_length=60, blank=True, default='')
+    profesional   = models.CharField(max_length=200, blank=True, default='')
+    profesional_doc = models.CharField(max_length=30, blank=True, default='')
+    cod_medico    = models.IntegerField(null=True, blank=True)
+    id_cita       = models.CharField(max_length=40, blank=True, default='')
+
+    class Meta:
+        db_table = 'auditoria_lumier'
+
+
+class ResolucionLumier(models.Model):
+    """Validación manual de un hallazgo del cruce Lumier ↔ Zeus."""
+    DECISIONES = [('ZEUS', 'Se paga al médico de Zeus'), ('LUMIER', 'Se paga al médico de Lumier'),
+                  ('REVISADO', 'Revisado'), ('DESCARTADO', 'Descartado')]
+
+    clave    = models.CharField(max_length=40, unique=True)   # MD/CD/SZ:<sis_deta_id> | SL:<lumier_id>
+    periodo  = models.CharField(max_length=7, db_index=True)
+    decision = models.CharField(max_length=12, choices=DECISIONES)
+    nota     = models.TextField(blank=True, default='')
+    usuario  = models.CharField(max_length=150, blank=True, default='')
+    fecha    = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'auditoria_lumier_resolucion'
