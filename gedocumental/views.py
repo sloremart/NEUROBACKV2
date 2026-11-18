@@ -35,6 +35,7 @@ from rest_framework.decorators import api_view, permission_classes
 import zipfile
 from gedocumental.services.ai_revision import revisar_archivo, obtener_contexto_admision, revisar_en_segundo_plano
 from gedocumental.services.validacion_paciente import validar_datos_paciente
+from gedocumental.services.documentos_requeridos import admisiones_particulares, es_particular
 
 
 # ── Helper ZeusSalud ─────────────────────────────────────────────────────────
@@ -658,7 +659,9 @@ class FiltroAuditoriaCuentasMedicas(APIView):
                 archivos_facturacion = archivos_facturacion.filter(RevisionPrimera=True)
 
         admision_ids = archivos_facturacion.values_list('Admision_id', flat=True).distinct()
-        queryset = AuditoriaCuentasMedicas.objects.filter(AdmisionId__in=admision_ids)
+        # Particulares: solo se cargan documentos; no pasan por Cuentas Médicas
+        particulares = admisiones_particulares(list(admision_ids))
+        queryset = AuditoriaCuentasMedicas.objects.filter(AdmisionId__in=admision_ids).exclude(AdmisionId__in=particulares)
 
         response_data = []
 
@@ -773,7 +776,7 @@ class AdmisionesRadicarView(APIView):
         result = []
         for row in rows:
             admision_id, eps_code, nombre, fecha_ing, contrato_alias = row
-            if admision_id not in ids_revisados:
+            if admision_id not in ids_revisados or es_particular(contrato_alias):
                 continue
             archivo = archivos_por_admision.get(admision_id)
             if not archivo:
@@ -3599,6 +3602,9 @@ def archivos_por_usuario_observacion(request, user_id):
         )
 
         admision_ids_list = list(admision_ids)
+        # Particulares: no pasan por Cuentas Médicas (no tienen devoluciones que corregir)
+        particulares = admisiones_particulares(admision_ids_list)
+        admision_ids_list = [a for a in admision_ids_list if a not in particulares]
 
         admisiones_data = []
         with connections['zeussalud'].cursor() as cursor:

@@ -27,13 +27,26 @@ def _plano(texto) -> str:
     return unicodedata.normalize('NFKD', str(texto or '')).encode('ascii', 'ignore').decode().upper()
 
 
+def es_particular(contrato: str) -> bool:
+    """
+    Contrato PARTICULAR (tarifa plena, descuentos, bono, liga): el paciente paga. Sus admisiones solo cargan
+    documentos: no se revisan con IA, no pasan por Cuentas Médicas ni por la validación de resultados.
+    """
+    return 'PARTICULAR' in _plano(contrato)
+
+
+def admisiones_particulares(admision_ids) -> set:
+    """Admisiones (con_estudio) de un contrato particular, según ZeusSalud."""
+    return {adm for adm, d in datos_admisiones(admision_ids).items() if es_particular(d['contrato'])}
+
+
 def requisitos(contrato: str, es_consulta: bool) -> list[tuple[str, ...]]:
     """
     Lista de requisitos; cada uno es una tupla de tipos alternativos (basta con tener uno de ellos).
     Ej. IPS Consultorio: [('ORDEN', 'AUTORIZACION'), ('COMPROBANTE',)].
     """
     c = _plano(contrato)
-    if 'PARTICULAR' in c:
+    if es_particular(c):
         return []
     if 'COLSANITAS' in c:
         return ([(ORDEN,)] if es_consulta else []) + [(AUTORIZACION,), (COMPROBANTE,)]

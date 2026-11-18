@@ -22,7 +22,7 @@ from rest_framework.response import Response
 from gedocumental.models import RevisionIA
 from gedocumental.services.ai_revision import TIPOS_NO_REVISADOS, TIPOS_SIN_REVISION_IA, _reparar_texto
 from gedocumental.views import get_admisiones_zeus_bulk
-from gedocumental.services.documentos_requeridos import (cumple as doc_cumple, datos_admisiones,
+from gedocumental.services.documentos_requeridos import (cumple as doc_cumple, datos_admisiones, es_particular,
                                                          faltantes as doc_faltantes)
 
 
@@ -117,6 +117,9 @@ def hallazgos_ia(request):
         data = []
         for h in hallazgos:
             adm = admisiones.get(h.AdmisionId)
+            # Particulares: sus documentos no se validan (no deben salir como hallazgo para nadie)
+            if es_particular(contratos.get(h.AdmisionId, '')) or (adm and (adm[2] or '').strip().upper().startswith('PAR')):
+                continue
             # Tiempo abierto: pendiente → hasta ahora; resuelto → hasta la corrección
             fin = h.FechaResolucion if h.Resuelta and h.FechaResolucion else ahora
             horas_abierto = max(0, int((fin - h.Fecha).total_seconds() // 3600))
@@ -273,8 +276,12 @@ def bandeja_cuentas_medicas(request):
             revisados = ia_revisados.get(adm_id, 0)
             cargados = tipos_cargados.get(adm_id, set())
             tiene_resultado = 'RESULTADO' in cargados
-            # Documentos exigidos según el contrato (Colsanitas, IPS Consultorio, MRC, particular...)
+            # Documentos exigidos según el contrato (Colsanitas, IPS Consultorio, MRC...)
             req = reglas_docs.get(adm_id, {'contrato': contratos.get(adm_id, ''), 'es_consulta': False})
+            # Particulares: solo se cargan documentos; Cuentas Médicas no los revisa
+            if (es_particular(req['contrato']) or es_particular(contratos.get(adm_id, ''))
+                    or entidad.upper().startswith('PAR')):
+                continue
             faltantes_doc = doc_faltantes(req['contrato'], req['es_consulta'], cargados) + \
                 ([] if tiene_resultado else ['RESULTADO'])
             val = validaciones.get(adm_id)
