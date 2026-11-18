@@ -22,7 +22,8 @@ from decimal import Decimal, InvalidOperation
 
 from django.db import connections, transaction
 from django.http import HttpResponse, JsonResponse
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 
 from gedocumental.services.ai_revision import _reparar_texto
 from .models import AuditoriaCierre, AuditoriaLinea, LumierEstudio, ResolucionLumier, TarifaHonorario
@@ -264,6 +265,7 @@ def _cerrada(periodo, cod_medico) -> AuditoriaCierre | None:
 # ── resumen y detalle ────────────────────────────────────────────────────────
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def resumen(request):
     periodo = _periodo(request)
     datos = construir(periodo)
@@ -313,6 +315,7 @@ def resumen(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def detalle_medico(request, cod_medico: int):
     periodo = _periodo(request)
     datos = construir(periodo)
@@ -331,6 +334,7 @@ def detalle_medico(request, cod_medico: int):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def guardar_linea(request):
     """{periodo, cod_medico, ids:[sis_deta_id...] | sis_deta_id, estado?, observacion?, valor_ajustado?}"""
     periodo = _periodo(request)
@@ -364,6 +368,7 @@ def guardar_linea(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def cerrar(request):
     periodo = _periodo(request)
     cod_medico = int(request.data.get('cod_medico'))
@@ -389,6 +394,7 @@ def _copiar_estilo(origen, destino):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def exportar(request):
     import openpyxl
     periodo = _periodo(request)
@@ -493,11 +499,13 @@ def _tarifa_json(t: TarifaHonorario) -> dict:
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def tarifas(request):
     return JsonResponse({'tarifas': [_tarifa_json(t) for t in TarifaHonorario.objects.all()]})
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def importar_tarifas(request):
     archivo = request.FILES.get('archivo')
     if not archivo:
@@ -527,6 +535,7 @@ def importar_tarifas(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def editar_tarifa(request, tarifa_id: int):
     t = TarifaHonorario.objects.filter(pk=tarifa_id).first()
     if not t:
@@ -555,6 +564,7 @@ def _editar(t: TarifaHonorario, d) -> JsonResponse:
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def crear_tarifa(request):
     """Tarifa nueva desde la pantalla (médico o CUPS que no están en el Excel)."""
     d = request.data
@@ -572,6 +582,7 @@ def crear_tarifa(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def asignar_medico(request):
     """Asocia un encabezado del Excel ('MAIRA') con un médico de Zeus en todas sus tarifas."""
     encabezado = request.data.get('encabezado') or ''
@@ -583,6 +594,7 @@ def asignar_medico(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def medicos(request):
     return JsonResponse({'medicos': sorted(medicos_zeus(), key=lambda m: m['nombre'])})
 
@@ -590,6 +602,7 @@ def medicos(request):
 # ── Lumier ───────────────────────────────────────────────────────────────────
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def cargar_lumier(request):
     archivo = request.FILES.get('archivo')
     if not archivo:
@@ -622,6 +635,7 @@ def cargar_lumier(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def hallazgos_lumier(request):
     periodo = _periodo(request)
     datos = construir(periodo)
@@ -637,6 +651,7 @@ def hallazgos_lumier(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def resolver_lumier(request):
     periodo = _periodo(request)
     clave = str(request.data.get('clave') or '')
