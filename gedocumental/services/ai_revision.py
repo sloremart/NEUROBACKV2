@@ -2095,6 +2095,20 @@ def analizar_documento(ruta_absoluta: str, tipo_documento: str, datos_admision: 
         logger.info("PDF sin contenido legible: %s", ruta_absoluta)
         return None
     resultado = _llamar_openai(texto, imagenes, tipo_documento, datos_admision, firma_detectada=firma)
+    # Escaneo con capa de texto (OCR del escáner) incompleta: el texto no trae el nombre ni el documento del
+    # paciente, pero la imagen sí (caso 11999, orden de Sanitas). Antes de dar el hallazgo se revisa la imagen.
+    if (not imagenes and texto and ruta_absoluta.lower().endswith('.pdf')
+            and str(resultado.get("descripcion") or '').startswith(
+                "Paciente no corresponde: el documento no contiene")):
+        tipo = (tipo_documento or '').upper()
+        _, imagenes = _leer_pdf(ruta_absoluta, siempre_imagen=True,
+                                max_imagenes=MAX_PAGINAS_IMAGEN_POR_TIPO.get(tipo, MAX_PAGINAS_IMAGEN))
+        if imagenes:
+            logger.info("Texto sin datos del paciente: se repite la revisión con la imagen (%s)", ruta_absoluta)
+            primera = resultado
+            resultado = _llamar_openai(texto, imagenes, tipo_documento, datos_admision, firma_detectada=firma)
+            resultado["tokens"] = [a + b for a, b in zip(primera["tokens"], resultado["tokens"])]
+            resultado["llamadas"] = primera.get("llamadas", 1) + resultado.get("llamadas", 1)
     resultado["modo"] = ("mixto" if texto else "imagen") if imagenes else "texto"
     if (tipo_documento or '').upper() == 'AUTORIZACION':
         _agregar_hallazgo_recaudo(resultado, datos_admision)

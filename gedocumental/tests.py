@@ -1887,3 +1887,36 @@ class OrdenManuscritaTests(SimpleTestCase):
     def test_impresa_u_otro_documento_se_valida(self):
         self.assertEqual(self._llamar('NO')['tipo'], 'INFORMACION')
         self.assertEqual(self._llamar('SI', tipo='AUTORIZACION')['tipo'], 'INFORMACION')
+
+
+class EscaneoConTextoSinPacienteTests(SimpleTestCase):
+    """Caso 11999: orden escaneada con capa de texto (OCR) sin el nombre: se revisa la imagen antes del hallazgo."""
+
+    SIN_DATOS = {"tipo": "INFORMACION", "tokens": [10, 1], "llamadas": 1,
+                 "descripcion": "Paciente no corresponde: el documento no contiene el nombre ni el documento de "
+                                "identidad del paciente de la admisión (LAURA ESTEFANIA QUEVEDO ROCHA, CC 1122919525)."}
+    OK = {"tipo": "OK", "descripcion": "Documento correcto", "tokens": [20, 2], "llamadas": 1}
+
+    def _analizar(self, respuestas, imagenes=('img',)):
+        from gedocumental.services import ai_revision
+        with mock.patch.object(ai_revision, '_leer_documento', return_value=('texto OCR ' * 20, [])), \
+                mock.patch.object(ai_revision, '_leer_pdf', return_value=('texto OCR ' * 20, list(imagenes))) as leer, \
+                mock.patch.object(ai_revision, '_llamar_openai', side_effect=[dict(r) for r in respuestas]) as llamar:
+            r = ai_revision.analizar_documento('/x/11999O.pdf', 'ORDEN', {'paciente': 'LAURA ESTEFANIA QUEVEDO ROCHA'})
+        return r, leer, llamar
+
+    def test_se_revisa_la_imagen_y_queda_ok(self):
+        r, leer, llamar = self._analizar([self.SIN_DATOS, self.OK])
+        self.assertEqual(r['tipo'], 'OK')
+        self.assertEqual(r['modo'], 'mixto')
+        self.assertEqual(r['llamadas'], 2)
+        self.assertEqual(r['tokens'], [30, 3])
+        self.assertEqual(llamar.call_args_list[1].args[1], ['img'])
+        self.assertTrue(leer.call_args.kwargs['siempre_imagen'])
+
+    def test_otro_hallazgo_no_repite(self):
+        otro = dict(self.SIN_DATOS, descripcion='Falta el código CUPS')
+        r, leer, llamar = self._analizar([otro])
+        self.assertEqual(llamar.call_count, 1)
+        leer.assert_not_called()
+        self.assertEqual(r['modo'], 'texto')
