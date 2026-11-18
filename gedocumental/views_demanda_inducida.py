@@ -713,7 +713,43 @@ def capacidad_instalada_view(request):
             cols2 = [c[0] for c in cur.description]
             servicios = [dict(zip(cols2, row)) for row in cur.fetchall()]
 
-            # 3. Bloqueados por fecha + consultorio + médico
+            # 3. Médicos — slots y citas por consultorio
+            cur.execute("""
+                SELECT
+                    LTRIM(RTRIM(ISNULL(m.nombre, pmd.Medico)))  AS medico,
+                    pmd.Medico                                   AS cod_medi,
+                    pm.id_sede,
+                    LTRIM(RTRIM(con.nombre))                     AS consultorio,
+                    COUNT(*)                                     AS slots_totales,
+                    SUM(CASE WHEN pmd.IdCita IS NOT NULL
+                              AND ISNULL(c.estado,'P') NOT IN ('C','X')
+                         THEN 1 ELSE 0 END)                     AS citas_agendadas,
+                    SUM(CASE WHEN pmd.IdCita IS NULL
+                              AND ISNULL(pmd.Bloqueado,0)       = 0
+                              AND ISNULL(pmd.SinProgramacion,0) = 0
+                         THEN 1 ELSE 0 END)                     AS slots_disponibles,
+                    SUM(CASE WHEN ISNULL(pmd.Bloqueado,0) = 1
+                         THEN 1 ELSE 0 END)                     AS slots_bloqueados
+                FROM programacion_medico_detalle pmd
+                JOIN programacion_medico pm
+                    ON pm.id = pmd.IdProgramacionMedico AND pm.activo = 1
+                JOIN programacion_medico_relacion pmr
+                    ON pmr.id_programacion = pm.id
+                JOIN consultorios con
+                    ON con.id = pmr.id_consultorio
+                LEFT JOIN citas c
+                    ON c.id = pmd.IdCita
+                LEFT JOIN Medicos m
+                    ON m.codigo = pmd.Medico
+                WHERE CAST(pmd.Fecha AS DATE) >= %s
+                  AND CAST(pmd.Fecha AS DATE) <= %s
+                GROUP BY pmd.Medico, m.nombre, pm.id_sede, con.nombre
+                ORDER BY citas_agendadas DESC, slots_totales DESC
+            """, [fecha_ini, fecha_fin])
+            cols_m = [c[0] for c in cur.description]
+            medicos = [dict(zip(cols_m, row)) for row in cur.fetchall()]
+
+            # 4. Bloqueados por fecha + consultorio + médico
             cur.execute("""
                 SELECT
                     CONVERT(VARCHAR(10), pmd.Fecha, 23) AS fecha,
@@ -736,7 +772,7 @@ def capacidad_instalada_view(request):
             cols3 = [c[0] for c in cur.description]
             bloqueados_detalle = [dict(zip(cols3, row)) for row in cur.fetchall()]
 
-            # 4. Disponibles por fecha + consultorio (solo días con cupos libres)
+            # 5. Disponibles por fecha + consultorio (solo días con cupos libres)
             cur.execute("""
                 SELECT
                     CONVERT(VARCHAR(10), pmd.Fecha, 23) AS fecha,
@@ -779,9 +815,10 @@ def capacidad_instalada_view(request):
                 "bloqueados":       total_bloqueados,
                 "pct_ocupacion": round(total_agendados / total_programado * 100, 1) if total_programado else 0,
             },
-            "consultorios":       consultorios,
-            "servicios":          servicios,
-            "bloqueados_detalle": bloqueados_detalle,
+            "consultorios":        consultorios,
+            "servicios":           servicios,
+            "medicos":             medicos,
+            "bloqueados_detalle":  bloqueados_detalle,
             "disponibles_detalle": disponibles_detalle,
         })
 
