@@ -639,6 +639,53 @@ def guardar_gestion_llamada(request):
     })
 
 
+_CAPACIDAD_EXCEL = {
+    'Polisomnografías':                               270,
+    'Electroencefalograma':                          1440,
+    'Monitorizaciones':                              4320,
+    'TAC':                                           1440,
+    'RX':                                            3456,
+    'RESONANCIAS':                                   1080,
+    'PET-CT':                                         280,
+    'Ecografías y Doppler':                          1680,
+    'Procedimientos de fisiatría(Potenciales)':        200,
+    'Procedimientos de fisiatría':                   1200,
+    'Aplicación de medicamentos':                    1080,
+    'Consultas,Bloqueos,Inyecciones,Infiltraciones': 5040,
+    'Consultas,Bloqueos,Inyecciones':                1680,
+}
+
+def _mapear_servicio_excel(nombre_db):
+    n = nombre_db.upper()
+    if 'POLI' in n:
+        return 'Polisomnografías'
+    if 'ELECTRO' in n or 'EEG' in n:
+        return 'Electroencefalograma'
+    if 'MONITOR' in n or 'VIDEOTELEMETR' in n or 'VIDEO TELEMET' in n:
+        return 'Monitorizaciones'
+    if 'TAC' in n or 'TOMOGR' in n:
+        return 'TAC'
+    if 'RX' == n.strip() or 'RAYOS' in n:
+        return 'RX'
+    if 'RESONAN' in n:
+        return 'RESONANCIAS'
+    if 'PET' in n:
+        return 'PET-CT'
+    if 'ECOGRAF' in n:
+        return 'Ecografías y Doppler'
+    if ('FISIATR' in n or 'PROCEDIM' in n) and ('POTENCIAL' in n or 'EMG' in n):
+        return 'Procedimientos de fisiatría(Potenciales)'
+    if 'FISIATR' in n or ('PROCEDIM' in n and 'FISIAT' in n):
+        return 'Procedimientos de fisiatría'
+    if 'MEDIC' in n or 'APLICAC' in n:
+        return 'Aplicación de medicamentos'
+    if 'INFILTR' in n:
+        return 'Consultas,Bloqueos,Inyecciones,Infiltraciones'
+    if 'BLOQUEO' in n or 'INYECC' in n or 'CONSUL' in n:
+        return 'Consultas,Bloqueos,Inyecciones'
+    return None
+
+
 @require_GET
 def capacidad_instalada_view(request):
     """
@@ -714,6 +761,30 @@ def capacidad_instalada_view(request):
             """, [fecha_ini, fecha_fin])
             cols2 = [c[0] for c in cur.description]
             servicios = [dict(zip(cols2, row)) for row in cur.fetchall()]
+
+            # Comparativo: capacidad Excel vs agenda sistema por servicio
+            from collections import defaultdict
+            _agenda = defaultdict(int)
+            for s in servicios:
+                _agenda[s['servicio']] += s['agendados']
+
+            _comp = {k: {'servicio': k, 'capacidad_excel': v, 'agendados': 0}
+                     for k, v in _CAPACIDAD_EXCEL.items()}
+            for db_svc, ag in _agenda.items():
+                key = _mapear_servicio_excel(db_svc)
+                if key:
+                    _comp[key]['agendados'] += ag
+                else:
+                    _comp.setdefault(db_svc, {'servicio': db_svc, 'capacidad_excel': 0, 'agendados': 0})
+                    _comp[db_svc]['agendados'] += ag
+
+            comparativo = []
+            for item in _comp.values():
+                cap = item['capacidad_excel']
+                ag  = item['agendados']
+                item['pct_ocupacion'] = round(ag / cap * 100, 1) if cap else None
+                comparativo.append(item)
+            comparativo.sort(key=lambda x: (x['capacidad_excel'] == 0, -(x['agendados'] or 0)))
 
             # 3. Médicos — slots y citas por consultorio
             cur.execute("""
@@ -819,6 +890,7 @@ def capacidad_instalada_view(request):
             },
             "consultorios":        consultorios,
             "servicios":           servicios,
+            "comparativo":         comparativo,
             "medicos":             medicos,
             "bloqueados_detalle":  bloqueados_detalle,
             "disponibles_detalle": disponibles_detalle,
