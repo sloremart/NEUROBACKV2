@@ -747,7 +747,8 @@ def capacidad_instalada_view(request):
                     ISNULL(c.cod_medi, '')                      AS cod_medi,
                     LTRIM(RTRIM(ISNULL(m.nombre, c.cod_medi)))  AS medico,
                     pm.id_sede,
-                    COUNT(*)                                    AS agendados
+                    COUNT(*)                                    AS agendados,
+                    SUM(CASE WHEN c.estudio IS NOT NULL THEN 1 ELSE 0 END) AS confirmadas
                 FROM citas c
                 JOIN sis_asunto sa ON sa.id = c.asunto
                 JOIN programacion_medico pm
@@ -764,19 +765,23 @@ def capacidad_instalada_view(request):
 
             # Comparativo: capacidad Excel vs agenda sistema por servicio
             from collections import defaultdict
-            _agenda = defaultdict(int)
+            _agenda       = defaultdict(int)
+            _confirmadas  = defaultdict(int)
             for s in servicios:
-                _agenda[s['servicio']] += s['agendados']
+                _agenda[s['servicio']]      += s['agendados']
+                _confirmadas[s['servicio']] += s['confirmadas']
 
-            _comp = {k: {'servicio': k, 'capacidad_excel': v, 'agendados': 0}
+            _comp = {k: {'servicio': k, 'capacidad_excel': v, 'agendados': 0, 'confirmadas': 0}
                      for k, v in _CAPACIDAD_EXCEL.items()}
             for db_svc, ag in _agenda.items():
                 key = _mapear_servicio_excel(db_svc)
                 if key:
-                    _comp[key]['agendados'] += ag
+                    _comp[key]['agendados']     += ag
+                    _comp[key]['confirmadas']   += _confirmadas[db_svc]
                 else:
-                    _comp.setdefault(db_svc, {'servicio': db_svc, 'capacidad_excel': 0, 'agendados': 0})
-                    _comp[db_svc]['agendados'] += ag
+                    _comp.setdefault(db_svc, {'servicio': db_svc, 'capacidad_excel': 0, 'agendados': 0, 'confirmadas': 0})
+                    _comp[db_svc]['agendados']   += ag
+                    _comp[db_svc]['confirmadas'] += _confirmadas[db_svc]
 
             comparativo = []
             for item in _comp.values():
@@ -825,10 +830,10 @@ def capacidad_instalada_view(request):
             # 4. Bloqueados por fecha + consultorio + médico
             cur.execute("""
                 SELECT
-                    CONVERT(VARCHAR(10), pmd.Fecha, 23) AS fecha,
-                    LTRIM(RTRIM(con.nombre))             AS consultorio,
-                    pmd.Medico                           AS cod_medi,
-                    COUNT(*)                             AS bloqueados
+                    CONVERT(VARCHAR(10), pmd.Fecha, 23)                       AS fecha,
+                    LTRIM(RTRIM(con.nombre))                                   AS consultorio,
+                    LTRIM(RTRIM(ISNULL(m.nombre, CAST(pmd.Medico AS VARCHAR)))) AS medico,
+                    COUNT(*)                                                   AS bloqueados
                 FROM programacion_medico_detalle pmd
                 JOIN programacion_medico pm
                     ON pm.id = pmd.IdProgramacionMedico AND pm.activo = 1
@@ -836,10 +841,12 @@ def capacidad_instalada_view(request):
                     ON pmr.id_programacion = pm.id
                 JOIN consultorios con
                     ON con.id = pmr.id_consultorio
+                LEFT JOIN Medicos m
+                    ON m.codigo = pmd.Medico
                 WHERE CAST(pmd.Fecha AS DATE) >= %s
                   AND CAST(pmd.Fecha AS DATE) <= %s
                   AND ISNULL(pmd.Bloqueado, 0) = 1
-                GROUP BY CONVERT(VARCHAR(10), pmd.Fecha, 23), con.nombre, pmd.Medico
+                GROUP BY CONVERT(VARCHAR(10), pmd.Fecha, 23), con.nombre, pmd.Medico, m.nombre
                 ORDER BY fecha, bloqueados DESC
             """, [fecha_ini, fecha_fin])
             cols3 = [c[0] for c in cur.description]
