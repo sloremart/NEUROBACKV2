@@ -910,6 +910,24 @@ class CantidadPorCupsTests(SimpleTestCase):
         self.assertFalse(_anotada_igual_zeus('891509:6; 930860:2', adm, d))
         self.assertFalse(_anotada_igual_zeus('930860:2', adm, d))
 
+    def test_tres_autorizaciones_respuesta_cortada(self):
+        # Caso 36985: 891515 CANTIDAD 2, 930860 CANTIDAD 2, 891509 CANTIDAD 8 (tablas en 1); Zeus 2, 2 y 8
+        from gedocumental.services.ai_revision import _releer_cantidad, _anotada_igual_zeus
+        adm = dict(self.ADM, cups=['891509 - NEUROCONDUCCIÓN (CADA NERVIO) 8 NERVIOS (cant. 8)',
+                                   '930860 - ELECTROMIOGRAFÍA EN CADA EXTREMIDAD (cant. 2)',
+                                   '891515 - REFLEJO H (POR NERVIO) (cant. 2)'])
+        cortada = ('{"anotaciones": [{"cups": "891515", "cantidad": "2"}, {"cups": "930860", "cantidad": "2"}, '
+                   '{"cups": "891509", "cantidad": "8"}, {"cups": "8915')
+        client = mock.MagicMock()
+        client.chat.completions.create.return_value = mock.MagicMock(
+            choices=[mock.MagicMock(message=mock.MagicMock(content=cortada))],
+            usage=mock.MagicMock(prompt_tokens=100, completion_tokens=300))
+        anotada, _ = _releer_cantidad(client, 'm', ['img'])
+        self.assertEqual(anotada, '891515:2; 930860:2; 891509:8')
+        d = ('Cantidad autorizada en el documento es 1, se esperaba 2 para el procedimiento 891515; Cantidad '
+             'autorizada en el documento es 1, se esperaba 2 para el procedimiento 930860.')
+        self.assertTrue(_anotada_igual_zeus(anotada, adm, d))
+
     def test_horas_son_la_cantidad(self):
         # Caso 37121: "MONITORIZACIÓN ELECTROENCEFALOGRAMA 12 HORAS" al pie; tabla 1; Zeus 891901-12 cant. 12
         import json

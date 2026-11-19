@@ -431,12 +431,20 @@ def _releer_cantidad(client, modelo: str, imagenes: list[str]) -> tuple[str, lis
             model=modelo,
             messages=[{"role": "system", "content": PROMPT_RELEER_CANTIDAD}, {"role": "user", "content": contenido}],
             response_format={"type": "json_object"},
-            max_tokens=30,
+            # Una anotación por autorización: con 3 autorizaciones en el PDF (caso 36985) 30 tokens no alcanzaban
+            # y el JSON llegaba cortado
+            max_tokens=300,
             temperature=0,
         )
         uso = getattr(respuesta, 'usage', None)
         tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
-        datos = json.loads(respuesta.choices[0].message.content)
+        crudo = respuesta.choices[0].message.content or ''
+        try:
+            datos = json.loads(crudo)
+        except ValueError:
+            # Respuesta cortada: se aprovechan las anotaciones completas que alcanzaron a llegar
+            pares = re.findall(r'"cups"\s*:\s*"[^"]*?(\d{6})[^"]*"\s*,\s*"cantidad"\s*:\s*"([^"]*)"', crudo)
+            datos = {"anotaciones": [{"cups": c, "cantidad": n} for c, n in pares]}
         anotaciones = datos.get("anotaciones")
         if isinstance(anotaciones, list):
             # "891509:8; 930860:2" (sin CUPS legible queda solo el número)
@@ -543,7 +551,7 @@ def _releer_nombre(client, modelo: str, imagenes: list[str]) -> tuple[str, list,
             model=modelo,
             messages=[{"role": "system", "content": PROMPT_RELEER_NOMBRE}, {"role": "user", "content": contenido}],
             response_format={"type": "json_object"},
-            max_tokens=60,
+            max_tokens=150,   # nombre + lista de documentos impresos
             temperature=0,
         )
         uso = getattr(respuesta, 'usage', None)
