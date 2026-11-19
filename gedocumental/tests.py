@@ -1879,6 +1879,15 @@ class RecaudoTests(SimpleTestCase):
     def test_copago_correcto_beneficiario(self):
         self.assertIsNone(self._verificar({'requiere_pago': 'SI', 'categoria': 'B'}, copago=17300.0))
 
+    def test_cuota_moderadora_sanitas_mal_leida(self):
+        # Caso 37167: validador escaneado "Recaudo de pago: 5000.0" leído como 600; SIESA cobró 5.000
+        doc = {'requiere_pago': 'SI', 'tipo_cobro': 'CUOTA_MODERADORA', 'valor': '600.0', 'porcentaje': '0.0',
+               'categoria': 'NO_INDICA', 'tipo_afiliado': 'COTIZANTE', 'exoneracion': 'NO'}
+        zeus = dict(contrato='SANITAS EVENTO CONTRIBUTIVO', consultas=[True], cuota_moderadora=5000.0)
+        self.assertIsNone(self._verificar(doc, **zeus))
+        # Un valor válido distinto al cobrado sí es hallazgo
+        self.assertIn('Valor recaudado distinto', self._verificar(dict(doc, valor='20100'), **zeus)[1])
+
     def test_valor_por_sesion(self):
         # Caso 35301 (Capital Salud): "PAGUE POR CADA SESION $29.800", 2 sesiones; se cobró $59.600
         doc = {'requiere_pago': 'SI', 'tipo_cobro': 'COPAGO', 'valor': '29.800'}

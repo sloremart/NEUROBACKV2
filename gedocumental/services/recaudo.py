@@ -198,6 +198,12 @@ def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
     cobrado = cm + cp
     cobrado_txt = " y ".join(t for t in (f"cuota moderadora {_pesos(cm)}" if cm else '',
                                           f"copago {_pesos(cp)}" if cp else '') if t) or "nada"
+    if (z["empresa"] in EMPRESAS_SANITAS and z["regimen"] == REGIMEN_CONTRIBUTIVO and tipo_doc == 'CUOTA_MODERADORA'
+            and valor_doc and not any(abs(valor_doc - v) <= TOLERANCIA_PESOS for v in CUOTA_MODERADORA_SANITAS.values())):
+        # Sanitas contributivo: la cuota moderadora solo puede ser 5.000 / 20.100 / 52.800. Otro valor es mala
+        # lectura del pantallazo escaneado (caso 37167: "Recaudo de pago: 5000.0" leído como 600); no se usa
+        logger.info("Admisión %s: cuota moderadora Sanitas leída %s no es válida; se ignora", estudio, valor_doc)
+        valor_doc = None
     if z["empresa"] in EMPRESAS_SANITAS or 'SANITAS' in z["contrato"].upper():
         # Sanitas (todos los contratos): el tipo de afiliado está en la pestaña MP de la plataforma, que no
         # sale en el pantallazo de la autorización; lo que lea la IA no es confiable y vale lo de Zeus
