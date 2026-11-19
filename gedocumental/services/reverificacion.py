@@ -481,15 +481,12 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
         return DESCARTADO, ("Abdomen y pelvis se toman y se informan juntos; el estudio corresponde al CUPS "
                             "de la admisión.")
 
-    if not _es_comprobante(tipo) and _solo_motivo_contraste(d, datos_admision):
-        # Mismo CUPS para simple y contrastado: si el documento pide contrastada, la admisión en SIESA debe tener
-        # la observación de contrastada (caso 35656)
-        if _admision_contrastada(datos_admision):
-            return DESCARTADO, ("La admisión en SIESA tiene la observación de contrastada; el CUPS es el mismo "
-                                "para simple y contrastado.")
-        if not (_documento_pide_contraste(d) and (tipo or '').upper() in ('ORDEN', 'AUTORIZACION')):
-            return DESCARTADO, ("Solo difiere el contraste y el CUPS de la admisión no distingue simple de "
-                                "contrastado; no es un error.")
+    if not _es_comprobante(tipo) and (d.startswith('Contraste:')
+                                      or _solo_motivo_contraste(d, datos_admision)):
+        # Mismo CUPS para simple y contrastado: no se exige la observación de contrastada en SIESA
+        # (regla del usuario 2026-11-19)
+        return DESCARTADO, ("Solo difiere el contraste y el CUPS de la admisión es el mismo para simple y "
+                            "contrastado; no es un error.")
 
     if not _es_comprobante(tipo) and _solo_procedimiento_adicional(d):
         return DESCARTADO, ("El documento trae un procedimiento adicional a los de la admisión; "

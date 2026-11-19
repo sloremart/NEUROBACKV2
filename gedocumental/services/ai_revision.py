@@ -833,26 +833,12 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_abdomen_pelvis=True)
 
-    # Contraste con un CUPS que no distingue simple de contrastado: si el documento pide contrastada, la admisión
-    # en SIESA debe tener la observación de contrastada; si la tiene (o el documento no pide contraste), no es error
-    solo_contraste = (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
-                      and resultado.get("paciente_coincide") != "NO"
-                      and _solo_motivo_contraste(resultado.get("descripcion"), datos_admision))
-    falta_obs = (not _es_comprobante(tipo_documento) and resultado.get("paciente_coincide") != "NO"
-                 and (_falta_observacion_contraste(tipo_documento, resultado, texto, datos_admision)
-                      or (solo_contraste and _documento_pide_contraste(resultado.get("descripcion"))
-                          and _falta_observacion_contraste(tipo_documento, {'contraste_documento': 'contrastada'},
-                                                           '', datos_admision))))
-    if falta_obs and (resultado["tipo"] == "OK" or solo_contraste):
-        logger.info("%s contrastada sin observación en la admisión: '%s'", tipo_documento,
-                    resultado.get("contraste_documento"))
-        resultado.update(
-            tipo="AUTORIZACION" if (tipo_documento or '').upper() == 'AUTORIZACION' else "SOPORTES",
-            descripcion=(f"Contraste: la {(tipo_documento or '').lower()} indica contrastada "
-                         f"('{resultado.get('contraste_documento')}') y la admisión en SIESA no tiene la "
-                         "observación de contrastada (el CUPS es el mismo para simple y contrastado)."),
-            ajuste_contraste_observacion=True)
-    elif solo_contraste and not falta_obs:
+    # Contraste con un CUPS que no distingue simple de contrastado: NO es hallazgo (regla del usuario 2026-11-19).
+    # El mismo CUPS se usa para simple y contrastado y la admisión puede irse sin observación de contrastada
+    # (antes se exigía la observación, caso 35656; casos 36737 y otros: imposible de llevar)
+    if (not _es_comprobante(tipo_documento) and resultado["tipo"] != "OK"
+            and resultado.get("paciente_coincide") != "NO"
+            and _solo_motivo_contraste(resultado.get("descripcion"), datos_admision)):
         logger.info("%s: solo difiere el contraste, se descarta '%s'", tipo_documento, resultado.get("descripcion"))
         resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                          ajuste_contraste=True)

@@ -580,8 +580,12 @@ class ContrasteConAfirmacionesTests(SimpleTestCase):
         'None - CLARISCAN 0.5MMOL (ACIDO GADOTERICO) (cant. 1)',
         'None - JERINGA INYECTOR DE CONTRASTE SINO MEDICAL -RESONADOR (cant. 1)'])
 
-    def test_autorizacion_contrastada_sin_observacion_es_hallazgo(self):
-        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM_REAL))
+    def test_contrastada_sin_observacion_ya_no_es_hallazgo(self):
+        # Regla 2026-11-19: mismo CUPS simple/contrastado, la admisión puede ir sin observación
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM_REAL)[0], DESCARTADO)
+        d = ("Contraste: la orden indica contrastada ('CONTRASTADA') y la admisión en SIESA no tiene la "
+             "observación de contrastada (el CUPS es el mismo para simple y contrastado).")
+        self.assertEqual(evaluar_hallazgo('ORDEN', d, self.ADM_REAL)[0], DESCARTADO)
 
     def test_admision_con_observacion_contrastada_se_descarta(self):
         adm = dict(self.ADM_REAL, observacion='RM PELVIS CONTRASTADA')
