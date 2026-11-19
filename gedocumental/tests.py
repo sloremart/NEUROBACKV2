@@ -499,6 +499,10 @@ class DocumentosRequeridosTests(SimpleTestCase):
                          'EJERCITO', 'COMPENSAR', 'MULTISALUD IPS', 'IPS ONCOLIFE', 'POLICIA ESTUDIOS DEL SUEÑO'):
             self.assertEqual(self.f(contrato, False, set()), ['ORDEN', 'AUTORIZACION', 'COMPROBANTE'], contrato)
 
+    def test_solimed_solo_comprobante(self):
+        self.assertEqual(self.f('IPS SOLIMED JD SAS', False, set()), ['COMPROBANTE'])
+        self.assertEqual(self.f('IPS SOLIMED JD SAS', True, {'COMPROBANTE'}), [])
+
     def test_colsanitas_procedimiento_sin_orden(self):
         self.assertEqual(self.f('COLSANITAS PLAN INTEGRAL', False, {'AUTORIZACION', 'COMPROBANTE'}), [])
 

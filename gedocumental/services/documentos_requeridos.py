@@ -8,6 +8,7 @@ Documentos que el admisionista debe cargar en cada admisión, según el contrato
   IPS Consultorio y Equipo Interdisciplinario
   (la orden viene en la autorización) .............. ORDEN o AUTORIZACION + COMPROBANTE
   MRC .............................................. ORDEN + COMPROBANTE (no lleva autorización)
+  IPS Solimed ...................................... solo COMPROBANTE (orden y autorización no son obligatorias)
   Particular ....................................... no se validan documentos
 
 El RESULTADO no está aquí: lo carga la coordinación médica.
@@ -20,6 +21,8 @@ from django.db import connections
 ORDEN, AUTORIZACION, COMPROBANTE = 'ORDEN', 'AUTORIZACION', 'COMPROBANTE'
 # Contratos en los que la orden viene en el mismo documento que la autorización: basta con cualquiera de los dos
 CONTRATOS_ORDEN_O_AUTORIZACION = ('IPS CONSULTORIO', 'EQUIPO INTERDISCIPLINARIO')
+# Contratos en los que la orden y la autorización NO son obligatorias: solo el comprobante (regla 2026-11-19)
+CONTRATOS_SOLO_COMPROBANTE = ('SOLIMED',)
 UFUNCIONAL_CONSULTA = 1   # CONSULTA EXTERNA en Zeus
 
 
@@ -48,6 +51,8 @@ def requisitos(contrato: str, es_consulta: bool) -> list[tuple[str, ...]]:
     c = _plano(contrato)
     if es_particular(c):
         return []
+    if any(n in c for n in CONTRATOS_SOLO_COMPROBANTE):
+        return [(COMPROBANTE,)]
     if 'COLSANITAS' in c:
         return ([(ORDEN,)] if es_consulta else []) + [(AUTORIZACION,), (COMPROBANTE,)]
     if any(n in c for n in CONTRATOS_ORDEN_O_AUTORIZACION):
