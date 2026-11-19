@@ -67,7 +67,11 @@ services:
 
 volumes:
   rpa_data:
+  # Volumen existente de la instalación anterior (/opt/docker/programadi): SQLite ordenes_historico_v2,
+  # sesión Colsanitas, adjuntos. Es external para que compose lo reutilice y NUNCA cree uno vacío.
   demanda_data:
+    external: true
+    name: programadi_historico_data
 
       
 
