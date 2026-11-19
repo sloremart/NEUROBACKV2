@@ -751,6 +751,36 @@ class OrdenLargaTranscripcionTests(SimpleTestCase):
         self.assertEqual(r['tipo'], 'OK')
         self.assertTrue(r.get('ajuste_transcripcion'))
 
+    def test_cups_distinto_mensaje_claro(self):
+        # La admisión real era 890274 (primera vez) y la orden 890374 (control): el mensaje lo dice con códigos
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        adm = dict(ADMISION, paciente='HERALDO RODRIGUEZ HUGO', identificacion='CC 19240528',
+                   cups=['890274 - CONSULTA DE PRIMERA VEZ POR ESPECIALISTA EN NEUROLOGIA (cant. 1)'])
+        revision = {"nombre_documento": "HERALDO RODRIGUEZ HUGO", "identificacion_documento": "19240528",
+                    "paciente_coincide": "SI", "procedimientos_coinciden": "NO", "firma_paciente": "NO_APLICA",
+                    "tipo": "SOPORTES", "procedimientos_documento": "",
+                    "descripcion": ("Procedimientos no coinciden: documento incluye resonancia magnética y otros, "
+                                    "admisión solo incluye consulta de neurología."),
+                    "estudio_documento": {"modalidad": "RM", "region": "CEREBRO"},
+                    "estudio_admision": {"modalidad": "CONSULTA", "especialidad": "NEUROLOGIA"}}
+        def respuesta(contenido):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=contenido))],
+                                  usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [
+            respuesta(json.dumps(revision)),
+            respuesta(json.dumps({"procedimientos": "883101-RESONANCIA NUCLEAR MAGNETICA DE CEREBRO (#1) / SIMPLE; "
+                                  "890374-CONSULTA DE CONTROL O DE SEGUIMIENTO POR ESPECIALISTA EN NEUROLOGIA (#1); "
+                                  "903700-VITAMINA D (#1)"}))]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            r = _llamar_openai('', ['img'], 'ORDEN', adm)
+        self.assertEqual(r['tipo'], 'SOPORTES')
+        self.assertIn('Admisión: 890274 (CONSULTA DE PRIMERA VEZ', r['descripcion'])
+        self.assertIn('La orden trae: 890374 (CONSULTA DE CONTROL', r['descripcion'])
+        self.assertNotIn('883101', r['descripcion'])
+
 
 class CantidadPorCupsTests(SimpleTestCase):
     """Caso 33030: dos autorizaciones en un PDF ('CANTIDAD 2' para 930860, 'CANTIDAD 8' para 891509)."""

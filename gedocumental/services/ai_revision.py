@@ -831,6 +831,13 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                         resultado.get("descripcion"))
             resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
                              procedimientos_documento=procedimientos, ajuste_transcripcion=True)
+        else:
+            # Mensaje claro para el admisionista: qué CUPS trae el documento y cuál tiene la admisión (caso
+            # 36691: la IA escribió "incluye resonancia y otros" cuando la diferencia era consulta de control
+            # 890374 en la orden y de primera vez 890274 en la admisión)
+            claro = _descripcion_cups_distintos(tipo_documento, procedimientos, datos_admision)
+            if claro:
+                resultado.update(descripcion=claro, procedimientos_documento=procedimientos)
 
     # ÓRDENES y AUTORIZACIONES: un hallazgo cuyo ÚNICO motivo es el procedimiento ("no se especifican
     # procedimientos", "no aparece el CUPS"...) se descarta si no hay diferencia clara de estudio.
@@ -1483,6 +1490,41 @@ def _norm_especialidad(texto: str) -> str:
 
 def _es_comprobante(tipo_documento) -> bool:
     return (tipo_documento or '').upper() in TIPOS_CON_FIRMA
+
+
+def _descripcion_cups_distintos(tipo_documento, procedimientos, datos_admision) -> str:
+    """
+    "La orden no trae el CUPS de la admisión: admisión 890274 (CONSULTA DE PRIMERA VEZ...); la orden trae
+    890374 (CONSULTA DE CONTROL...)". Del documento se muestran los CUPS parecidos (mismos 4 primeros dígitos,
+    o 3) o, si no hay, los primeros. '' si la transcripción no trae códigos.
+    """
+    filas = {}
+    for parte in re.split(r'[;\n]', str(procedimientos or '')):
+        codigos = sorted(_codigos_cups(parte))
+        if codigos and codigos[0] not in filas:
+            nombre = re.sub(r'^\W*' + codigos[0] + r'\W*', '', parte.strip().upper())
+            nombre = re.sub(r'\s*\(#?\d+\).*$', '', nombre).strip(' -/')
+            filas[codigos[0]] = nombre[:70]
+    admision = []
+    for c in datos_admision.get('cups') or []:
+        partes = str(c).split(' - ', 1)
+        codigos = sorted(_codigos_cups(partes[0]))
+        if codigos:
+            nombre = re.sub(r'\s*\(cant\.\s*\d+\)\s*$', '', _reparar_texto(partes[1] if len(partes) > 1 else ''))
+            admision.append((codigos[0], nombre.strip()[:70]))
+    if not filas or not admision:
+        return ''
+    parecidos = ([c for c in filas if any(c[:4] == a[:4] for a, _ in admision)]
+                 or [c for c in filas if any(c[:3] == a[:3] for a, _ in admision)])
+    mostrar = parecidos or list(filas)[:4]
+    resto = len(filas) - len(mostrar)
+    doc = {'ORDEN': 'orden', 'AUTORIZACION': 'autorización'}.get((tipo_documento or '').upper(), 'documento')
+    del_documento = "; ".join(f"{c} ({filas[c]})" if filas[c] else c for c in mostrar)
+    return (f"Procedimiento no coincide: la {doc} no trae el CUPS de la admisión. Admisión: "
+            + "; ".join(f"{c} ({n})" if n else c for c, n in admision)
+            + f". La {doc} trae: {del_documento}"
+            + (f" y {resto} procedimiento(s) más" if resto > 0 and not parecidos else "")
+            + f". Corrija el CUPS en la admisión o cargue la {doc} correcta.")
 
 
 def _codigos_cups(texto) -> set:
