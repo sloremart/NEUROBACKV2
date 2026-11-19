@@ -360,8 +360,10 @@ def _formatear_contexto(datos_admision: dict) -> str:
 
 PROMPT_TRANSCRIBIR = (
     "Transcribe TODAS las filas de la tabla de servicios/procedimientos de la orden o autorización, en orden y "
-    "sin omitir ninguna (revisa hasta la ÚLTIMA fila). Solo transcribe, no evalúes. Responde en JSON: "
-    '{"procedimientos": "<código CUPS y descripción de cada fila, separados por punto y coma>"}'
+    "sin omitir ninguna (revisa hasta la ÚLTIMA fila, incluidas consultas, laboratorios y terapias). Solo "
+    "transcribe, no evalúes. De cada fila basta el código CUPS y las primeras palabras de la descripción. "
+    "Responde en JSON: "
+    '{"procedimientos": "<código CUPS y descripción corta de cada fila, separados por punto y coma>"}'
 )
 
 
@@ -375,12 +377,19 @@ def _transcribir_procedimientos(client, modelo: str, imagenes: list[str]) -> tup
             model=modelo,
             messages=[{"role": "system", "content": PROMPT_TRANSCRIBIR}, {"role": "user", "content": contenido}],
             response_format={"type": "json_object"},
-            max_tokens=400,
+            max_tokens=1200,
             temperature=0,
         )
         uso = getattr(respuesta, 'usage', None)
         tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
-        procedimientos = json.loads(respuesta.choices[0].message.content).get("procedimientos") or ''
+        crudo = respuesta.choices[0].message.content or ''
+        try:
+            procedimientos = json.loads(crudo).get("procedimientos") or ''
+        except ValueError:
+            # Respuesta cortada por el tope de tokens (orden larga con laboratorios, caso 36691): el JSON queda
+            # incompleto, pero las filas transcritas sirven para buscar el CUPS de la admisión
+            logger.info("Transcripción de la tabla incompleta; se usa el texto recibido")
+            procedimientos = crudo
     except Exception as exc:
         logger.warning("No se pudo transcribir la tabla de procedimientos: %s", exc)
         return '', [0, 0]

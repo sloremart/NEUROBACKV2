@@ -721,6 +721,37 @@ class NombreDelEncabezadoTests(SimpleTestCase):
         self.assertTrue(r['descripcion'].startswith('Paciente no corresponde: documento'))
 
 
+class OrdenLargaTranscripcionTests(SimpleTestCase):
+    """Caso 36691: orden con resonancia, consulta 890374 y laboratorios; la admisión solo tiene la consulta."""
+
+    def test_transcripcion_cortada_igual_encuentra_el_cups(self):
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        adm = dict(ADMISION, paciente='HERALDO RODRIGUEZ HUGO', identificacion='CC 19240528',
+                   cups=['890374 - CONSULTA DE CONTROL O DE SEGUIMIENTO POR ESPECIALISTA EN NEUROLOGIA (cant. 1)'])
+        revision = {"nombre_documento": "HERALDO RODRIGUEZ HUGO", "identificacion_documento": "19240528",
+                    "paciente_coincide": "SI", "procedimientos_coinciden": "NO", "firma_paciente": "NO_APLICA",
+                    "tipo": "SOPORTES", "procedimientos_documento": "",
+                    "descripcion": ("Procedimientos no coinciden: documento incluye resonancia y otros procedimientos, "
+                                    "admisión solo incluye consulta de neurología."),
+                    "estudio_documento": {"modalidad": "RM", "region": "CEREBRO"},
+                    "estudio_admision": {"modalidad": "CONSULTA", "especialidad": "NEUROLOGIA"}}
+        def respuesta(contenido):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=contenido))],
+                                  usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [
+            respuesta(json.dumps(revision)),
+            # JSON cortado por el tope de tokens
+            respuesta('{"procedimientos": "883101 RESONANCIA MAGNETICA DE CEREBRO; 890374 CONSULTA DE CONTROL; '
+                      '944301 TERAPIA DE REHABILITACION; 902210 HEMOGRAMA IV [HEMOGLOBINA, HEMA')]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            r = _llamar_openai('', ['img'], 'ORDEN', adm)
+        self.assertEqual(r['tipo'], 'OK')
+        self.assertTrue(r.get('ajuste_transcripcion'))
+
+
 class CantidadPorCupsTests(SimpleTestCase):
     """Caso 33030: dos autorizaciones en un PDF ('CANTIDAD 2' para 930860, 'CANTIDAD 8' para 891509)."""
     ADM = dict(ADMISION, paciente='ARNOLDO ROJAS', identificacion='CC 17313342', cups=[
