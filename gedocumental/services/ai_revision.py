@@ -2222,8 +2222,10 @@ def analizar_documento(ruta_absoluta: str, tipo_documento: str, datos_admision: 
             resultado["llamadas"] = primera.get("llamadas", 1) + resultado.get("llamadas", 1)
     resultado["modo"] = ("mixto" if texto else "imagen") if imagenes else "texto"
     if (tipo_documento or '').upper() == 'AUTORIZACION':
-        _agregar_hallazgo_autorizacion_sin_facturar(resultado, datos_admision, texto)
-        _agregar_hallazgo_recaudo(resultado, datos_admision, texto)
+        # Con un servicio autorizado sin facturar, el copago no se puede comparar (se cobró sobre todos los
+        # servicios, caso 36888): se revisa cuando se agregue el servicio a la admisión
+        if not _agregar_hallazgo_autorizacion_sin_facturar(resultado, datos_admision, texto):
+            _agregar_hallazgo_recaudo(resultado, datos_admision, texto)
     return resultado
 
 
@@ -2261,7 +2263,9 @@ def _bloques_validador_sanitas(texto: str) -> list:
             fila = t[m.end():m.end() + (siguiente.start() if siguiente else 400)]
             servicio = _codigos_cups(fila)
             del_servicio = re.search(r'\b\d{5}[0-9A-Z]\b\s+(.+?)(?:\s*-\s*[\d.]+\s*UVR|$)', fila.replace('\n', ' '))
-            nombre = ' '.join(del_servicio.group(1).split())[:60] if del_servicio else ''
+            # Sin la cantidad que el PDF intercala entre las líneas del nombre ("SOPORTE DE 1 SEDACION")
+            nombre = (' '.join(p for p in del_servicio.group(1).split() if not p.isdigit())[:60]
+                      if del_servicio else '')
             break
 
         def numero_de(m):
@@ -2313,11 +2317,11 @@ def _recaudo_validador_sanitas(texto: str, datos_admision: dict) -> dict | None:
             'valor': str(int(valor)) if valor else '0', 'porcentaje': f"{pct:g}" if pct else '0'}
 
 
-def _agregar_hallazgo_autorizacion_sin_facturar(resultado: dict, datos_admision: dict, texto: str = '') -> None:
+def _agregar_hallazgo_autorizacion_sin_facturar(resultado: dict, datos_admision: dict, texto: str = '') -> bool:
     """Autorización cargada (validador Sanitas) de un servicio que no está facturado en la admisión."""
     fuera = _autorizaciones_fuera_de_admision(texto, datos_admision)
     if not fuera:
-        return
+        return False
     descripcion = ("La autorización trae servicios que no están en la admisión: " + "; ".join(
         f"autorización {b['numero']} → {', '.join(sorted(b['servicio']))}" + (f" ({b['nombre']})" if b['nombre'] else '')
         for b in fuera) + ". Se deben facturar en el mismo ingreso (ej. resonancia y sedación juntas).")
@@ -2326,6 +2330,7 @@ def _agregar_hallazgo_autorizacion_sin_facturar(resultado: dict, datos_admision:
         resultado.update(tipo="AUTORIZACION", descripcion=descripcion, ajuste_servicio_sin_facturar=True)
     else:
         resultado["descripcion"] = f"{resultado.get('descripcion', '')} | {descripcion}"
+    return True
 
 
 def _agregar_hallazgo_recaudo(resultado: dict, datos_admision: dict, texto: str = '') -> None:

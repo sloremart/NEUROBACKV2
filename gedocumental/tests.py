@@ -789,7 +789,7 @@ class RecaudoValidadorSanitasTests(SimpleTestCase):
              "362023956 NORMAL 30/09/2026 28/01/2027 APROBADA NEUROELECTRODIAGNOSTICO\nSH DEL LLANO SAS\n"
              "890375 CONSULTA DE\nCONTROL POR\n"
              "367288940 NORMAL 29/09/2026 27/01/2027 APROBADA NEUROELECTRODIAGNOSTICO\nSH DEL LLANO SAS\n"
-             "998702 SOPORTE DE\nSEDACION PARA\nCONSULTA O APOYO\nDIAGNOSTICO - 0.0 UVR\n« ‹ 1 2 › »\n")
+             "998702 SOPORTE DE 1\nSEDACION PARA\nCONSULTA O APOYO\nDIAGNOSTICO - 0.0 UVR\n« ‹ 1 2 › »\n")
     TEXTO = (
         "[Página 1]\n" + TABLA + "Número de Autorización 362023461\nSeleccionada:\n"
         "Condiciones de pago y recuado de Copago\npago del Volante:\nhttps://appcore.colsanitas.com 1/2\n\n"
