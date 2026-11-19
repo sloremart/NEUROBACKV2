@@ -2222,13 +2222,73 @@ def analizar_documento(ruta_absoluta: str, tipo_documento: str, datos_admision: 
             resultado["llamadas"] = primera.get("llamadas", 1) + resultado.get("llamadas", 1)
     resultado["modo"] = ("mixto" if texto else "imagen") if imagenes else "texto"
     if (tipo_documento or '').upper() == 'AUTORIZACION':
-        _agregar_hallazgo_recaudo(resultado, datos_admision)
+        _agregar_hallazgo_recaudo(resultado, datos_admision, texto)
     return resultado
 
 
-def _agregar_hallazgo_recaudo(resultado: dict, datos_admision: dict) -> None:
+def _recaudo_validador_sanitas(texto: str, datos_admision: dict) -> dict | None:
+    """
+    Condiciones de pago del validador de derechos de Sanitas en PDF digital, leídas del texto (no de la IA).
+    El PDF puede traer un pantallazo por autorización (caso 36888: 362023461 resonancia con Copago 11.5 % y
+    367288940 sedación con Cuota Moderadora 0; la IA tomó la segunda). Se usa la autorización cuyo servicio es
+    un CUPS de la admisión. None si no es un validador de Sanitas o no se puede decidir.
+    """
+    t = texto or ''
+    if 'recaudo de pago' not in t.lower() or 'autorizaci' not in t.lower():
+        return None
+    admision = set()
+    for c in datos_admision.get('cups') or []:
+        admision |= _codigos_cups(str(c).split(' - ')[0])
+    bloques = []
+    for bloque in re.split(r'(?i)N[uú]mero de Autorizaci[oó]n', t)[1:]:
+        numero = re.search(r'\b(\d{6,12})\b', bloque)
+        cobro = re.search(r'(?i)Condiciones de pago y rec\w* de\s+(Copago|Cuota Moderadora)', bloque)
+        recaudo = re.search(r'(?i)Recaudo de pago:\s*([\d.,]+)', bloque)
+        porcentaje = re.search(r'(?i)Porcentaje Copago:\s*([\d.,]+)', bloque)
+        if not (numero and cobro and (recaudo or porcentaje)):
+            continue
+        # Servicio de esa autorización: el primer CUPS después de su número en la tabla de autorizaciones
+        servicio = set()
+        for m in re.finditer(re.escape(numero.group(1)), t):
+            antes = t[max(0, m.start() - 40):m.start()].lower()
+            if 'autorizaci' in antes:
+                continue
+            siguiente = re.search(r'\b\d{8,12}\b', t[m.end():])
+            fila = t[m.end():m.end() + (siguiente.start() if siguiente else 400)]
+            servicio = _codigos_cups(fila)
+            break
+        def numero_de(m):
+            try:
+                return float(m.group(1).replace(',', '.')) if m else None
+            except ValueError:
+                return None
+        bloques.append(dict(servicio=servicio, tipo='COPAGO' if cobro.group(1).lower() == 'copago'
+                            else 'CUOTA_MODERADORA', recaudo=numero_de(recaudo), porcentaje=numero_de(porcentaje)))
+    if not bloques:
+        return None
+    if len(bloques) > 1:
+        bloques = [b for b in bloques if b['servicio'] & admision]
+        if not bloques or len({(b['tipo'], b['recaudo'], b['porcentaje']) for b in bloques}) > 1:
+            return None
+    b = bloques[0]
+    pct = b['porcentaje'] or 0
+    rec = b['recaudo'] or 0
+    if not pct and 0 < rec < 1:
+        pct = rec * 100
+    valor = rec if rec >= 1 else 0
+    return {'requiere_pago': 'SI' if (pct or valor) else 'NO', 'tipo_cobro': b['tipo'],
+            'valor': str(int(valor)) if valor else '0', 'porcentaje': f"{pct:g}" if pct else '0'}
+
+
+def _agregar_hallazgo_recaudo(resultado: dict, datos_admision: dict, texto: str = '') -> None:
     """Compara las condiciones de pago de la autorización con lo recaudado en SIESA (sin otra llamada a la IA)."""
     from gedocumental.services.recaudo import verificar_recaudo
+    del_texto = _recaudo_validador_sanitas(texto, datos_admision)
+    if del_texto:
+        leido = resultado.get("recaudo") if isinstance(resultado.get("recaudo"), dict) else {}
+        if any(leido.get(k) != v for k, v in del_texto.items()):
+            logger.info("Recaudo del validador Sanitas leído del texto %s (la IA leyó %s)", del_texto, leido)
+        resultado["recaudo"] = {**leido, **del_texto}
     try:
         hallazgo = verificar_recaudo(resultado.get("recaudo"), datos_admision.get("consecutivo"))
     except Exception as exc:

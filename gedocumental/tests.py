@@ -782,6 +782,36 @@ class OrdenLargaTranscripcionTests(SimpleTestCase):
         self.assertNotIn('883101', r['descripcion'])
 
 
+class RecaudoValidadorSanitasTests(SimpleTestCase):
+    """Caso 36888: dos pantallazos del validador (resonancia con Copago 11.5 %, sedación con Cuota Moderadora 0)."""
+    TABLA = ("362023461 NORMAL 30/09/2026 28/01/2027 APROBADA NEUROELECTRODIAGNOSTICO\nSH DEL LLANO SAS\n"
+             "883101 RESONANCIA\nMAGNETICA DE\nCEREBRO - 0.0 UVR\n"
+             "362023956 NORMAL 30/09/2026 28/01/2027 APROBADA NEUROELECTRODIAGNOSTICO\nSH DEL LLANO SAS\n"
+             "890375 CONSULTA DE\nCONTROL POR\n"
+             "367288940 NORMAL 29/09/2026 27/01/2027 APROBADA NEUROELECTRODIAGNOSTICO\nSH DEL LLANO SAS\n"
+             "998702 SOPORTE DE\nSEDACION PARA\nCONSULTA O APOYO\nDIAGNOSTICO - 0.0 UVR\n« ‹ 1 2 › »\n")
+    TEXTO = (
+        "[Página 1]\n" + TABLA + "Número de Autorización 362023461\nSeleccionada:\n"
+        "Condiciones de pago y recuado de Copago\npago del Volante:\nhttps://appcore.colsanitas.com 1/2\n\n"
+        "[Página 2]\n18/11/26, 7:54 Validador de usuarios Sanitas\nRecaudo de pago: 0.115\nPorcentaje Copago: 11.5\n"
+        "Valor pesos pago compartido: 0.0\nTope máximo copagos: 373715.0\nInformación Complementaria\n\n"
+        "[Página 3]\n" + TABLA + "Número de Autorización 367288940\nSeleccionada:\n"
+        "Condiciones de pago y recuado de Cuota Moderadora\npago del Volante:\nhttps://appcore.colsanitas.com 1/2\n\n"
+        "[Página 4]\n18/11/26, 7:54 Validador de usuarios Sanitas\nRecaudo de pago: 0\nPorcentaje Copago: 0.0\n"
+        "Valor pesos pago compartido: 0.0\nTope máximo copagos: 0.0\n")
+
+    def test_toma_la_autorizacion_del_cups_de_la_admision(self):
+        from gedocumental.services.ai_revision import _recaudo_validador_sanitas
+        resonancia = dict(ADMISION, cups=['883101 - RESONANCIA MAGNÉTICA DE CEREBRO (cant. 1)'])
+        self.assertEqual(_recaudo_validador_sanitas(self.TEXTO, resonancia),
+                         {'requiere_pago': 'SI', 'tipo_cobro': 'COPAGO', 'valor': '0', 'porcentaje': '11.5'})
+        sedacion = dict(ADMISION, cups=['998702 - SOPORTE DE SEDACION (cant. 1)'])
+        self.assertEqual(_recaudo_validador_sanitas(self.TEXTO, sedacion)['requiere_pago'], 'NO')
+        # Ninguna autorización del CUPS de la admisión: se deja lo que leyó la IA
+        self.assertIsNone(_recaudo_validador_sanitas(self.TEXTO, dict(ADMISION, cups=['879301 - TAC (cant. 1)'])))
+        self.assertIsNone(_recaudo_validador_sanitas('Factura de venta', resonancia))
+
+
 class CantidadPorCupsTests(SimpleTestCase):
     """Caso 33030: dos autorizaciones en un PDF ('CANTIDAD 2' para 930860, 'CANTIDAD 8' para 891509)."""
     ADM = dict(ADMISION, paciente='ARNOLDO ROJAS', identificacion='CC 17313342', cups=[
