@@ -34,7 +34,7 @@ from gedocumental.services.ai_revision import (
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE, TIPOS_NO_REVISADOS,
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida,
     _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
-    _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden, _autorizacion_aplicacion_de_mas,
+    _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden, _autorizacion_aplicacion_de_mas, _autorizacion_de_mas,
     obtener_contexto_admision, cantidades_orden,
 )
 
@@ -476,6 +476,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     if _cantidad_documento_en_zeus(d, datos_admision):
         return CORREGIDO, ("La cantidad del documento es la que hoy tiene la admisión en Zeus "
                            f"({', '.join(datos_admision.get('cups') or [])}).")
+
+    if (tipo or '').upper() == 'AUTORIZACION' and _autorizacion_de_mas(d, datos_admision):
+        return DESCARTADO, ("La autorización trae más cantidad que la admisión: se puede facturar menos de lo "
+                            "autorizado; solo es hallazgo facturar más.")
 
     if _orden_con_mas_cantidad(tipo, d):
         return DESCARTADO, ("La orden pide más cantidad de la que factura la admisión (varias sesiones); "

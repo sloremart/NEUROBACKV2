@@ -390,12 +390,30 @@ class AutorizacionDeMasConOrdenTests(SimpleTestCase):
         self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, self.ADM)[0], DESCARTADO)
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc.replace('correcto', 'incorrecto'), self.ADM))
 
-    def test_orden_pide_lo_de_la_autorizacion_sigue(self):
-        # Caso 33030: la orden también pide más; la admisión debía facturar más
-        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, dict(self.ADM, cantidades_orden='883101:2')))
+    def test_autorizacion_de_mas_ya_no_es_hallazgo(self):
+        # Regla 2026-11-19 (caso 35852): facturar menos de lo autorizado no es hallazgo de la AUTORIZACION,
+        # aunque la orden pida más (eso lo revisa la ORDEN)
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC,
+                                          dict(self.ADM, cantidades_orden='883101:2'))[0], DESCARTADO)
 
-    def test_sin_cantidades_de_la_orden_sigue(self):
-        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', self.DESC, dict(self.ADM, cantidades_orden='')))
+    def test_caso_35852_emg_autorizada_8_facturada_4(self):
+        from gedocumental.services.ai_revision import _autorizacion_de_mas, _cantidades_distintas_zeus
+        adm = dict(ADMISION, cups=[
+            '930860-4 - ELECTROMIOGRAFÍA EN CADA EXTREMIDAD (cant. 4)',
+            '891509-16 - NEUROCONDUCCIÓN (CADA NERVIO) 16 NERVIOS (cant. 10)',
+            '891509 - NEUROCONDUCCIÓN (CADA NERVIO) (cant. 6)'])
+        desc = "Cantidad autorizada en el documento es 8, se esperaba 4 para el procedimiento 930860."
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, adm)[0], DESCARTADO)
+        self.assertTrue(_autorizacion_de_mas(desc, adm, '930860:8; 891509:6; 891509:10'))
+        # Facturar más de lo autorizado sí es hallazgo
+        self.assertFalse(_autorizacion_de_mas(desc, adm, '930860:2; 891509:16'))
+        self.assertFalse(_autorizacion_de_mas(
+            "Cantidad autorizada en el documento es 2, se esperaba 4 para el procedimiento 930860.", adm))
+        self.assertEqual(_cantidades_distintas_zeus('930860:8; 891509:6; 891509:10', adm), [])
+
+    def test_sin_cantidades_de_la_orden_tambien_se_descarta(self):
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, dict(self.ADM, cantidades_orden=''))[0],
+                         DESCARTADO)
 
     def test_autorizacion_con_menos_sigue(self):
         adm = dict(self.ADM, cups=['883101 - RESONANCIA MAGNETICA DE CEREBRO (cant. 2)'], cantidades_orden='883101:2')
@@ -482,9 +500,10 @@ class AplicacionMedicamentoTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm))
 
     def test_otro_procedimiento_no_aplica(self):
+        from gedocumental.services.ai_revision import _autorizacion_aplicacion_de_mas
         adm = dict(ADMISION, cups=['883101 - RESONANCIA MAGNÉTICA DE CEREBRO (cant. 1)'])
         desc = "Cantidad autorizada en el documento es 2, se esperaba 1 para el procedimiento 883101."
-        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, adm))
+        self.assertFalse(_autorizacion_aplicacion_de_mas(desc, adm))
 
 
 class DocumentosRequeridosTests(SimpleTestCase):
@@ -859,12 +878,16 @@ class CantidadPorCupsTests(SimpleTestCase):
             return _llamar_openai('', ['img'], tipo, adm or self.ADM)
 
     def test_cantidad_anotada_distinta_a_zeus(self):
+        # Autorizado 8 y facturado 1 ya no es hallazgo (regla 2026-11-19); facturar más que lo autorizado sí
+        self.assertEqual(self._llamar('930860:2; 891509:8')['tipo'], 'OK')
+        self.ADM = dict(self.ADM, cups=[c.replace('(cant. 1)', '(cant. 9)') if c.startswith('891509') else c
+                                        for c in self.ADM['cups']])
         r = self._llamar('930860:2; 891509:8')
         self.assertEqual(r['tipo'], 'AUTORIZACION')
-        self.assertEqual(r['descripcion'], 'Cantidad autorizada en el documento es 8, se esperaba 1 para el '
+        self.assertEqual(r['descripcion'], 'Cantidad autorizada en el documento es 8, se esperaba 9 para el '
                                            'procedimiento 891509.')
         # Se corrige en Zeus: la reverificación lo cierra; si no, sigue abierto
-        corregida = dict(self.ADM, cups=[self.ADM['cups'][0].replace('(cant. 1)', '(cant. 8)'), self.ADM['cups'][1]])
+        corregida = dict(self.ADM, cups=[self.ADM['cups'][0].replace('(cant. 9)', '(cant. 8)'), self.ADM['cups'][1]])
         self.assertEqual(evaluar_hallazgo('AUTORIZACION', r['descripcion'], corregida)[0], CORREGIDO)
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', r['descripcion'], self.ADM))
 
@@ -879,8 +902,9 @@ class CantidadPorCupsTests(SimpleTestCase):
         adm = dict(ADMISION, cups=['954626 - POTENCIALES EVOCADOS AUDITIVOS (cant. 2)'])
         self.assertEqual(_cantidades_distintas_zeus('954626:1', adm, 'CANTIDAD 2'), [])
         self.assertEqual(_cantidades_distintas_zeus('954626:1', adm, ''), [('954626', 1, 2)])
-        # 33030: la anotación (8) no es la de Zeus (1): sigue siendo hallazgo
-        self.assertEqual(_cantidades_distintas_zeus('930860:2; 891509:8', self.ADM, '8'), [('891509', 8, 1)])
+        # Autorizado 8, facturado 1: facturar menos no es hallazgo; facturar más sí
+        self.assertEqual(_cantidades_distintas_zeus('930860:2; 891509:8', self.ADM, '8'), [])
+        self.assertEqual(_cantidades_distintas_zeus('954626:1', adm, ''), [('954626', 1, 2)])
 
     def test_dos_autorizaciones_con_anotaciones_distintas(self):
         # Caso 36927: tabla 1 en ambas, "CANTIDAD 8" (891509) y "CANTIDAD 2" (930860); Zeus 8 y 2. La IA leyó
@@ -1092,16 +1116,17 @@ class CantidadFamiliaCupsTests(SimpleTestCase):
     def test_familia_suma_la_cantidad(self):
         from gedocumental.services.ai_revision import _cantidades_distintas_zeus
         self.assertEqual(_cantidades_distintas_zeus('873420:2', self.ADM), [])
-        self.assertEqual(_cantidades_distintas_zeus('873420:3', self.ADM), [('873420', 3, 1)])
-        # Si la autorización trae los dos CUPS, cada uno se compara con el suyo
-        self.assertEqual(_cantidades_distintas_zeus('873420:2; 873422:1', self.ADM), [('873420', 2, 1)])
+        # Autorizado de más: no es hallazgo (regla 2026-11-19)
+        self.assertEqual(_cantidades_distintas_zeus('873420:3', self.ADM), [])
+        self.assertEqual(_cantidades_distintas_zeus('873420:2; 873422:1', self.ADM), [])
 
     def test_hallazgo_existente_se_cierra(self):
         desc = "Cantidad autorizada en el documento es 2, se esperaba 1 para el procedimiento 873420."
         self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, self.ADM)[0], CORREGIDO)
         otra = dict(self.ADM, cups=['873420 - RADIOGRAFÍA DE RODILLA (AP- LATERAL) (cant. 1)',
                                     '873111 - RADIOGRAFÍA DE CRÁNEO (cant. 1)'])
-        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc, otra))
+        # Sin la familia: autorizado 2, facturado 1 → tampoco es hallazgo (regla 2026-11-19)
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, otra)[0], DESCARTADO)
 
 
 class TerceroConApellidoDeMasTests(SimpleTestCase):
@@ -1286,9 +1311,10 @@ class CantidadesIgualesTests(SimpleTestCase):
         self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, adm)[0], CORREGIDO)
         adm2 = dict(ADMISION, cups=['873420 - RADIOGRAFÍA DE RODILLA (cant. 2)', '871121 - RX TÓRAX (cant. 1)'])
         self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, adm2)[0], CORREGIDO)
-        # Zeus sigue con 1: se mantiene
-        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', desc,
-                                           dict(ADMISION, cups=['873420 - RADIOGRAFÍA DE RODILLA (cant. 1)'])))
+        # Zeus sigue con 1: autorizado de más, facturado menos → no es hallazgo (regla 2026-11-19)
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc,
+                                          dict(ADMISION, cups=['873420 - RADIOGRAFÍA DE RODILLA (cant. 1)']))[0],
+                         DESCARTADO)
 
 
 class OrdenConMasCantidadTests(SimpleTestCase):
@@ -1302,7 +1328,8 @@ class OrdenConMasCantidadTests(SimpleTestCase):
     def test_orden_con_menos_o_autorizacion_se_mantiene(self):
         self.assertIsNone(evaluar_hallazgo('ORDEN', "Cantidad en documento es 1, se esperaba 2.",
                                            dict(ADMISION, cups=['881302 - ECOGRAFÍA DE ABDOMEN TOTAL (cant. 2)'])))
-        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', "Cantidad autorizada es 6, se esperaba 1.", ADMISION))
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', "Cantidad autorizada es 1, se esperaba 6.",
+                                           dict(ADMISION, cups=['881302 - ECOGRAFÍA DE ABDOMEN TOTAL (cant. 6)'])))
         self.assertIsNone(evaluar_hallazgo('ORDEN', "Cantidad es 6, se esperaba 1; orden vencida.", ADMISION))
 
 

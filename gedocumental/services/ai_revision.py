@@ -1016,8 +1016,11 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                                                 resultado.get("cantidades_documento"))
                  # Aplicación de medicamentos: la autorización cubre varias aplicaciones (caso 33971)
                  or _autorizacion_aplicacion_de_mas(resultado.get("descripcion"), datos_admision,
-                                                    resultado.get("cantidades_documento")))):
-        logger.info("AUTORIZACION con más cantidad; la orden coincide con la admisión: se descarta '%s'",
+                                                    resultado.get("cantidades_documento"))
+                 # Se puede facturar menos de lo autorizado; solo es hallazgo facturar más (caso 35852)
+                 or _autorizacion_de_mas(resultado.get("descripcion"), datos_admision,
+                                         resultado.get("cantidades_documento")))):
+        logger.info("AUTORIZACION con más cantidad que la admisión: se descarta '%s'",
                     resultado.get("descripcion"))
         resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cantidad_orden=True)
 
@@ -1991,6 +1994,34 @@ def _autorizacion_aplicacion_de_mas(descripcion, datos_admision: dict, cantidade
     return len(numeros) == 2 and numeros[0] > numeros[1]
 
 
+def _autorizacion_de_mas(descripcion, datos_admision: dict, cantidades_autorizacion='') -> bool:
+    """
+    La AUTORIZACION trae MÁS cantidad que la admisión: no es hallazgo, se puede facturar menos de lo autorizado
+    (caso 35852: Salud Total autoriza 930860 x8 y la admisión factura 930860-4 x4). Solo es hallazgo cuando la
+    admisión factura MÁS de lo autorizado. Compara por código base (Zeus '930860-4' = '930860').
+    """
+    import re
+    if not _solo_motivo_cantidad(descripcion):
+        return False
+    zeus = {}
+    for c, n in _cantidades_por_cups(datos_admision).items():
+        zeus[c.split('-')[0]] = zeus.get(c.split('-')[0], 0) + n
+    if not zeus:
+        return False
+    reclamados = [c for c in re.findall(r'\b(\d{6})\b', str(descripcion)) if c in zeus]
+    autorizacion = _parsear_cantidades(cantidades_autorizacion)
+    if autorizacion and any(c in autorizacion for c in (reclamados or zeus)):
+        cups = [c for c in (reclamados or zeus) if c in autorizacion]
+        return all(autorizacion[c] >= zeus[c] for c in cups) and any(autorizacion[c] > zeus[c] for c in cups)
+    # Sin cantidades leídas: la descripción debe decir que el documento trae MÁS ("es 8, se esperaba 4")
+    pares = re.findall(r'(?<!\d)(\d{1,3})(?![\d.,]\d)[^;]{0,40}?se esperaba(?:n)?\s+(\d{1,3})', str(descripcion))
+    if pares:
+        return all(int(doc) > int(esp) for doc, esp in pares)
+    numeros = [int(n) for n in re.findall(r'(?<!\d)(?<!\d[.,])(\d{1,3})(?!\d)(?![.,]\d)',
+                                          re.sub(r'\b\d{6}(?:-\d{1,2})?\b', ' ', str(descripcion)))]
+    return len(numeros) == 2 and numeros[0] > numeros[1]
+
+
 def _cantidad_familia(cups: str, por_cups: dict, en_documento=()) -> int:
     """
     Cantidad de Zeus del CUPS más la de los CUPS de la misma familia (mismos 5 primeros dígitos) que no están
@@ -2016,7 +2047,8 @@ def _cantidades_distintas_zeus(cantidades_documento, datos_admision: dict, canti
     # está bien aunque en cantidades_documento haya puesto la de la tabla (caso 35215: tabla 1, "CANTIDAD 2")
     anotadas = {int(n) for n in re.findall(r'\d{1,3}', str(cantidad_anotada or ''))}
     return [(cups, cantidad, por_cups[cups]) for cups, cantidad in documento.items()
-            if cups in por_cups and cantidad > 0 and cantidad != por_cups[cups] and por_cups[cups] not in anotadas
+            # Solo cuando la admisión factura MÁS de lo autorizado: facturar menos no es hallazgo (caso 35852)
+            if cups in por_cups and cantidad > 0 and cantidad < por_cups[cups] and por_cups[cups] not in anotadas
             and cantidad != _cantidad_familia(cups, por_cups, documento)]
 
 
