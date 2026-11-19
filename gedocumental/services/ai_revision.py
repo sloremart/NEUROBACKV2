@@ -1268,10 +1268,22 @@ def _nombre_casi_igual(doc: list, adm: list) -> bool:
     disponibles = list(adm)
     if len(doc) < 2:
         return False
+    def parecido(palabra, a):
+        # Nombre cortado por el ancho del campo de la EPS ('CASTI' por 'CASTILLO', caso 36811): es la misma palabra
+        if len(palabra) >= 4 and a.startswith(palabra):
+            return 1.0
+        return SequenceMatcher(None, palabra, a).ratio()
+
+    # Una sola palabra puede parecerse menos (≥ 0.7) si las demás son iguales: 'RIVERA' por 'RIVEROS' con
+    # 'YEIDY ANDREA ... CASTILLO' iguales (caso 36811)
+    flojas = 0
     for palabra in doc:
-        mejor = max(disponibles, key=lambda a: SequenceMatcher(None, palabra, a).ratio(), default=None)
-        if mejor is None or SequenceMatcher(None, palabra, mejor).ratio() < 0.8:
-            return False
+        mejor = max(disponibles, key=lambda a: parecido(palabra, a), default=None)
+        r = parecido(palabra, mejor) if mejor is not None else 0
+        if r < 0.8:
+            flojas += 1
+            if r < 0.7 or flojas > 1 or len(doc) < 3:
+                return False
         disponibles.remove(mejor)
     return True
 

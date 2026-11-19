@@ -121,6 +121,24 @@ class NombreIncorrectoTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', NOMBRE_MAL, ADMISION, texto=texto))
 
 
+class NombreCortadoPorLaEpsTests(SimpleTestCase):
+    """Caso 36811: Capital Salud imprime 'YEIDY ANDREA RIVERA CASTI' (cortado); SIESA 'YEIDY ANDREA RIVEROS CASTILLO'."""
+    ADM = {'paciente': 'YEIDY ANDREA RIVEROS CASTILLO', 'identificacion': 'CC 1120964198'}
+
+    def c(self, nombre, ident=''):
+        from gedocumental.services.ai_revision import _clasificar_paciente
+        return _clasificar_paciente({'nombre_documento': nombre, 'identificacion_documento': ident}, '', self.ADM)
+
+    def test_no_es_otra_persona(self):
+        self.assertEqual(self.c('YEIDY ANDREA RIVERA CASTI'), 'nombre_mal_escrito')
+        self.assertEqual(self.c('YEIDY ANDREA RIVEROS CASTI'), 'misma_persona')
+        self.assertEqual(self.c('YEIDY ANDREA RIVERA CASTI', '1120964198'), 'nombre_mal_escrito')
+
+    def test_otra_persona_sigue(self):
+        self.assertEqual(self.c('MARIA ANDREA RIVERA CASTILLO'), 'otra_persona')
+        self.assertEqual(self.c('YEIDY RIVERA'), 'otra_persona')
+
+
 class PacienteNoCorrespondeTests(SimpleTestCase):
     OTRO = "Paciente no corresponde: documento 'MARIA LOPEZ GOMEZ', admisión 'JUAN ALEXIS BEJARANO PEÑA'."
     SIN_DATOS = ("Paciente no corresponde: el documento no contiene el nombre ni el documento de identidad del "
