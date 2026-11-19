@@ -930,6 +930,22 @@ class CantidadPorCupsTests(SimpleTestCase):
             r = _llamar_openai('', ['img'], 'AUTORIZACION', adm)
         self.assertEqual(r['tipo'], 'OK')
         self.assertFalse(_anotada_igual_zeus('891901:8', adm, revision['descripcion']))
+        # Servidor: la relectura general insiste en la tabla ('891901:1'); la pregunta por las horas trae 12
+        adm2 = dict(self.ADM, cups=['891901 - MONITORIZACIÓN ELECTROENCEFALOGRAFICA POR VIDEO Y RADIO 12 HORAS (cant. 12)'])
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [
+            respuesta(revision), respuesta({"anotaciones": [{"cups": "891901", "cantidad": "1"}]}),
+            respuesta({"horas": "12"})]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            r = _llamar_openai('', ['img'], 'AUTORIZACION', adm2)
+        self.assertEqual(r['tipo'], 'OK')
+        self.assertEqual(r['cantidad_anotada'], '12 HORAS')
+        # Otras horas: sigue el hallazgo
+        client.chat.completions.create.side_effect = [
+            respuesta(revision), respuesta({"anotaciones": [{"cups": "891901", "cantidad": "1"}]}),
+            respuesta({"horas": "8"})]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            self.assertEqual(_llamar_openai('', ['img'], 'AUTORIZACION', adm2)['tipo'], 'AUTORIZACION')
         # PDF digital
         self.assertTrue(_cantidad_anotada('MONITORIZACION ELECTROENCEFALOGRAMA 12 HORAS', [12]))
         self.assertTrue(_cantidad_anotada('VIDEO EEG 8H', [8]))

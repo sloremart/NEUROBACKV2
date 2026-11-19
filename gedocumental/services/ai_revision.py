@@ -455,6 +455,47 @@ def _releer_cantidad(client, modelo: str, imagenes: list[str]) -> tuple[str, lis
         return '', [0, 0]
 
 
+PROMPT_RELEER_HORAS = (
+    "En esta autorización de servicios, busca un texto que indique un número de HORAS del estudio o de la "
+    "monitorización (ej. \"MONITORIZACIÓN ELECTROENCEFALOGRAMA 12 HORAS\", \"VIDEOTELEMETRIA 24 HORAS\", \"8 HORAS\", "
+    "\"8H\"), en cualquier parte del documento (al pie, en observaciones, escrito a mano o con sello). No tomes la "
+    "columna \"Cantidad\" de la tabla ni la hora del día (ej. \"Hora 06:54\"). "
+    "Responde en JSON: {\"horas\": \"<número de horas, o '' si no hay>\"}"
+)
+
+
+def _cups_por_horas(datos_admision: dict) -> bool:
+    """La admisión tiene un CUPS que se factura por horas (Zeus: 'MONITORIZACIÓN ... 12 HORAS (cant. 12)')."""
+    return any(re.search(r'\bHORAS?\b', _plano_texto(str(c))) for c in datos_admision.get('cups') or [])
+
+
+def _plano_texto(texto) -> str:
+    import unicodedata
+    return unicodedata.normalize('NFKD', str(texto or '')).encode('ascii', 'ignore').decode().upper()
+
+
+def _releer_horas(client, modelo: str, imagenes: list[str]) -> tuple[str, list]:
+    """Consulta corta: solo el número de HORAS anotado en la autorización. Devuelve (número, [tokens])."""
+    contenido = [{"type": "text", "text": "Documento escaneado: ver imágenes adjuntas."}]
+    contenido += [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"}}
+                  for img in imagenes]
+    try:
+        respuesta = client.chat.completions.create(
+            model=modelo,
+            messages=[{"role": "system", "content": PROMPT_RELEER_HORAS}, {"role": "user", "content": contenido}],
+            response_format={"type": "json_object"},
+            max_tokens=30,
+            temperature=0,
+        )
+        uso = getattr(respuesta, 'usage', None)
+        tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
+        numeros = re.findall(r'\d+', str(json.loads(respuesta.choices[0].message.content).get("horas") or ''))
+        return (numeros[0] if numeros else ''), tokens
+    except Exception as exc:
+        logger.warning("No se pudieron releer las horas: %s", exc)
+        return '', [0, 0]
+
+
 def _anotada_igual_zeus(anotada, datos_admision: dict, descripcion: str = '') -> bool:
     """
     La anotación "CANTIDAD N" es la cantidad de Zeus. Con varias autorizaciones en el PDF ('891509:8; 930860:2',
@@ -945,6 +986,19 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                         anotada, resultado.get("descripcion"))
             resultado.update(tipo="OK", descripcion="Documento correcto", cantidad_anotada=anotada,
                              ajuste_cantidad=True)
+        elif _cups_por_horas(datos_admision):
+            # Monitorización por horas: la relectura general toma la tabla (1) y no relaciona "12 HORAS" con la
+            # cantidad (caso 37121). Se pregunta solo por las horas; si son las de Zeus, no hay error
+            horas, tokens = _releer_horas(client, modelo, imagenes)
+            resultado["tokens"] = [a + b for a, b in zip(resultado.get("tokens") or [0, 0], tokens)]
+            por_horas = "; ".join(f"{str(c).split(' - ')[0].strip().split('-')[0]}:{horas}"
+                                  for c in datos_admision.get('cups') or []
+                                  if re.search(r'\bHORAS?\b', _plano_texto(str(c))))
+            if horas and _anotada_igual_zeus(por_horas, datos_admision, resultado.get("descripcion")):
+                logger.info("AUTORIZACION: '%s HORAS' coincide con Zeus, se descarta '%s'",
+                            horas, resultado.get("descripcion"))
+                resultado.update(tipo="OK", descripcion="Documento correcto", cantidad_anotada=f"{horas} HORAS",
+                                 ajuste_cantidad=True)
 
     # La autorización trae MÁS cantidad que la admisión y la ORDEN pide lo mismo que la admisión: el error es de
     # la autorización y la admisión está bien (caso 36734: autorización 883101 x2, orden y admisión x1)
