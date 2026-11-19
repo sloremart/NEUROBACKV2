@@ -2,6 +2,7 @@
 
 from django.utils.timezone import make_aware
 import shutil
+import io
 from django.utils.dateparse import parse_date
 from datetime import datetime, time
 from django.db.models import Q, Max
@@ -2797,6 +2798,45 @@ def radicar_san02_view(request, numero_admision, idusuario):
         return JsonResponse(response_data, status=500)
 ##### OTROS #############
 
+class PdfDanadoError(Exception):
+    pass
+
+
+def append_pdf_seguro(merger, ruta, tipo=''):
+    """Agrega un PDF al merger. Si PyPDF2 falla (p.ej. 'EOF marker not found'
+    por basura después de %%EOF), intenta recortar el archivo en memoria hasta
+    el último %%EOF. Si no se puede, lanza PdfDanadoError indicando el archivo."""
+    try:
+        merger.append(ruta)
+        return
+    except Exception as e_original:
+        error_original = e_original
+
+    try:
+        with open(ruta, 'rb') as f:
+            contenido = f.read()
+    except OSError as e:
+        raise PdfDanadoError(f"No se pudo leer el archivo {tipo} ({ruta}): {e}")
+
+    if not contenido:
+        raise PdfDanadoError(f"El archivo {tipo} está vacío (0 bytes): {ruta}. Debe volver a cargarse.")
+    if not contenido.lstrip()[:5].startswith(b'%PDF'):
+        raise PdfDanadoError(f"El archivo {tipo} no es un PDF válido: {ruta}. Debe volver a cargarse.")
+
+    idx = contenido.rfind(b'%%EOF')
+    if idx == -1:
+        raise PdfDanadoError(
+            f"El archivo {tipo} está incompleto/dañado (sin marcador %%EOF): {ruta}. Debe volver a cargarse."
+        )
+
+    try:
+        merger.append(io.BytesIO(contenido[:idx + 5] + b'\n'))
+    except Exception as e:
+        raise PdfDanadoError(
+            f"El archivo {tipo} está dañado y no se pudo reparar ({error_original}; {e}): {ruta}. Debe volver a cargarse."
+        )
+
+
 def limpiar_nombre_archivo(nombre):
     nombre = unquote(nombre)  # Decodificar URL
     nombre = nombre.replace("%20", " ")  # Reemplazar codificaciones de espacio por espacios
@@ -2860,7 +2900,11 @@ def radicar_other_view(request, numero_admision, idusuario):
             ruta_origen_relative = ruta_origen_relative.replace(settings.MEDIA_URL, "").lstrip('/')
             ruta_origen = os.path.normpath(os.path.join(settings.MEDIA_ROOT, ruta_origen_relative))
             if os.path.exists(ruta_origen):
-                merger.append(ruta_origen)
+                try:
+                    append_pdf_seguro(merger, ruta_origen, tipo_archivo)
+                except PdfDanadoError as e:
+                    merger.close()
+                    return JsonResponse({"success": False, "detail": str(e)}, status=400)
             else:
                 raise FileNotFoundError(f"No se encontró el archivo {tipo_archivo} en {ruta_origen}")
 
@@ -2978,8 +3022,12 @@ def radicar_policia_view(request, numero_admision, idusuario):
 
         temp_pdf_path = os.path.join(carpeta_usuario, f"FES{factura_numero}.pdf")
         merger = PdfMerger()
-        for _, ruta in archivos_pdf:
-            merger.append(ruta)
+        for tipo_pdf, ruta in archivos_pdf:
+            try:
+                append_pdf_seguro(merger, ruta, tipo_pdf)
+            except PdfDanadoError as e:
+                merger.close()
+                return JsonResponse({"success": False, "detail": str(e)}, status=400)
         merger.write(temp_pdf_path)
         merger.close()
 
