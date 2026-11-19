@@ -811,6 +811,24 @@ class RecaudoValidadorSanitasTests(SimpleTestCase):
         self.assertIsNone(_recaudo_validador_sanitas(self.TEXTO, dict(ADMISION, cups=['879301 - TAC (cant. 1)'])))
         self.assertIsNone(_recaudo_validador_sanitas('Factura de venta', resonancia))
 
+    def test_sedacion_autorizada_sin_facturar_en_la_admision(self):
+        # Resonancia y sedación se facturan juntas en un solo ingreso: la sedación cargada y sin facturar es hallazgo
+        from gedocumental.services.ai_revision import _agregar_hallazgo_autorizacion_sin_facturar
+        resonancia = dict(ADMISION, cups=['883101 - RESONANCIA MAGNÉTICA DE CEREBRO (cant. 1)'])
+        r = {'tipo': 'OK', 'descripcion': 'Documento correcto'}
+        _agregar_hallazgo_autorizacion_sin_facturar(r, resonancia, self.TEXTO)
+        self.assertEqual(r['tipo'], 'AUTORIZACION')
+        self.assertIn('autorización 367288940 → 998702 (SOPORTE DE SEDACION PARA CONSULTA O APOYO DIAGNOSTICO)',
+                      r['descripcion'])
+        self.assertNotIn('362023461', r['descripcion'])
+        # Con la sedación en la admisión: sin hallazgo, y la reverificación cierra el anterior
+        ambas = dict(ADMISION, cups=resonancia['cups'] + ['998702 - SOPORTE DE SEDACION (cant. 1)'])
+        r2 = {'tipo': 'OK', 'descripcion': 'Documento correcto'}
+        _agregar_hallazgo_autorizacion_sin_facturar(r2, ambas, self.TEXTO)
+        self.assertEqual(r2['tipo'], 'OK')
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', r['descripcion'], ambas)[0], CORREGIDO)
+        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', r['descripcion'], resonancia))
+
 
 class CantidadPorCupsTests(SimpleTestCase):
     """Caso 33030: dos autorizaciones en un PDF ('CANTIDAD 2' para 930860, 'CANTIDAD 8' para 891509)."""

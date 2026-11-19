@@ -2222,23 +2222,27 @@ def analizar_documento(ruta_absoluta: str, tipo_documento: str, datos_admision: 
             resultado["llamadas"] = primera.get("llamadas", 1) + resultado.get("llamadas", 1)
     resultado["modo"] = ("mixto" if texto else "imagen") if imagenes else "texto"
     if (tipo_documento or '').upper() == 'AUTORIZACION':
+        _agregar_hallazgo_autorizacion_sin_facturar(resultado, datos_admision, texto)
         _agregar_hallazgo_recaudo(resultado, datos_admision, texto)
     return resultado
 
 
-def _recaudo_validador_sanitas(texto: str, datos_admision: dict) -> dict | None:
-    """
-    Condiciones de pago del validador de derechos de Sanitas en PDF digital, leídas del texto (no de la IA).
-    El PDF puede traer un pantallazo por autorización (caso 36888: 362023461 resonancia con Copago 11.5 % y
-    367288940 sedación con Cuota Moderadora 0; la IA tomó la segunda). Se usa la autorización cuyo servicio es
-    un CUPS de la admisión. None si no es un validador de Sanitas o no se puede decidir.
-    """
-    t = texto or ''
-    if 'recaudo de pago' not in t.lower() or 'autorizaci' not in t.lower():
-        return None
+def _cups_de_admision(datos_admision: dict) -> set:
     admision = set()
     for c in datos_admision.get('cups') or []:
         admision |= _codigos_cups(str(c).split(' - ')[0])
+    return admision
+
+
+def _bloques_validador_sanitas(texto: str) -> list:
+    """
+    Autorizaciones SELECCIONADAS en los pantallazos del validador de derechos de Sanitas (PDF digital): una por
+    pantallazo, con su número, el CUPS de su servicio (de la tabla de autorizaciones), el nombre del servicio y
+    las condiciones de pago. [] si el texto no es de un validador de Sanitas.
+    """
+    t = texto or ''
+    if 'recaudo de pago' not in t.lower() or 'autorizaci' not in t.lower():
+        return []
     bloques = []
     for bloque in re.split(r'(?i)N[uú]mero de Autorizaci[oó]n', t)[1:]:
         numero = re.search(r'\b(\d{6,12})\b', bloque)
@@ -2248,7 +2252,7 @@ def _recaudo_validador_sanitas(texto: str, datos_admision: dict) -> dict | None:
         if not (numero and cobro and (recaudo or porcentaje)):
             continue
         # Servicio de esa autorización: el primer CUPS después de su número en la tabla de autorizaciones
-        servicio = set()
+        servicio, nombre = set(), ''
         for m in re.finditer(re.escape(numero.group(1)), t):
             antes = t[max(0, m.start() - 40):m.start()].lower()
             if 'autorizaci' in antes:
@@ -2256,14 +2260,43 @@ def _recaudo_validador_sanitas(texto: str, datos_admision: dict) -> dict | None:
             siguiente = re.search(r'\b\d{8,12}\b', t[m.end():])
             fila = t[m.end():m.end() + (siguiente.start() if siguiente else 400)]
             servicio = _codigos_cups(fila)
+            del_servicio = re.search(r'\b\d{5}[0-9A-Z]\b\s+(.+?)(?:\s*-\s*[\d.]+\s*UVR|$)', fila.replace('\n', ' '))
+            nombre = ' '.join(del_servicio.group(1).split())[:60] if del_servicio else ''
             break
+
         def numero_de(m):
             try:
                 return float(m.group(1).replace(',', '.')) if m else None
             except ValueError:
                 return None
-        bloques.append(dict(servicio=servicio, tipo='COPAGO' if cobro.group(1).lower() == 'copago'
-                            else 'CUOTA_MODERADORA', recaudo=numero_de(recaudo), porcentaje=numero_de(porcentaje)))
+        bloques.append(dict(numero=numero.group(1), servicio=servicio, nombre=nombre,
+                            tipo='COPAGO' if cobro.group(1).lower() == 'copago' else 'CUOTA_MODERADORA',
+                            recaudo=numero_de(recaudo), porcentaje=numero_de(porcentaje)))
+    return bloques
+
+
+def _autorizaciones_fuera_de_admision(texto: str, datos_admision: dict) -> list:
+    """
+    Autorizaciones seleccionadas en el validador de Sanitas cuyo servicio NO está en la admisión, cuando otra
+    sí corresponde a la admisión (caso 36888: resonancia 883101 en la admisión y la sedación 998702 autorizada y
+    cargada, pero sin facturar en ese ingreso; resonancia y sedación se facturan juntas en un solo ingreso).
+    """
+    admision = _cups_de_admision(datos_admision)
+    bloques = [b for b in _bloques_validador_sanitas(texto) if b['servicio']]
+    if not admision or not any(b['servicio'] & admision for b in bloques):
+        return []
+    return [b for b in bloques if not (b['servicio'] & admision)]
+
+
+def _recaudo_validador_sanitas(texto: str, datos_admision: dict) -> dict | None:
+    """
+    Condiciones de pago del validador de derechos de Sanitas en PDF digital, leídas del texto (no de la IA).
+    El PDF puede traer un pantallazo por autorización (caso 36888: 362023461 resonancia con Copago 11.5 % y
+    367288940 sedación con Cuota Moderadora 0; la IA tomó la segunda). Se usa la autorización cuyo servicio es
+    un CUPS de la admisión. None si no es un validador de Sanitas o no se puede decidir.
+    """
+    admision = _cups_de_admision(datos_admision)
+    bloques = _bloques_validador_sanitas(texto)
     if not bloques:
         return None
     if len(bloques) > 1:
@@ -2278,6 +2311,21 @@ def _recaudo_validador_sanitas(texto: str, datos_admision: dict) -> dict | None:
     valor = rec if rec >= 1 else 0
     return {'requiere_pago': 'SI' if (pct or valor) else 'NO', 'tipo_cobro': b['tipo'],
             'valor': str(int(valor)) if valor else '0', 'porcentaje': f"{pct:g}" if pct else '0'}
+
+
+def _agregar_hallazgo_autorizacion_sin_facturar(resultado: dict, datos_admision: dict, texto: str = '') -> None:
+    """Autorización cargada (validador Sanitas) de un servicio que no está facturado en la admisión."""
+    fuera = _autorizaciones_fuera_de_admision(texto, datos_admision)
+    if not fuera:
+        return
+    descripcion = ("La autorización trae servicios que no están en la admisión: " + "; ".join(
+        f"autorización {b['numero']} → {', '.join(sorted(b['servicio']))}" + (f" ({b['nombre']})" if b['nombre'] else '')
+        for b in fuera) + ". Se deben facturar en el mismo ingreso (ej. resonancia y sedación juntas).")
+    logger.info("Autorización con servicios fuera de la admisión: %s", descripcion)
+    if resultado["tipo"] == "OK":
+        resultado.update(tipo="AUTORIZACION", descripcion=descripcion, ajuste_servicio_sin_facturar=True)
+    else:
+        resultado["descripcion"] = f"{resultado.get('descripcion', '')} | {descripcion}"
 
 
 def _agregar_hallazgo_recaudo(resultado: dict, datos_admision: dict, texto: str = '') -> None:
