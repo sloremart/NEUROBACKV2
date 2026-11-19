@@ -159,7 +159,7 @@ aunque la primera ya haya fallado:
   "procedimientos_coinciden": "SI | NO | NO_APLICA",
   "firma_paciente": "SI | NO | NO_APLICA   (solo COMPROBANTE; en otros documentos NO_APLICA)",
   "manuscrito": "SI | NO   (SI si el nombre del paciente o los procedimientos están ESCRITOS A MANO, como una fórmula u orden manuscrita; NO si están impresos o digitados)",
-  "cantidad_anotada": "<solo AUTORIZACION: el número de la anotación u observación de cantidad que está FUERA de la tabla (ej. 'CANTIDAD 2' al pie), o '' si no hay>",
+  "cantidad_anotada": "<solo AUTORIZACION: el número de la anotación u observación de cantidad que está FUERA de la tabla (ej. 'CANTIDAD 2' al pie). Las HORAS son la cantidad: 'MONITORIZACIÓN ELECTROENCEFALOGRAMA 12 HORAS', '8 HORAS' u '8H' → 12 u 8. '' si no hay>",
   "cantidades_documento": "<AUTORIZACION u ORDEN: 'CUPS:cantidad' de CADA procedimiento autorizado u ordenado (en la orden, la columna CANTIDAD de cada procedimiento), separados por ';' (ej. '930860:2; 891509:8'). Si la autorización trae anotación 'CANTIDAD N' fuera de la tabla, N es la cantidad de su procedimiento; si el PDF trae varias autorizaciones (una por página), cada anotación es la de SU autorización. Sin anotación, la columna Cantidad. '' en otros documentos>",
   "estudio_documento": {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
   "estudio_admision":  {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
@@ -414,7 +414,8 @@ PROMPT_RELEER_CANTIDAD = (
     "(ej. \"CANTIDAD 8\" al pie, escrita a mano, con sello o en observaciones). No tomes la columna \"Cantidad\" "
     "de la tabla. El documento puede traer VARIAS autorizaciones (una por página o una debajo de otra): para CADA "
     "una da el código CUPS de su servicio autorizado y el número de SU anotación (si dice \"CANTIDAD\" y debajo "
-    "\"CANTIDAD 8\", es 8). Responde en JSON: "
+    "\"CANTIDAD 8\", es 8). Las HORAS también son la cantidad: \"MONITORIZACIÓN ELECTROENCEFALOGRAMA 12 HORAS\", "
+    "\"8 HORAS\" u \"8H\" → 12 u 8. Responde en JSON: "
     "{\"anotaciones\": [{\"cups\": \"<código de 6 dígitos>\", \"cantidad\": \"<número, o '' si esa autorización "
     "no tiene anotación>\"}]}"
 )
@@ -459,7 +460,10 @@ def _anotada_igual_zeus(anotada, datos_admision: dict, descripcion: str = '') ->
     La anotación "CANTIDAD N" es la cantidad de Zeus. Con varias autorizaciones en el PDF ('891509:8; 930860:2',
     caso 36927) se compara cada CUPS con su cantidad en Zeus; los CUPS del hallazgo deben tener su anotación.
     """
-    por_cups = _cantidades_por_cups(datos_admision)
+    # Por código base: Zeus trae el sufijo ('891901-12' de una monitorización de 12 horas, caso 37121)
+    por_cups = {}
+    for c, n in _cantidades_por_cups(datos_admision).items():
+        por_cups[c.split('-')[0]] = por_cups.get(c.split('-')[0], 0) + n
     leidas = _parsear_cantidades(anotada)
     if leidas:
         en_zeus = {c: n for c, n in leidas.items() if c in por_cups}
@@ -1968,7 +1972,9 @@ def _cantidad_anotada(texto: str, esperadas: list) -> bool:
     if not esperadas or len(set(esperadas)) != 1:
         return False
     n = esperadas[0]
-    anotadas = re.findall(rf'\bCANTIDAD\s*[:=]?\s*{n}\b', unicodedata.normalize('NFKD', texto or '').upper())
+    t = unicodedata.normalize('NFKD', texto or '').upper()
+    # "CANTIDAD 8", o las horas de una monitorización ("12 HORAS", "8H"): las horas son la cantidad (caso 37121)
+    anotadas = re.findall(rf'\bCANTIDAD\s*[:=]?\s*{n}\b|\b{n}\s*(?:HORAS?|HRS?|H)\b', t)
     return len(anotadas) >= len(esperadas)
 
 

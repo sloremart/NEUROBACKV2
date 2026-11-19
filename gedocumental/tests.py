@@ -910,6 +910,31 @@ class CantidadPorCupsTests(SimpleTestCase):
         self.assertFalse(_anotada_igual_zeus('891509:6; 930860:2', adm, d))
         self.assertFalse(_anotada_igual_zeus('930860:2', adm, d))
 
+    def test_horas_son_la_cantidad(self):
+        # Caso 37121: "MONITORIZACIÓN ELECTROENCEFALOGRAMA 12 HORAS" al pie; tabla 1; Zeus 891901-12 cant. 12
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai, _anotada_igual_zeus, _cantidad_anotada
+        adm = dict(self.ADM, cups=['891901-12 - MONITORIZACIÓN ELECTROENCEFALOGRAFICA POR VIDEO Y RADIO (cant. 12)'])
+        revision = {"nombre_documento": "ARNOLDO ROJAS", "identificacion_documento": "17313342",
+                    "paciente_coincide": "SI", "procedimientos_coinciden": "SI", "firma_paciente": "NO_APLICA",
+                    "tipo": "AUTORIZACION", "cantidad_anotada": "",
+                    "descripcion": "Cantidad autorizada en el documento es 1, se esperaba 12 para el procedimiento 891901."}
+        def respuesta(contenido):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
+                                  usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [
+            respuesta(revision), respuesta({"anotaciones": [{"cups": "891901", "cantidad": "12 HORAS"}]})]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            r = _llamar_openai('', ['img'], 'AUTORIZACION', adm)
+        self.assertEqual(r['tipo'], 'OK')
+        self.assertFalse(_anotada_igual_zeus('891901:8', adm, revision['descripcion']))
+        # PDF digital
+        self.assertTrue(_cantidad_anotada('MONITORIZACION ELECTROENCEFALOGRAMA 12 HORAS', [12]))
+        self.assertTrue(_cantidad_anotada('VIDEO EEG 8H', [8]))
+        self.assertFalse(_cantidad_anotada('VALIDO HASTA 20261213 HORA 06:54', [12]))
+
     def test_mismo_cups_en_dos_autorizaciones_se_suma(self):
         from gedocumental.services.ai_revision import _cantidades_distintas_zeus
         self.assertEqual(_cantidades_distintas_zeus('930860:1; 930860:1', self.ADM), [])
