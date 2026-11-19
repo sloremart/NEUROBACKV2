@@ -18,6 +18,7 @@ import io
 import json
 import logging
 import os
+import re
 
 from django.conf import settings
 from django.db import connections
@@ -393,8 +394,9 @@ PROMPT_RELEER_NOMBRE = (
     "\"Paciente\", \"Nombre del paciente\" o DATOS DEL PACIENTE), con TODOS sus nombres y apellidos, sin corregir "
     "ni omitir ninguno. No tomes al médico, al acompañante, a quien imprime, el nombre del ENCABEZADO (médico, "
     "consultorio o IPS con dirección, teléfono y NIT) ni el nombre ESCRITO A MANO junto a la firma (es quien firma, "
-    "a veces un familiar). Responde en JSON: "
-    '{"nombre": "<nombre completo del paciente>"}'
+    "a veces un familiar). Además transcribe TODOS los números de documento de identidad (CC, TI, RC, CE...) "
+    "IMPRESOS en el documento, solo los dígitos. Responde en JSON: "
+    '{"nombre": "<nombre completo del paciente>", "identificaciones": ["<dígitos>", ...]}'
 )
 
 
@@ -434,8 +436,11 @@ def _anotada_igual_zeus(anotada, datos_admision: dict) -> bool:
     return bool(zeus) and len(set(zeus)) == 1 and len(numeros) == 1 and int(numeros.pop()) == zeus[0]
 
 
-def _releer_nombre(client, modelo: str, imagenes: list[str]) -> tuple[str, list]:
-    """Consulta corta: solo el nombre del paciente del documento escaneado. Devuelve (nombre, [tokens])."""
+def _releer_nombre(client, modelo: str, imagenes: list[str]) -> tuple[str, list, list]:
+    """
+    Consulta corta: el nombre del paciente del documento escaneado y los números de identificación impresos.
+    Devuelve (nombre, [identificaciones], [tokens]).
+    """
     contenido = [{"type": "text", "text": "Documento escaneado: ver imágenes adjuntas."}]
     contenido += [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"}}
                   for img in imagenes]
@@ -449,10 +454,13 @@ def _releer_nombre(client, modelo: str, imagenes: list[str]) -> tuple[str, list]
         )
         uso = getattr(respuesta, 'usage', None)
         tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
-        return str(json.loads(respuesta.choices[0].message.content).get("nombre") or ''), tokens
+        datos = json.loads(respuesta.choices[0].message.content)
+        ids = datos.get("identificaciones") or []
+        ids = [re.sub(r'\D', '', str(i)) for i in (ids if isinstance(ids, list) else [ids])]
+        return str(datos.get("nombre") or ''), [i for i in ids if i], tokens
     except Exception as exc:
         logger.warning("No se pudo releer el nombre del paciente: %s", exc)
-        return '', [0, 0]
+        return '', [], [0, 0]
 
 
 def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_admision: dict,
@@ -701,7 +709,8 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                     and str(resultado.get("descripcion") or '').startswith("Paciente no corresponde: documento"))
     if (imagenes and not _reintento and (resultado.get("paciente_coincide") == "NOMBRE_MAL_ESCRITO" or otra_persona)
             and not _nombre_en_texto(resultado.get("nombre_documento"), texto)):
-        nombre, tokens = _releer_nombre(client, modelo, imagenes)
+        nombre, ids_impresos, tokens = _releer_nombre(client, modelo, imagenes)
+        id_adm = re.sub(r'\D', '', datos_admision.get('identificacion') or '')
         resultado["tokens"] = [a + b for a, b in zip(resultado["tokens"], tokens)]
         resultado["llamadas"] = resultado.get("llamadas", 1) + 1
         if nombre and _mismo_paciente({'nombre_documento': nombre,
@@ -724,6 +733,15 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                 descripcion=(f"Nombre del usuario incorrecto: documento '{nombre}', "
                              f"admisión '{datos_admision.get('paciente')}'."),
                 ajuste_relectura_nombre=True)
+        elif otra_persona and len(id_adm) >= 6 and id_adm in ids_impresos:
+            # El número de documento de la admisión está IMPRESO en el documento: es el paciente. El nombre
+            # 'de otra persona' es el de quien firma a mano (caso 35533: 'Leidy Cardona' 1121853266, acompañante;
+            # impreso 'TI 1,122,520,760 NICOL XIMENA VILLAMIL CARDONA'), aunque la relectura también lo tome
+            logger.info("Documento %s de la admisión impreso: se descarta '%s'", id_adm, resultado.get("descripcion"))
+            otro_motivo = tipo_ia != "OK" and not _solo_motivo_paciente(descripcion_ia)
+            resultado.update(tipo=tipo_ia if otro_motivo else "OK",
+                             descripcion=descripcion_ia if otro_motivo else "Documento correcto",
+                             paciente_coincide="SI", identificacion_documento=id_adm, ajuste_relectura_nombre=True)
 
     # Mismo código CUPS en el documento y en la admisión: el procedimiento coincide, aunque la
     # descripción esté escrita distinto ("...TITULACION DE DISPOSITIVO MEDICO" vs "...DE CPAP NASAL").
@@ -822,7 +840,6 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             and resultado.get("paciente_coincide") != "NO"
             and _solo_motivo_cantidad(resultado.get("descripcion"))):
         zeus = _cantidades_zeus(datos_admision)
-        import re
         anotada = re.findall(r'\d+', str(resultado.get("cantidad_anotada") or ''))   # "2", "CANTIDAD 2"...
         if ((zeus and len(set(zeus)) == 1 and len(set(anotada)) == 1 and int(anotada[0]) == zeus[0])
                 or _cantidad_anotada(texto, zeus)
@@ -851,7 +868,6 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                 f"Cantidad autorizada en el documento es {doc}, se esperaba {zeus} para el procedimiento {cups}"
                 for cups, doc, zeus in distintas) + ".")
 
-    import re
     # AUTORIZACION escaneada con hallazgo de cantidad y sin anotación leída: la IA suele tomar la columna de la
     # tabla (1) y no ver "CANTIDAD 8" al pie (caso 35377). Se pide solo la anotación; si es la de Zeus, no hay error.
     if ((tipo_documento or '').upper() == 'AUTORIZACION' and imagenes and not _reintento

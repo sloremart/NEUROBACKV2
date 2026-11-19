@@ -659,6 +659,28 @@ class NombreDelEncabezadoTests(SimpleTestCase):
         self.assertIn("NICOL XIMENA VILLAMIL CARDONA", r['descripcion'])
         self.assertTrue(r['descripcion'].startswith('Nombre del usuario incorrecto'))
 
+    def test_firma_de_un_familiar_con_documento_impreso(self):
+        # Caso 35533 (autorización): la IA y la relectura toman la firma 'Leidy Cardona'; el TI de la admisión
+        # está impreso en el documento → es la paciente
+        adm = dict(self.ADM, paciente='NICOL XIMENA VILLAMIL', identificacion='TI 1122520760')
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        revision = {"nombre_documento": "Leidy Cardona", "identificacion_documento": "1121853266",
+                    "paciente_coincide": "NO", "procedimientos_coinciden": "SI", "firma_paciente": "SI",
+                    "tipo": "INFORMACION", "descripcion": "Paciente no corresponde."}
+        def respuesta(contenido):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
+                                  usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [
+            respuesta(revision),
+            respuesta({"nombre": "Leidy Cardona", "identificaciones": ["1,122,520,760", "1121853266"]})]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            r = _llamar_openai('', ['img'], 'AUTORIZACION', adm)
+        self.assertEqual(r['tipo'], 'OK')
+        self.assertEqual(r['paciente_coincide'], 'SI')
+
     def test_relectura_con_otra_persona_sigue(self):
         r = self._llamar({"nombre": "CAMILO HERNANDEZ RUBIO"})
         self.assertTrue(r['descripcion'].startswith('Paciente no corresponde: documento'))
