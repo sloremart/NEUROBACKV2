@@ -673,6 +673,37 @@ class NombreDelEncabezadoTests(SimpleTestCase):
             return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
                                   usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
         client = mock.MagicMock()
+        # 1.ª relectura (página completa): otra vez la firma; 2.ª (parte de arriba): el TI impreso
+        client.chat.completions.create.side_effect = [
+            respuesta(revision),
+            respuesta({"nombre": "Leidy Cardona", "identificaciones": ["1121853266"]}),
+            respuesta({"nombre": "NICOL XIMENA VILLAMIL CARDONA", "identificaciones": ["1,122,520,760"]})]
+        import base64, io
+        from PIL import Image
+        buffer = io.BytesIO()
+        Image.new('RGB', (100, 140), 'white').save(buffer, format='PNG')
+        pagina = base64.b64encode(buffer.getvalue()).decode()
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            r = _llamar_openai('', [pagina], 'AUTORIZACION', adm)
+        self.assertEqual(client.chat.completions.create.call_count, 3)
+        recorte = client.chat.completions.create.call_args.kwargs['messages'][1]['content'][1]['image_url']['url']
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(recorte.split(',')[1]))).size, (100, 77))
+        # Nombre impreso con CARDONA que SIESA no tiene: es la paciente, con el nombre incompleto en SIESA
+        self.assertEqual(r['paciente_coincide'], 'NOMBRE_MAL_ESCRITO')
+        self.assertTrue(r['descripcion'].startswith('Nombre del usuario incorrecto'))
+
+    def test_documento_impreso_aunque_el_nombre_siga_mal(self):
+        adm = dict(self.ADM, paciente='NICOL XIMENA VILLAMIL', identificacion='TI 1122520760')
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        revision = {"nombre_documento": "Leidy Cardona", "identificacion_documento": "1121853266",
+                    "paciente_coincide": "NO", "procedimientos_coinciden": "SI", "firma_paciente": "SI",
+                    "tipo": "INFORMACION", "descripcion": "Paciente no corresponde."}
+        def respuesta(contenido):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
+                                  usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
+        client = mock.MagicMock()
         client.chat.completions.create.side_effect = [
             respuesta(revision),
             respuesta({"nombre": "Leidy Cardona", "identificaciones": ["1,122,520,760", "1121853266"]})]

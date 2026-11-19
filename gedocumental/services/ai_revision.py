@@ -436,6 +436,20 @@ def _anotada_igual_zeus(anotada, datos_admision: dict) -> bool:
     return bool(zeus) and len(set(zeus)) == 1 and len(numeros) == 1 and int(numeros.pop()) == zeus[0]
 
 
+def _parte_superior(imagen_b64: str, fraccion: float = 0.55) -> str:
+    """La parte de arriba de la página (datos impresos del paciente), sin la zona de firmas de abajo."""
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(base64.b64decode(imagen_b64))) as img:
+            recorte = img.crop((0, 0, img.width, max(1, int(img.height * fraccion))))
+            buffer = io.BytesIO()
+            recorte.save(buffer, format='PNG')
+        return base64.b64encode(buffer.getvalue()).decode()
+    except Exception as exc:
+        logger.warning("No se pudo recortar la imagen: %s", exc)
+        return ''
+
+
 def _releer_nombre(client, modelo: str, imagenes: list[str]) -> tuple[str, list, list]:
     """
     Consulta corta: el nombre del paciente del documento escaneado y los números de identificación impresos.
@@ -713,6 +727,21 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         id_adm = re.sub(r'\D', '', datos_admision.get('identificacion') or '')
         resultado["tokens"] = [a + b for a, b in zip(resultado["tokens"], tokens)]
         resultado["llamadas"] = resultado.get("llamadas", 1) + 1
+        if otra_persona and not (
+                (nombre and (_mismo_paciente({'nombre_documento': nombre}, datos_admision)
+                             or _contiene_todo_el_nombre(nombre, datos_admision)))
+                or (len(id_adm) >= 6 and id_adm in ids_impresos)):
+            # La relectura volvió a tomar el nombre manuscrito de quien firma (abajo de la hoja; caso 35533:
+            # 'Leidy Cardona' 1121853266). Se relee solo la parte de ARRIBA, donde van los datos impresos
+            recortes = [r for r in (_parte_superior(img) for img in imagenes) if r]
+            if recortes:
+                nombre_2, ids_2, tokens = _releer_nombre(client, modelo, recortes)
+                resultado["tokens"] = [a + b for a, b in zip(resultado["tokens"], tokens)]
+                resultado["llamadas"] += 1
+                logger.info("Relectura de la parte superior: '%s' %s", nombre_2, ids_2)
+                if nombre_2:
+                    nombre = nombre_2
+                ids_impresos = ids_impresos + ids_2
         if nombre and _mismo_paciente({'nombre_documento': nombre,
                                        'identificacion_documento': ('' if otra_persona
                                                                     else resultado.get('identificacion_documento'))},
