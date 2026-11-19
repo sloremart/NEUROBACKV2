@@ -158,7 +158,7 @@ aunque la primera ya haya fallado:
   "procedimientos_documento": "<TODOS los CUPS/procedimientos que trae el documento, con su código, sin omitir ninguna fila de la tabla (revisa hasta la última), o 'no aplica'>",
   "procedimientos_coinciden": "SI | NO | NO_APLICA",
   "firma_paciente": "SI | NO | NO_APLICA   (solo COMPROBANTE; en otros documentos NO_APLICA)",
-  "manuscrito": "SI | NO   (SI si el nombre del paciente o los procedimientos están ESCRITOS A MANO, como una fórmula u orden manuscrita; NO si están impresos o digitados)",
+  "manuscrito": "SI | NO   (SI si el nombre del paciente, su documento o los procedimientos están ESCRITOS A MANO, como una fórmula u orden manuscrita, AUNQUE sea un formato impreso con los campos llenados a mano; NO si esos datos están impresos o digitados)",
   "cantidad_anotada": "<solo AUTORIZACION: el número de la anotación u observación de cantidad que está FUERA de la tabla (ej. 'CANTIDAD 2' al pie). Las HORAS son la cantidad: 'MONITORIZACIÓN ELECTROENCEFALOGRAMA 12 HORAS', '8 HORAS' u '8H' → 12 u 8. '' si no hay>",
   "cantidades_documento": "<AUTORIZACION u ORDEN: 'CUPS:cantidad' de CADA procedimiento autorizado u ordenado (en la orden, la columna CANTIDAD de cada procedimiento), separados por ';' (ej. '930860:2; 891509:8'). Si la autorización trae anotación 'CANTIDAD N' fuera de la tabla, N es la cantidad de su procedimiento; si el PDF trae varias autorizaciones (una por página), cada anotación es la de SU autorización. Sin anotación, la columna Cantidad. '' en otros documentos>",
   "estudio_documento": {"modalidad": "<M>", "region": "<R>", "lateralidad": "<L>", "contraste": "<C>", "especialidad": "<E>"},
@@ -480,6 +480,35 @@ def _cups_por_horas(datos_admision: dict) -> bool:
 def _plano_texto(texto) -> str:
     import unicodedata
     return unicodedata.normalize('NFKD', str(texto or '')).encode('ascii', 'ignore').decode().upper()
+
+
+PROMPT_MANUSCRITO = (
+    "Mira esta orden médica. ¿Los datos del paciente (nombre o número de documento) o los procedimientos / "
+    "medicamentos están ESCRITOS A MANO (con lapicero), aunque el formato sea impreso? No cuenta la firma del "
+    "médico ni un sello. Responde en JSON: {\"manuscrito\": \"SI\" | \"NO\"}"
+)
+
+
+def _releer_manuscrito(client, modelo: str, imagenes: list[str]) -> tuple[bool, list]:
+    """Consulta corta: si la orden está llenada a mano (caso 36508: fórmula Colsanitas). (bool, [tokens])."""
+    contenido = [{"type": "text", "text": "Documento escaneado: ver imágenes adjuntas."}]
+    contenido += [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": "low"}}
+                  for img in imagenes[:2]]
+    try:
+        respuesta = client.chat.completions.create(
+            model=modelo,
+            messages=[{"role": "system", "content": PROMPT_MANUSCRITO}, {"role": "user", "content": contenido}],
+            response_format={"type": "json_object"},
+            max_tokens=15,
+            temperature=0,
+        )
+        uso = getattr(respuesta, 'usage', None)
+        tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
+        valor = str(json.loads(respuesta.choices[0].message.content).get("manuscrito") or '').strip().upper()
+        return valor == 'SI', tokens
+    except Exception as exc:
+        logger.warning("No se pudo confirmar si la orden es manuscrita: %s", exc)
+        return False, [0, 0]
 
 
 def _releer_horas(client, modelo: str, imagenes: list[str]) -> tuple[str, list]:
@@ -1023,6 +1052,16 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         logger.info("AUTORIZACION con más cantidad que la admisión: se descarta '%s'",
                     resultado.get("descripcion"))
         resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cantidad_orden=True)
+
+    # ORDEN escaneada con hallazgo que la IA no marcó como manuscrita: formatos impresos llenados a mano (fórmula
+    # de Colsanitas, caso 36508: 'TI 1029993091' leído '702996901'). Se pregunta solo eso (consulta corta)
+    if ((tipo_documento or '').upper() == 'ORDEN' and resultado["tipo"] != "OK" and imagenes and not _reintento
+            and len((texto or '').strip()) < MIN_CARACTERES_TEXTO
+            and str(resultado.get("manuscrito") or '').strip().upper() != 'SI'):
+        a_mano, tokens = _releer_manuscrito(client, modelo, imagenes)
+        resultado["tokens"] = [a + b for a, b in zip(resultado.get("tokens") or [0, 0], tokens)]
+        if a_mano:
+            resultado["manuscrito"] = "SI"
 
     # ORDEN escrita a mano: la letra del especialista no se lee bien (nombre, procedimiento, fecha); cualquier
     # hallazgo de ese documento se descarta (caso 19671: "Antonio Caicedo" leído como "MARIO CAICEDO")

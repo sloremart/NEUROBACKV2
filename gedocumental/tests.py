@@ -121,6 +121,35 @@ class NombreIncorrectoTests(SimpleTestCase):
         self.assertIsNone(evaluar_hallazgo('AUTORIZACION', NOMBRE_MAL, ADMISION, texto=texto))
 
 
+class OrdenLlenadaAManoTests(SimpleTestCase):
+    """Caso 36508: fórmula Colsanitas impresa llenada a mano; 'TI 1029993091' leído '702996901'."""
+    ADM = dict(ADMISION, paciente='DANNA ISABELLA LINARES REINA', identificacion='TI 1029993091')
+
+    def _llamar(self, segunda):
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        revision = {"nombre_documento": "LINARES REINA DANNA ISABELLA", "identificacion_documento": "702996901",
+                    "paciente_coincide": "NO", "procedimientos_coinciden": "SI", "firma_paciente": "NO_APLICA",
+                    "tipo": "INFORMACION", "manuscrito": "NO",
+                    "descripcion": "Número de documento incorrecto: documento '702996901'."}
+
+        def respuesta(contenido):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
+                                  usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [respuesta(revision), respuesta(segunda)]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            return _llamar_openai('', ['img'], 'ORDEN', self.ADM)
+
+    def test_llenada_a_mano_pasa(self):
+        r = self._llamar({"manuscrito": "SI"})
+        self.assertEqual(r['tipo'], 'OK')
+
+    def test_impresa_sigue_con_hallazgo(self):
+        self.assertNotEqual(self._llamar({"manuscrito": "NO"})['tipo'], 'OK')
+
+
 class NombreCortadoPorLaEpsTests(SimpleTestCase):
     """Caso 36811: Capital Salud imprime 'YEIDY ANDREA RIVERA CASTI' (cortado); SIESA 'YEIDY ANDREA RIVEROS CASTILLO'."""
     ADM = {'paciente': 'YEIDY ANDREA RIVEROS CASTILLO', 'identificacion': 'CC 1120964198'}
@@ -315,7 +344,8 @@ class CostoIATests(SimpleTestCase):
     def test_con_otro_motivo_repite_la_consulta(self):
         r, llamadas = self._llamar("Paciente no corresponde: documento 'BEJARANO PEÑA JUAN ALEXIS'. "
                                    "Orden vencida.")
-        self.assertEqual((llamadas, r['llamadas'], r['tokens']), (2, 2, [50000, 600]))
+        # + 1 consulta corta: ¿la orden está llenada a mano? (caso 36508)
+        self.assertEqual((llamadas, r['llamadas'], r['tokens']), (3, 2, [75000, 900]))
 
 
 class TranscripcionTablaTests(SimpleTestCase):
@@ -355,7 +385,7 @@ class TranscripcionTablaTests(SimpleTestCase):
 
     def test_la_transcripcion_tampoco_la_trae(self):
         r, llamadas = self._llamar("883101 RESONANCIA MAGNETICA DE CEREBRO; 891402 ELECTROENCEFALOGRAMA")
-        self.assertEqual((r['tipo'], llamadas), ('SOPORTES', 2))
+        self.assertEqual((r['tipo'], llamadas), ('SOPORTES', 3))   # + ¿manuscrita?
 
     def test_documento_digital_no_hace_la_consulta_extra(self):
         r, llamadas = self._llamar("890375", imagenes=())
@@ -1056,7 +1086,7 @@ class RelecturaNombreTests(SimpleTestCase):
 
     def test_relectura_confirma_el_error(self):
         r, llamadas = self._llamar("RIVERA CARLOS ISAIAS")
-        self.assertEqual((r['tipo'], llamadas), ('INFORMACION', 2))
+        self.assertEqual((r['tipo'], llamadas), ('INFORMACION', 3))   # + ¿manuscrita?
         self.assertIn('Nombre del usuario incorrecto', r['descripcion'])
 
     def test_pdf_digital_no_relee(self):
