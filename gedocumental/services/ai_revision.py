@@ -1275,6 +1275,21 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
     id_doc = _id_documento(resultado, id_adm)
     numeros_texto = set(re.findall(r'\d{5,}', re.sub(r'[.,](?=\d{3})', '', texto or '')))
     mismo_id = bool(id_adm) and (id_doc == id_adm or id_adm in numeros_texto)
+    # Nombre CORTADO por la EPS (Capital Salud: 'YEIDY ANDREA RIVERA CASTI-TR', caso 36811; 'BENEF. MIA SALOME
+    # HERNANDEZ ROJA-HI EDAD 01 MES', caso 36270): la última palabra es el comienzo de un apellido de la admisión o
+    # termina en '-' con un pedazo de la siguiente columna. Si lo demás coincide (con una palabra parecida a lo
+    # sumo), es el paciente con el nombre de la EPS. Va antes del número: ese formato trae también el documento
+    # del cotizante (la mamá), que la IA puede tomar como el del paciente
+    nombre_doc = re.sub(r'(?i)^\s*BENEF\w*\.?\s*', '', str(resultado.get('nombre_documento')
+                                                       or resultado.get('paciente_documento') or ''))
+    nombre_doc = re.sub(r'(?i)\s+EDAD\b.*$', '', nombre_doc).strip()
+    sin_corte = [t for t in _tokens_nombre(re.sub(r'-\s*\w{0,3}\s*$', '', nombre_doc))
+                 if t not in _NO_SON_NOMBRE]
+    cortado = bool(sin_corte) and (re.search(r'-\s*\w{0,3}\s*$', nombre_doc) is not None or any(
+        len(sin_corte[-1]) >= 4 and a.startswith(sin_corte[-1]) and a != sin_corte[-1] for a in adm))
+    if cortado and len(sin_corte) >= 3 and _nombre_casi_igual(sin_corte, adm):
+        return "misma_persona"
+
     if id_adm and id_doc and len(id_doc) >= 5 and id_doc != id_adm and id_adm not in numeros_texto:
         # Mismo nombre (o casi: una letra distinta) con otro número: es el paciente, pero con el
         # número de documento errado
@@ -1291,17 +1306,6 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
         if len((texto or '').strip()) < 50 or mismo_id:
             return "misma_persona"
         return "sin_datos_paciente"
-
-    # Nombre CORTADO por la EPS (Capital Salud: 'YEIDY ANDREA RIVERA CASTI-TR', caso 36811): la última palabra es
-    # el comienzo de un apellido de la admisión o termina en '-' con un pedazo de la siguiente columna. Si lo
-    # demás coincide (con una palabra parecida a lo sumo), es el paciente con el nombre de la EPS: no es hallazgo
-    nombre_doc = str(resultado.get('nombre_documento') or resultado.get('paciente_documento') or '')
-    sin_corte = [t for t in _tokens_nombre(re.sub(r'-\s*\w{0,3}\s*$', '', nombre_doc.strip()))
-                 if t not in _NO_SON_NOMBRE]
-    cortado = bool(sin_corte) and (re.search(r'-\s*\w{0,3}\s*$', nombre_doc.strip()) is not None or any(
-        len(sin_corte[-1]) >= 4 and a.startswith(sin_corte[-1]) and a != sin_corte[-1] for a in adm))
-    if cortado and len(sin_corte) >= 3 and _nombre_casi_igual(sin_corte, adm):
-        return "misma_persona"
 
     if _nombre_casi_igual(doc, adm) or mismo_id:
         return "nombre_mal_escrito"

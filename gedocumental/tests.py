@@ -186,6 +186,17 @@ class NombreCortadoPorLaEpsTests(SimpleTestCase):
         # Sin corte, la diferencia de letras sigue siendo "nombre mal escrito"
         self.assertEqual(self.c('YEIDY ANDREA RIVERA CASTILLO'), 'nombre_mal_escrito')
 
+    def test_beneficiario_con_edad_y_documento_de_la_mama(self):
+        # Caso 36270: 'BENEF. ANA LUCIA PEREZ ROJA-HI EDAD 01 MES', RC 1000000001 y CC 1000000002 (cotizante)
+        from gedocumental.services.ai_revision import _clasificar_paciente
+        adm = {'paciente': 'ANA LUCIA PEREZ ROJAS', 'identificacion': 'RC 1000000001'}
+        for nombre in ('ANA LUCIA PEREZ ROJA-HI EDAD 01 MES', 'BENEF. ANA LUCIA PEREZ ROJA-HI'):
+            for ident in ('', '1000000002', '1000000001'):
+                self.assertEqual(_clasificar_paciente({'nombre_documento': nombre, 'identificacion_documento': ident},
+                                                      '', adm), 'misma_persona', (nombre, ident))
+        desc = ("Paciente no corresponde: documento 'ANA LUCIA PEREZ ROJA-HI EDAD 01 MES', admisión 'ANA LUCIA PEREZ ROJAS'.")
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, dict(ADMISION, cups=[], **adm))[0], DESCARTADO)
+
     def test_otra_persona_sigue(self):
         self.assertEqual(self.c('MARIA ANDREA RIVERA CASTILLO'), 'otra_persona')
         self.assertEqual(self.c('YEIDY RIVERA'), 'otra_persona')
