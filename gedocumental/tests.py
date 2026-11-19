@@ -129,10 +129,13 @@ class NombreCortadoPorLaEpsTests(SimpleTestCase):
         from gedocumental.services.ai_revision import _clasificar_paciente
         return _clasificar_paciente({'nombre_documento': nombre, 'identificacion_documento': ident}, '', self.ADM)
 
-    def test_no_es_otra_persona(self):
-        self.assertEqual(self.c('YEIDY ANDREA RIVERA CASTI'), 'nombre_mal_escrito')
+    def test_nombre_cortado_no_es_hallazgo(self):
+        self.assertEqual(self.c('YEIDY ANDREA RIVERA CASTI'), 'misma_persona')
+        self.assertEqual(self.c('YEIDY ANDREA RIVERA CASTI-TR'), 'misma_persona')
         self.assertEqual(self.c('YEIDY ANDREA RIVEROS CASTI'), 'misma_persona')
-        self.assertEqual(self.c('YEIDY ANDREA RIVERA CASTI', '1120964198'), 'nombre_mal_escrito')
+        self.assertEqual(self.c('YEIDY ANDREA RIVERA CASTI', '1120964198'), 'misma_persona')
+        # Sin corte, la diferencia de letras sigue siendo "nombre mal escrito"
+        self.assertEqual(self.c('YEIDY ANDREA RIVERA CASTILLO'), 'nombre_mal_escrito')
 
     def test_otra_persona_sigue(self):
         self.assertEqual(self.c('MARIA ANDREA RIVERA CASTILLO'), 'otra_persona')

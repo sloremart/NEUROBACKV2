@@ -35,7 +35,7 @@ from gedocumental.services.ai_revision import (
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida,
     _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
     _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden, _autorizacion_aplicacion_de_mas, _autorizacion_de_mas,
-    obtener_contexto_admision, cantidades_orden,
+    obtener_contexto_admision, cantidades_orden, _clasificar_paciente,
 )
 
 logger = logging.getLogger(__name__)
@@ -371,6 +371,12 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
             return DESCARTADO, (f"El PDF tiene el número de la admisión ({id_adm}) y no el que leyó la IA "
                                 f"({id_doc}).")
         return None
+
+    if (d.startswith((PACIENTE_NO_CORRESPONDE, NOMBRE_INCORRECTO)) and leido
+            and not _mismo_paciente({'nombre_documento': leido, 'identificacion_documento': ''}, datos_admision)) and _clasificar_paciente(
+            {'nombre_documento': leido, 'identificacion_documento': ''}, '', datos_admision) == 'misma_persona':
+        return DESCARTADO, (f"Nombre cortado por la EPS ('{leido}'); el resto coincide con ZeusSalud "
+                            f"({datos_admision.get('paciente')}).")
 
     if d.startswith(NOMBRE_INCORRECTO) and leido:
         if _mismo_paciente({'nombre_documento': leido, 'identificacion_documento': ''}, datos_admision):
