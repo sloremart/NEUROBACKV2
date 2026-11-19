@@ -522,6 +522,12 @@ class DocumentosRequeridosTests(SimpleTestCase):
         self.assertEqual(self.f('BOLIVAR POLIZA', False, set()), ['ORDEN', 'COMPROBANTE'])
         self.assertEqual(self.f('BOLIVAR POLIZA', False, {'ORDEN', 'COMPROBANTE'}), [])
         self.assertEqual(self.f('BOLIVAR SOAT', False, set()), ['ORDEN', 'AUTORIZACION', 'COMPROBANTE'])
+        # Colmédica Línea Zafiro y Colsanitas Plan Integral: sin autorización (regla 2026-11-19)
+        self.assertEqual(self.f('COLMEDICA LINEA ZAFIRO', False, set()), ['ORDEN', 'COMPROBANTE'])
+        self.assertEqual(self.f('COLMEDICA LINEA RUBI', False, set()), ['ORDEN', 'AUTORIZACION', 'COMPROBANTE'])
+        self.assertEqual(self.f('COLSANITAS PLAN INTEGRAL', True, set()), ['ORDEN', 'COMPROBANTE'])
+        self.assertEqual(self.f('COLSANITAS PLAN INTEGRAL', False, set()), ['COMPROBANTE'])
+        self.assertEqual(self.f('COLSANITAS PLAN MODULAR', False, set()), ['AUTORIZACION', 'COMPROBANTE'])
 
     def test_solimed_solo_comprobante(self):
         self.assertEqual(self.f('IPS SOLIMED JD SAS', False, set()), ['COMPROBANTE'])
