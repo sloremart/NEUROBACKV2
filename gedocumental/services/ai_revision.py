@@ -2317,13 +2317,45 @@ def _recaudo_validador_sanitas(texto: str, datos_admision: dict) -> dict | None:
             'valor': str(int(valor)) if valor else '0', 'porcentaje': f"{pct:g}" if pct else '0'}
 
 
+def _admisiones_con_cups(estudio, cups: set) -> dict:
+    """
+    {CUPS: otra admisión del mismo paciente (±3 días, no anulada) donde está facturado}. Caso 36888: la sedación
+    998702 quedó en la admisión 36889 (tipo Terapias) y la resonancia en la 36888. {} si no se puede consultar.
+    """
+    if not estudio or not cups:
+        return {}
+    try:
+        from django.db import connections
+        with connections['zeussalud'].cursor() as cursor:
+            cursor.execute(
+                "SELECT LTRIM(RTRIM(d.cod_servicio)), m.con_estudio FROM sis_maes m "
+                "JOIN sis_maes actual ON actual.con_estudio = %s AND actual.autoid = m.autoid "
+                "JOIN sis_deta d ON d.estudio = m.con_estudio "
+                "WHERE m.con_estudio <> actual.con_estudio AND ISNULL(m.estado, '') <> 'N' "
+                "AND ISNULL(d.ItemRevertido, 0) = 0 "
+                "AND ABS(DATEDIFF(day, d.fecha_servicio, "
+                "    (SELECT MIN(fecha_servicio) FROM sis_deta WHERE estudio = actual.con_estudio))) <= 3 "
+                "ORDER BY m.con_estudio", [int(estudio)])
+            encontradas = {}
+            for codigo, otra in cursor.fetchall():
+                base = str(codigo or '').split('-')[0].lstrip('0').rjust(6, '0')
+                if base in cups:
+                    encontradas.setdefault(base, int(otra))
+            return encontradas
+    except Exception as exc:
+        logger.warning("No se pudo buscar en otras admisiones de %s: %s", estudio, exc)
+        return {}
+
+
 def _agregar_hallazgo_autorizacion_sin_facturar(resultado: dict, datos_admision: dict, texto: str = '') -> bool:
     """Autorización cargada (validador Sanitas) de un servicio que no está facturado en la admisión."""
     fuera = _autorizaciones_fuera_de_admision(texto, datos_admision)
     if not fuera:
         return False
+    otras = _admisiones_con_cups(datos_admision.get("consecutivo"), {c for b in fuera for c in b['servicio']})
     descripcion = ("La autorización trae servicios que no están en la admisión: " + "; ".join(
         f"autorización {b['numero']} → {', '.join(sorted(b['servicio']))}" + (f" ({b['nombre']})" if b['nombre'] else '')
+        + "".join(f", facturado en la admisión {otras[c]}" for c in sorted(b['servicio']) if c in otras)
         for b in fuera) + ". Se deben facturar en el mismo ingreso (ej. resonancia y sedación juntas).")
     logger.info("Autorización con servicios fuera de la admisión: %s", descripcion)
     if resultado["tipo"] == "OK":
