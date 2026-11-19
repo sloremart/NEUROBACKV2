@@ -2802,10 +2802,36 @@ class PdfDanadoError(Exception):
     pass
 
 
+EXTENSIONES_IMAGEN = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tif', '.tiff', '.webp')
+
+
+def imagen_a_pdf_bytes(ruta, tipo=''):
+    """Convierte una imagen (una o varias páginas, p.ej. TIFF) a un PDF en memoria."""
+    from PIL import Image, ImageOps
+    try:
+        with Image.open(ruta) as img:
+            paginas = []
+            for i in range(getattr(img, 'n_frames', 1)):
+                img.seek(i)
+                pagina = ImageOps.exif_transpose(img.copy()).convert('RGB')
+                paginas.append(pagina)
+        buf = io.BytesIO()
+        paginas[0].save(buf, format='PDF', save_all=True, append_images=paginas[1:], resolution=150.0)
+        buf.seek(0)
+        return buf
+    except Exception as e:
+        raise PdfDanadoError(f"No se pudo convertir la imagen {tipo} a PDF ({e}): {ruta}")
+
+
 def append_pdf_seguro(merger, ruta, tipo=''):
     """Agrega un PDF al merger. Si PyPDF2 falla (p.ej. 'EOF marker not found'
     por basura después de %%EOF), intenta recortar el archivo en memoria hasta
     el último %%EOF. Si no se puede, lanza PdfDanadoError indicando el archivo."""
+    # Imágenes (JPG/PNG/etc. cargadas como ORDEN, AUTORIZACION...) se convierten a PDF en memoria
+    if os.path.splitext(ruta)[1].lower() in EXTENSIONES_IMAGEN:
+        merger.append(imagen_a_pdf_bytes(ruta, tipo))
+        return
+
     try:
         merger.append(ruta)
         return
@@ -2821,7 +2847,12 @@ def append_pdf_seguro(merger, ruta, tipo=''):
     if not contenido:
         raise PdfDanadoError(f"El archivo {tipo} está vacío (0 bytes): {ruta}. Debe volver a cargarse.")
     if not contenido.lstrip()[:5].startswith(b'%PDF'):
-        raise PdfDanadoError(f"El archivo {tipo} no es un PDF válido: {ruta}. Debe volver a cargarse.")
+        # Puede ser una imagen guardada con extensión .pdf
+        try:
+            merger.append(imagen_a_pdf_bytes(ruta, tipo))
+            return
+        except PdfDanadoError:
+            raise PdfDanadoError(f"El archivo {tipo} no es un PDF ni una imagen válida: {ruta}. Debe volver a cargarse.")
 
     idx = contenido.rfind(b'%%EOF')
     if idx == -1:
