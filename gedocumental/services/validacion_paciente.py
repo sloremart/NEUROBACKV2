@@ -65,6 +65,7 @@ CAMPOS_SQL = """
     sm.contrato,
     CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0')
               OR EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
+                         AND ISNULL(d.ItemRevertido, 0) = 0
                          AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0'))
          THEN 1 ELSE 0 END,
     ISNULL(sm.estado, ''), LTRIM(RTRIM(ISNULL(sm.MotivoAnulacion, '')))
@@ -121,6 +122,7 @@ def estado_autorizacion(consecutivos) -> dict:
                 f"""SELECT sm.con_estudio, sm.contrato, sm.fecha_ing, ISNULL(sm.estado, ''),
                          CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0')
                                    OR EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
+                                              AND ISNULL(d.ItemRevertido, 0) = 0
                                               AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0'))
                               THEN 1 ELSE 0 END
                     FROM sis_maes sm WHERE sm.con_estudio IN ({', '.join(['%s'] * len(bloque))})""",
