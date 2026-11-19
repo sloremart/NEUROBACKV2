@@ -90,8 +90,8 @@ SQL_CONTRATOS_CON_AUTORIZACION = """
     JOIN contratos co ON co.codigo = sm.contrato
     WHERE sm.fecha_ing >= DATEADD(day, -%s, GETDATE())
       AND UPPER(co.alias) NOT LIKE '%%MRC%%' AND UPPER(co.alias) NOT LIKE '%%PARTICULAR%%'
-      -- IPS Solimed: la autorización no es obligatoria (regla 2026-11-19)
-      AND UPPER(co.alias) NOT LIKE '%%SOLIMED%%'
+      -- IPS Solimed y Bolívar Póliza: no requieren autorización (reglas 2026-11-19)
+      AND UPPER(co.alias) NOT LIKE '%%SOLIMED%%' AND UPPER(co.alias) NOT LIKE '%%BOLIVAR POLIZA%%'
     GROUP BY sm.contrato
     HAVING COUNT(*) >= %s
        AND 100.0 * SUM(CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0') THEN 1 ELSE 0 END)

@@ -9,6 +9,7 @@ Documentos que el admisionista debe cargar en cada admisión, según el contrato
   (la orden viene en la autorización) .............. ORDEN o AUTORIZACION + COMPROBANTE
   MRC .............................................. ORDEN + COMPROBANTE (no lleva autorización)
   IPS Solimed ...................................... solo COMPROBANTE (orden y autorización no son obligatorias)
+  Bolívar Póliza ................................... ORDEN + COMPROBANTE (no requiere autorización)
   Particular ....................................... no se validan documentos
 
 El RESULTADO no está aquí: lo carga la coordinación médica.
@@ -23,6 +24,8 @@ ORDEN, AUTORIZACION, COMPROBANTE = 'ORDEN', 'AUTORIZACION', 'COMPROBANTE'
 CONTRATOS_ORDEN_O_AUTORIZACION = ('IPS CONSULTORIO', 'EQUIPO INTERDISCIPLINARIO')
 # Contratos en los que la orden y la autorización NO son obligatorias: solo el comprobante (regla 2026-11-19)
 CONTRATOS_SOLO_COMPROBANTE = ('SOLIMED',)
+# Contratos que no requieren autorización (ni el documento ni el número en SIESA), como MRC (regla 2026-11-19)
+CONTRATOS_SIN_AUTORIZACION = ('BOLIVAR POLIZA',)
 UFUNCIONAL_CONSULTA = 1   # CONSULTA EXTERNA en Zeus
 
 
@@ -62,7 +65,7 @@ def requisitos(contrato: str, es_consulta: bool) -> list[tuple[str, ...]]:
         return ([(ORDEN,)] if es_consulta else []) + [(AUTORIZACION,), (COMPROBANTE,)]
     if any(n in c for n in CONTRATOS_ORDEN_O_AUTORIZACION):
         return [(ORDEN, AUTORIZACION), (COMPROBANTE,)]
-    if 'MRC' in c:
+    if 'MRC' in c or any(n in c for n in CONTRATOS_SIN_AUTORIZACION):
         return [(ORDEN,), (COMPROBANTE,)]
     return [(ORDEN,), (AUTORIZACION,), (COMPROBANTE,)]
 
