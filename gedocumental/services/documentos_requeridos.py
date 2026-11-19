@@ -43,6 +43,11 @@ def admisiones_particulares(admision_ids) -> set:
     return {adm for adm, d in datos_admisiones(admision_ids).items() if es_particular(d['contrato'])}
 
 
+def admisiones_excluidas(admision_ids) -> set:
+    """Admisiones que solo cargan documentos o ya no aplican: particulares y anuladas en SIESA."""
+    return {adm for adm, d in datos_admisiones(admision_ids).items() if d['anulada'] or es_particular(d['contrato'])}
+
+
 def requisitos(contrato: str, es_consulta: bool) -> list[tuple[str, ...]]:
     """
     Lista de requisitos; cada uno es una tupla de tipos alternativos (basta con tener uno de ellos).
@@ -74,7 +79,10 @@ def cumple(contrato: str, es_consulta: bool, tipos) -> bool:
 
 
 def datos_admisiones(admision_ids) -> dict:
-    """{admisión: {'contrato': alias o nombre del contrato, 'es_consulta': bool}} desde ZeusSalud."""
+    """
+    {admisión: {'contrato', 'es_consulta', 'anulada'}} desde ZeusSalud. Una admisión ANULADA en SIESA (el paciente
+    canceló y no se hizo el examen) no exige documentos ni pasa por Cuentas Médicas.
+    """
     ids = [int(i) for i in admision_ids if i]
     resultado = {}
     with connections['zeussalud'].cursor() as cursor:
@@ -83,10 +91,11 @@ def datos_admisiones(admision_ids) -> dict:
             cursor.execute(
                 f"""SELECT sm.con_estudio,
                            LTRIM(RTRIM(ISNULL(NULLIF(LTRIM(RTRIM(c.alias)), ''), ISNULL(c.nombre, '')))),
-                           sm.ufuncional
+                           sm.ufuncional, ISNULL(sm.estado, '')
                     FROM sis_maes sm LEFT JOIN contratos c ON sm.contrato = c.codigo
                     WHERE sm.con_estudio IN ({', '.join(str(x) for x in bloque)})""")
-            for estudio, contrato, ufuncional in cursor.fetchall():
+            for estudio, contrato, ufuncional, estado in cursor.fetchall():
                 resultado[int(estudio)] = {'contrato': contrato or '',
-                                           'es_consulta': ufuncional == UFUNCIONAL_CONSULTA}
+                                           'es_consulta': ufuncional == UFUNCIONAL_CONSULTA,
+                                           'anulada': (estado or '').strip().upper() == 'N'}
     return resultado

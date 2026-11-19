@@ -66,7 +66,8 @@ CAMPOS_SQL = """
     CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0')
               OR EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
                          AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0'))
-         THEN 1 ELSE 0 END
+         THEN 1 ELSE 0 END,
+    ISNULL(sm.estado, ''), LTRIM(RTRIM(ISNULL(sm.MotivoAnulacion, '')))
 """
 
 # Número de autorización: Zeus no marca qué contratos lo exigen (todos dicen "ControlNumero"), así que se
@@ -99,13 +100,15 @@ SQL_CONTRATOS_CON_AUTORIZACION = """
 
 
 SIN_AUTORIZACION = "No cuenta con número de autorización en SIESA"
+# sis_maes.estado de una admisión anulada en SIESA (ej. el paciente canceló y no se hizo el examen)
+ESTADO_ANULADA = 'N'
 
 
 def estado_autorizacion(consecutivos) -> dict:
     """
     {admisión: 'SIN' | 'CON' | 'NO_APLICA'}: SIN = contrato que exige número de autorización, admisión de los
     últimos DIAS_ADMISION_AUTORIZACION días y sin número en SIESA; NO_APLICA = MRC, particular, contrato que no
-    la usa o admisión antigua.
+    la usa, admisión antigua o anulada en SIESA.
     """
     ids = [int(c) for c in consecutivos]
     estados = {}
@@ -115,15 +118,16 @@ def estado_autorizacion(consecutivos) -> dict:
         for i in range(0, len(ids), 500):
             bloque = ids[i:i + 500]
             cursor.execute(
-                f"""SELECT sm.con_estudio, sm.contrato, sm.fecha_ing,
+                f"""SELECT sm.con_estudio, sm.contrato, sm.fecha_ing, ISNULL(sm.estado, ''),
                          CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0')
                                    OR EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
                                               AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0'))
                               THEN 1 ELSE 0 END
                     FROM sis_maes sm WHERE sm.con_estudio IN ({', '.join(['%s'] * len(bloque))})""",
                 bloque)
-            for estudio, contrato, fecha_ing, tiene in cursor.fetchall():
-                if contrato not in requieren or not fecha_ing or fecha_ing < limite:
+            for estudio, contrato, fecha_ing, estado, tiene in cursor.fetchall():
+                if (contrato not in requieren or not fecha_ing or fecha_ing < limite
+                        or (estado or '').strip().upper() == ESTADO_ANULADA):
                     estados[int(estudio)] = 'NO_APLICA'
                 else:
                     estados[int(estudio)] = 'CON' if tiene else 'SIN'
@@ -174,7 +178,13 @@ def validar_datos_pacientes_bulk(consecutivos) -> dict:
                     bloque,
                 )
                 for fila in cursor.fetchall():
-                    resultados[int(fila[0])] = _evaluar(fila[1:], requieren)
+                    estado, motivo = fila[-2], fila[-1]
+                    if (estado or '').strip().upper() == ESTADO_ANULADA:
+                        # Admisión anulada en SIESA (el paciente no se hizo el examen): no se exige nada
+                        resultados[int(fila[0])] = {"completo": True, "faltantes": [], "anulada": True,
+                                                    "motivo_anulacion": motivo or ''}
+                    else:
+                        resultados[int(fila[0])] = _evaluar(fila[1:-2], requieren)
     except Exception as exc:
         logger.warning("No se pudo validar datos de pacientes: %s", exc)
     return resultados

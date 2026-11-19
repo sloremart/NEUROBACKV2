@@ -404,6 +404,18 @@ def archivos_por_admision(request, numero_admision):
                 "resuelta": r.Resuelta,
             }
 
+        # Documentos que faltan según el contrato (misma regla que la bandeja de Cuentas Médicas) y anulación
+        from gedocumental.services.documentos_requeridos import datos_admisiones, faltantes as doc_faltantes
+        regla = None
+        try:
+            regla = datos_admisiones([numero_admision]).get(int(numero_admision))
+        except Exception:
+            pass
+        documentos_faltantes = None
+        if regla and not regla['anulada'] and not es_particular(regla['contrato']):
+            documentos_faltantes = doc_faltantes(regla['contrato'], regla['es_consulta'],
+                                                 {(a.Tipo or '').upper() for a in archivos})
+
         response_data = {
             "success": True,
             "detail": f"Archivos encontrados para la admisión con número {numero_admision}",
@@ -411,6 +423,9 @@ def archivos_por_admision(request, numero_admision):
                 "archivos": archivo_serializer.data,
                 "observaciones": observacion_serializer.data,
                 "revision_ia": revision_ia,
+                "documentos_faltantes": documentos_faltantes,
+                "anulada": bool(regla and regla['anulada']),
+                "particular": bool(regla and es_particular(regla['contrato'])),
             }
         }
       

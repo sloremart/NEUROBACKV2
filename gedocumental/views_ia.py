@@ -153,6 +153,7 @@ def hallazgos_ia(request):
             admisiones = get_admisiones_zeus_bulk(cursor, admision_ids)
         procedimientos = procedimientos_por_admision(admision_ids)
         contratos = contratos_por_admision(admision_ids)
+        anuladas = {a for a, d in datos_admisiones(admision_ids).items() if d['anulada']}
         usuarios = dict(
             CustomUser.objects.filter(id__in={h.UsuarioId for h in hallazgos if h.UsuarioId})
             .values_list('id', 'nombre')
@@ -165,6 +166,8 @@ def hallazgos_ia(request):
             # Particulares: sus documentos no se validan (no deben salir como hallazgo para nadie)
             if es_particular(contratos.get(h.AdmisionId, '')) or (adm and (adm[2] or '').strip().upper().startswith('PAR')):
                 continue
+            if h.AdmisionId in anuladas:
+                continue   # admisión anulada en SIESA: el paciente no se hizo el examen
             # Tiempo abierto: pendiente → hasta ahora; resuelto → hasta la corrección
             fin = h.FechaResolucion if h.Resuelta and h.FechaResolucion else ahora
             horas_abierto = max(0, int((fin - h.Fecha).total_seconds() // 3600))
@@ -326,8 +329,8 @@ def bandeja_cuentas_medicas(request):
             tiene_resultado = 'RESULTADO' in cargados
             # Documentos exigidos según el contrato (Colsanitas, IPS Consultorio, MRC...)
             req = reglas_docs.get(adm_id, {'contrato': contratos.get(adm_id, ''), 'es_consulta': False})
-            # Particulares: solo se cargan documentos; Cuentas Médicas no los revisa
-            if (es_particular(req['contrato']) or es_particular(contratos.get(adm_id, ''))
+            # Particulares: solo se cargan documentos; Cuentas Médicas no los revisa. Anuladas en SIESA: no aplican
+            if (req.get('anulada') or es_particular(req['contrato']) or es_particular(contratos.get(adm_id, ''))
                     or entidad.upper().startswith('PAR')):
                 continue
             faltantes_doc = doc_faltantes(req['contrato'], req['es_consulta'], cargados) + \
@@ -434,8 +437,8 @@ def documentos_faltantes(request):
         faltan = {}
         for a in ids:
             r = reglas.get(a)
-            if r is None:
-                continue   # no está en Zeus
+            if r is None or r.get('anulada'):
+                continue   # no está en Zeus, o está anulada en SIESA (no se hizo el examen)
             f = doc_faltantes(r['contrato'], r['es_consulta'], cargados.get(a, set()))
             if f:
                 faltan[a] = f
