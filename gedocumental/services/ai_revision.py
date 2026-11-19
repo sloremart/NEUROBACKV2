@@ -1232,6 +1232,13 @@ def _contiene_todo_el_nombre(nombre: str, datos_admision: dict) -> bool:
     return True
 
 
+def _es_recien_nacido(nombre) -> bool:
+    """'HIJA DE MARILYN', 'HIJO DE ...', 'RN DE ...', 'RECIEN NACIDO', 'NN': bebé aún sin nombre registrado."""
+    import unicodedata
+    n = unicodedata.normalize('NFKD', str(nombre or '')).encode('ascii', 'ignore').decode().upper()
+    return bool(re.search(r'\b(HIJ[OA]|RN|R\.N\.?|NN)\s+(DE|DEL)\b|\bRECIEN\s+NACID[OA]\b|^\s*(RN|NN)\b', n))
+
+
 def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> str:
     """
     Cuando la IA dice que el paciente NO coincide, decide con reglas fijas:
@@ -1246,6 +1253,11 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
     from difflib import SequenceMatcher
 
     if _mismo_paciente(resultado, datos_admision):
+        return "misma_persona"
+
+    # Recién nacido sin registro civil: la orden lo nombra por la mamá ('HIJA DE MARILYN', 'RN DE ...', 'RECIEN
+    # NACIDO') y con un número provisional (CN); en SIESA ya tiene su nombre. No es otra persona (caso 36536)
+    if _es_recien_nacido(resultado.get('nombre_documento') or resultado.get('paciente_documento')):
         return "misma_persona"
 
     # El nombre COMPLETO del paciente de la admisión está escrito en el documento: es su documento,

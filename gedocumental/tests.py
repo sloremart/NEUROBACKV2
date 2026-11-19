@@ -150,6 +150,26 @@ class OrdenLlenadaAManoTests(SimpleTestCase):
         self.assertNotEqual(self._llamar({"manuscrito": "NO"})['tipo'], 'OK')
 
 
+class RecienNacidoTests(SimpleTestCase):
+    """Caso 36536: orden 'VANDERWERFF GUTIERREZ HIJA DE MARILYN STEPHANY' (CN); SIESA 'SARA LOPEZ VANDERWERFF'."""
+    ADM = dict(ADMISION, paciente='SARA LOPEZ VANDERWERFF', identificacion='RC 1253259727', cups=[])
+
+    def test_no_es_hallazgo(self):
+        from gedocumental.services.ai_revision import _clasificar_paciente, _es_recien_nacido
+        for nombre in ('Hija de Marilyn', 'VANDERWERFF GUTIERREZ HIJA DE MARILYN STEPHANY', 'RN DE ANA PEREZ',
+                       'RECIEN NACIDO PEREZ', 'HIJO DEL SR GOMEZ'):
+            self.assertTrue(_es_recien_nacido(nombre), nombre)
+            self.assertEqual(_clasificar_paciente({'nombre_documento': nombre,
+                                                   'identificacion_documento': '26101010349079'}, '', self.ADM),
+                             'misma_persona', nombre)
+        for nombre in ('MARIA HIJAR PEREZ', 'ARNOLDO ROJAS', 'RENATA NUNEZ'):
+            self.assertFalse(_es_recien_nacido(nombre), nombre)
+
+    def test_hallazgo_existente_se_cierra(self):
+        desc = "Paciente no corresponde: documento 'Hija de Marilyn', admisión 'SARA LOPEZ VANDERWERFF'."
+        self.assertEqual(evaluar_hallazgo('ORDEN', desc, self.ADM)[0], DESCARTADO)
+
+
 class NombreCortadoPorLaEpsTests(SimpleTestCase):
     """Caso 36811: Capital Salud imprime 'YEIDY ANDREA RIVERA CASTI' (cortado); SIESA 'YEIDY ANDREA RIVEROS CASTILLO'."""
     ADM = {'paciente': 'YEIDY ANDREA RIVEROS CASTILLO', 'identificacion': 'CC 1120964198'}
