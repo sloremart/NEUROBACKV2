@@ -601,6 +601,10 @@ def reverificar_hallazgos_sin_ia(admision=None, tipo_documento=None, aplicar=Tru
                                 'Descripcion': h.Descripcion})
 
         if not decision:
+            if not (releer and not completo):   # sigue abierto (para el resumen por motivo)
+                detalle.append({'IdRevision': h.IdRevision, 'Admision': h.AdmisionId,
+                                'TipoDocumento': h.TipoDocumento, 'Resolucion': None,
+                                'Nota': None, 'Descripcion': h.Descripcion})
             continue
         resolucion, nota = decision
         resumen[resolucion] += 1

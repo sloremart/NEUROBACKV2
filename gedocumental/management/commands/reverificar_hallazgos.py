@@ -27,6 +27,40 @@ class Command(BaseCommand):
         parser.add_argument('--max-segundos', type=int, default=600, help="Tope de tiempo leyendo PDFs")
         parser.add_argument('--requieren-ia', action='store_true',
                             help="Muestra también los escaneados que solo la IA puede volver a leer")
+        parser.add_argument('--resumen', action='store_true',
+                            help="Cuenta los hallazgos que siguen abiertos por tipo de documento y motivo")
+
+    MOTIVOS = (
+        ('Paciente / nombre / documento', r'paciente|nombre|identificaci|documento del usuario|cedula'),
+        ('Cantidad', r'cantidad'),
+        ('Procedimiento / CUPS', r'procedimiento|cups'),
+        ('Firma', r'firma'),
+        ('Recaudo / copago / valor', r'recaudo|copago|cuota|valor'),
+        ('Fecha / vigencia', r'fecha|vencid|vigencia'),
+        ('Autorización (número / SIESA)', r'autorizaci'),
+    )
+
+    def _motivo(self, descripcion):
+        import re
+        import unicodedata
+        d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+        for nombre, patron in self.MOTIVOS:
+            if re.search(patron, d):
+                return nombre
+        return 'Otro'
+
+    def _resumen(self, detalle):
+        from collections import Counter
+        abiertos = [d for d in detalle if not d['Resolucion']]
+        por_tipo = Counter(d['TipoDocumento'] for d in abiertos)
+        por_motivo = Counter((d['TipoDocumento'], self._motivo(d['Descripcion'])) for d in abiertos)
+        self.stdout.write(f"\nHallazgos que siguen abiertos: {len(abiertos)} "
+                          f"(en {len({d['Admision'] for d in abiertos})} admisiones)")
+        for tipo, n in por_tipo.most_common():
+            self.stdout.write(f"  {tipo:<14} {n:>4}")
+            for (t, motivo), m in sorted(por_motivo.items(), key=lambda x: -x[1]):
+                if t == tipo:
+                    self.stdout.write(f"      {motivo:<32} {m:>4}")
 
     def handle(self, *args, **o):
         r = reverificar_hallazgos_sin_ia(admision=o['admision'], tipo_documento=o['tipo'],
@@ -37,9 +71,11 @@ class Command(BaseCommand):
             if d['Resolucion']:
                 self.stdout.write(f"  {verbo} {d['Resolucion']:<10} {d['Admision']} {d['TipoDocumento']:<12} "
                                   f"#{d['IdRevision']}: {d['Nota']}")
-            elif o['requieren_ia']:
+            elif o['requieren_ia'] and d['Nota']:
                 self.stdout.write(f"  Sin cerrar           {d['Admision']} {d['TipoDocumento']:<12} "
                                   f"#{d['IdRevision']} ({d['Nota']}): {d['Descripcion'][:120]}")
+        if o['resumen']:
+            self._resumen(r['detalle'])
         s = r['resumen']
         self.stdout.write(self.style.SUCCESS(
             f"Pendientes revisados: {s['revisados']} | corregidos en Zeus: {s['CORREGIDO']} | "
