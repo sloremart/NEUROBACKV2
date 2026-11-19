@@ -815,23 +815,20 @@ class RecaudoValidadorSanitasTests(SimpleTestCase):
         self.assertIsNone(_recaudo_validador_sanitas(self.TEXTO, dict(ADMISION, cups=['879301 - TAC (cant. 1)'])))
         self.assertIsNone(_recaudo_validador_sanitas('Factura de venta', resonancia))
 
-    def test_sedacion_autorizada_sin_facturar_en_la_admision(self):
-        # Resonancia y sedación se facturan juntas en un solo ingreso: la sedación cargada y sin facturar es hallazgo
-        from gedocumental.services.ai_revision import _agregar_hallazgo_autorizacion_sin_facturar
+    def test_resonancia_y_sedacion_en_admisiones_separadas(self):
+        # Regla 2026-11-19: estudio y sedación siempre van en dos admisiones; la autorización de la sedación en el
+        # PDF de la resonancia no es hallazgo (los registrados se descartan) y el copago no se valida
+        from gedocumental.services import recaudo
         resonancia = dict(ADMISION, cups=['883101 - RESONANCIA MAGNÉTICA DE CEREBRO (cant. 1)'])
-        r = {'tipo': 'OK', 'descripcion': 'Documento correcto'}
-        _agregar_hallazgo_autorizacion_sin_facturar(r, resonancia, self.TEXTO)
-        self.assertEqual(r['tipo'], 'AUTORIZACION')
-        self.assertIn('autorización 367288940 → 998702 (SOPORTE DE SEDACION PARA CONSULTA O APOYO DIAGNOSTICO)',
-                      r['descripcion'])
-        self.assertNotIn('362023461', r['descripcion'])
-        # Con la sedación en la admisión: sin hallazgo, y la reverificación cierra el anterior
-        ambas = dict(ADMISION, cups=resonancia['cups'] + ['998702 - SOPORTE DE SEDACION (cant. 1)'])
-        r2 = {'tipo': 'OK', 'descripcion': 'Documento correcto'}
-        _agregar_hallazgo_autorizacion_sin_facturar(r2, ambas, self.TEXTO)
-        self.assertEqual(r2['tipo'], 'OK')
-        self.assertEqual(evaluar_hallazgo('AUTORIZACION', r['descripcion'], ambas)[0], CORREGIDO)
-        self.assertIsNone(evaluar_hallazgo('AUTORIZACION', r['descripcion'], resonancia))
+        d = ("La autorización trae servicios que no están en la admisión: autorización 367288940 → 998702 "
+             "(SOPORTE DE SEDACION PARA CONSULTA O APOYO DIAGNOSTICO), facturado en la admisión 36889. Se deben "
+             "facturar en el mismo ingreso (ej. resonancia y sedación juntas).")
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', d, resonancia)[0], DESCARTADO)
+        leido = {'requiere_pago': 'SI', 'tipo_cobro': 'COPAGO', 'valor': '0', 'porcentaje': '11.5'}
+        with mock.patch.object(recaudo, 'con_sedacion', return_value=True), \
+                mock.patch.object(recaudo, 'datos_recaudo_zeus') as zeus:
+            self.assertIsNone(recaudo.verificar_recaudo(leido, 36888))
+            zeus.assert_not_called()
 
 
 class CantidadPorCupsTests(SimpleTestCase):

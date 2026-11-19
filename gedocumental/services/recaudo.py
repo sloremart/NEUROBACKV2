@@ -34,6 +34,10 @@ PORCENTAJE_COPAGO_MAXIMO = 50.0
 AFILIADO_ZEUS = {1: 'COTIZANTE', 2: 'BENEFICIARIO', 3: 'COTIZANTE', 4: 'COTIZANTE'}
 
 VALIDAR_TIPO_AFILIADO = False
+# Sedación de resonancia/imágenes: siempre va en una admisión aparte de la del estudio, y el copago se cobra
+# sobre los dos servicios en una sola de ellas; en esas admisiones no se valida el recaudo (regla 2026-11-19)
+CUPS_SEDACION = ('998702',)
+DIAS_PAREJA_SEDACION = 3
 TOLERANCIA_PESOS = 100   # SIESA redondea el copago a la centena
 
 
@@ -133,6 +137,28 @@ def _esperado_sanitas(z: dict, categoria: str, afiliado: str):
     return None   # consulta y estudio en la misma admisión, o afiliado desconocido
 
 
+def con_sedacion(estudio) -> bool:
+    """
+    True si la admisión es de una pareja estudio + sedación (998702): la propia admisión tiene la sedación, u otra
+    admisión del mismo paciente (no anulada, ±3 días) la tiene. Caso 36888 (resonancia) / 36889 (sedación).
+    """
+    try:
+        marcas = ', '.join(['%s'] * len(CUPS_SEDACION))
+        with connections['zeussalud'].cursor() as cursor:
+            cursor.execute(
+                "SELECT TOP 1 1 FROM sis_maes actual "
+                "JOIN sis_maes m ON m.autoid = actual.autoid AND ISNULL(m.estado, '') <> 'N' "
+                "JOIN sis_deta d ON d.estudio = m.con_estudio AND ISNULL(d.ItemRevertido, 0) = 0 "
+                f"WHERE actual.con_estudio = %s AND LEFT(LTRIM(d.cod_servicio), 6) IN ({marcas}) "
+                "AND ABS(DATEDIFF(day, d.fecha_servicio, "
+                "    (SELECT MIN(fecha_servicio) FROM sis_deta WHERE estudio = actual.con_estudio))) <= %s",
+                [int(estudio), *CUPS_SEDACION, DIAS_PAREJA_SEDACION])
+            return cursor.fetchone() is not None
+    except Exception as exc:
+        logger.warning("No se pudo verificar si %s tiene sedación: %s", estudio, exc)
+        return False
+
+
 def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
     """
     Compara las condiciones de pago leídas del documento con lo recaudado en SIESA.
@@ -140,6 +166,8 @@ def verificar_recaudo(recaudo_doc: dict, estudio) -> tuple[str, str] | None:
     """
     if not isinstance(recaudo_doc, dict) or not estudio:
         return None
+    if con_sedacion(estudio):
+        return None   # estudio + sedación en dos admisiones: el copago no se valida
     requiere = _opcion(recaudo_doc.get('requiere_pago'))
     tipo_doc = _opcion(recaudo_doc.get('tipo_cobro'))
     valor_doc = _numero(recaudo_doc.get('valor'))

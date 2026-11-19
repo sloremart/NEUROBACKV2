@@ -2222,10 +2222,11 @@ def analizar_documento(ruta_absoluta: str, tipo_documento: str, datos_admision: 
             resultado["llamadas"] = primera.get("llamadas", 1) + resultado.get("llamadas", 1)
     resultado["modo"] = ("mixto" if texto else "imagen") if imagenes else "texto"
     if (tipo_documento or '').upper() == 'AUTORIZACION':
-        # Con un servicio autorizado sin facturar, el copago no se puede comparar (se cobró sobre todos los
-        # servicios, caso 36888): se revisa cuando se agregue el servicio a la admisión
-        if not _agregar_hallazgo_autorizacion_sin_facturar(resultado, datos_admision, texto):
-            _agregar_hallazgo_recaudo(resultado, datos_admision, texto)
+        # La autorización de un servicio facturado en otra admisión (ej. la sedación de la resonancia) NO es
+        # hallazgo: estudio y sedación siempre van en admisiones separadas (regla 2026-11-19; se quitó el hallazgo
+        # 'La autorización trae servicios que no están en la admisión'). En esas admisiones el copago no se valida
+        # (recaudo.con_sedacion)
+        _agregar_hallazgo_recaudo(resultado, datos_admision, texto)
     return resultado
 
 
@@ -2279,19 +2280,6 @@ def _bloques_validador_sanitas(texto: str) -> list:
     return bloques
 
 
-def _autorizaciones_fuera_de_admision(texto: str, datos_admision: dict) -> list:
-    """
-    Autorizaciones seleccionadas en el validador de Sanitas cuyo servicio NO está en la admisión, cuando otra
-    sí corresponde a la admisión (caso 36888: resonancia 883101 en la admisión y la sedación 998702 autorizada y
-    cargada, pero sin facturar en ese ingreso; resonancia y sedación se facturan juntas en un solo ingreso).
-    """
-    admision = _cups_de_admision(datos_admision)
-    bloques = [b for b in _bloques_validador_sanitas(texto) if b['servicio']]
-    if not admision or not any(b['servicio'] & admision for b in bloques):
-        return []
-    return [b for b in bloques if not (b['servicio'] & admision)]
-
-
 def _recaudo_validador_sanitas(texto: str, datos_admision: dict) -> dict | None:
     """
     Condiciones de pago del validador de derechos de Sanitas en PDF digital, leídas del texto (no de la IA).
@@ -2315,54 +2303,6 @@ def _recaudo_validador_sanitas(texto: str, datos_admision: dict) -> dict | None:
     valor = rec if rec >= 1 else 0
     return {'requiere_pago': 'SI' if (pct or valor) else 'NO', 'tipo_cobro': b['tipo'],
             'valor': str(int(valor)) if valor else '0', 'porcentaje': f"{pct:g}" if pct else '0'}
-
-
-def _admisiones_con_cups(estudio, cups: set) -> dict:
-    """
-    {CUPS: otra admisión del mismo paciente (±3 días, no anulada) donde está facturado}. Caso 36888: la sedación
-    998702 quedó en la admisión 36889 (tipo Terapias) y la resonancia en la 36888. {} si no se puede consultar.
-    """
-    if not estudio or not cups:
-        return {}
-    try:
-        from django.db import connections
-        with connections['zeussalud'].cursor() as cursor:
-            cursor.execute(
-                "SELECT LTRIM(RTRIM(d.cod_servicio)), m.con_estudio FROM sis_maes m "
-                "JOIN sis_maes actual ON actual.con_estudio = %s AND actual.autoid = m.autoid "
-                "JOIN sis_deta d ON d.estudio = m.con_estudio "
-                "WHERE m.con_estudio <> actual.con_estudio AND ISNULL(m.estado, '') <> 'N' "
-                "AND ISNULL(d.ItemRevertido, 0) = 0 "
-                "AND ABS(DATEDIFF(day, d.fecha_servicio, "
-                "    (SELECT MIN(fecha_servicio) FROM sis_deta WHERE estudio = actual.con_estudio))) <= 3 "
-                "ORDER BY m.con_estudio", [int(estudio)])
-            encontradas = {}
-            for codigo, otra in cursor.fetchall():
-                base = str(codigo or '').split('-')[0].lstrip('0').rjust(6, '0')
-                if base in cups:
-                    encontradas.setdefault(base, int(otra))
-            return encontradas
-    except Exception as exc:
-        logger.warning("No se pudo buscar en otras admisiones de %s: %s", estudio, exc)
-        return {}
-
-
-def _agregar_hallazgo_autorizacion_sin_facturar(resultado: dict, datos_admision: dict, texto: str = '') -> bool:
-    """Autorización cargada (validador Sanitas) de un servicio que no está facturado en la admisión."""
-    fuera = _autorizaciones_fuera_de_admision(texto, datos_admision)
-    if not fuera:
-        return False
-    otras = _admisiones_con_cups(datos_admision.get("consecutivo"), {c for b in fuera for c in b['servicio']})
-    descripcion = ("La autorización trae servicios que no están en la admisión: " + "; ".join(
-        f"autorización {b['numero']} → {', '.join(sorted(b['servicio']))}" + (f" ({b['nombre']})" if b['nombre'] else '')
-        + "".join(f", facturado en la admisión {otras[c]}" for c in sorted(b['servicio']) if c in otras)
-        for b in fuera) + ". Se deben facturar en el mismo ingreso (ej. resonancia y sedación juntas).")
-    logger.info("Autorización con servicios fuera de la admisión: %s", descripcion)
-    if resultado["tipo"] == "OK":
-        resultado.update(tipo="AUTORIZACION", descripcion=descripcion, ajuste_servicio_sin_facturar=True)
-    else:
-        resultado["descripcion"] = f"{resultado.get('descripcion', '')} | {descripcion}"
-    return True
 
 
 def _agregar_hallazgo_recaudo(resultado: dict, datos_admision: dict, texto: str = '') -> None:

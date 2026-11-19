@@ -339,14 +339,9 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     if not d or ' | ' in d:
         return None   # varios motivos en un hallazgo: no se cierra por uno solo
     if d.startswith('La autorización trae servicios que no están en la admisión'):
-        # Se cierra cuando todos esos CUPS ya están facturados en la admisión (caso 36888: sedación 998702)
-        import re as _re
-        pendientes = set(_re.findall(r'→ ([0-9A-Z, ]+?)(?: \(|;|\.)', d))
-        cups = {c.strip() for p in pendientes for c in p.split(',') if c.strip()}
-        en_zeus = {str(c).split(' - ')[0].strip().split('-')[0] for c in datos_admision.get('cups') or []}
-        if cups and cups <= en_zeus:
-            return CORREGIDO, "Los servicios de la autorización ya están facturados en la admisión."
-        return None
+        # Estudio y sedación van siempre en admisiones separadas: no es hallazgo (regla 2026-11-19)
+        return DESCARTADO, ("El estudio y la sedación se facturan en admisiones separadas; la autorización de "
+                            "la otra admisión no es un error.")
     tipo = (tipo_documento or '').upper()
     id_adm = _digitos(datos_admision.get('identificacion'))
     tokens_adm = _tokens_nombre(datos_admision.get('paciente'))
