@@ -26,6 +26,8 @@ CONTRATOS_ORDEN_O_AUTORIZACION = ('IPS CONSULTORIO', 'EQUIPO INTERDISCIPLINARIO'
 CONTRATOS_SOLO_COMPROBANTE = ('SOLIMED',)
 # Contratos que no requieren autorización (ni el documento ni el número en SIESA), como MRC (regla 2026-11-19)
 CONTRATOS_SIN_AUTORIZACION = ('BOLIVAR POLIZA', 'COLMEDICA LINEA ZAFIRO', 'COLSANITAS PLAN INTEGRAL')
+# Colsanitas: contratos en que la consulta de PRIMERA VEZ no requiere orden (el control sí)
+COLSANITAS_SIN_ORDEN_PRIMERA_VEZ = ('COLSANITAS PLAN INTEGRAL',)
 UFUNCIONAL_CONSULTA = 1   # CONSULTA EXTERNA en Zeus
 
 
@@ -51,8 +53,9 @@ def admisiones_excluidas(admision_ids) -> set:
     return {adm for adm, d in datos_admisiones(admision_ids).items() if d['anulada'] or es_particular(d['contrato'])}
 
 
-def requisitos(contrato: str, es_consulta: bool) -> list[tuple[str, ...]]:
+def requisitos(contrato: str, es_consulta: bool, primera_vez: bool = False) -> list[tuple[str, ...]]:
     """
+    primera_vez: consulta de primera vez (CUPS 8902xx); Colsanitas Plan Integral no pide orden en ellas.
     Lista de requisitos; cada uno es una tupla de tipos alternativos (basta con tener uno de ellos).
     Ej. IPS Consultorio: [('ORDEN', 'AUTORIZACION'), ('COMPROBANTE',)].
     """
@@ -63,7 +66,9 @@ def requisitos(contrato: str, es_consulta: bool) -> list[tuple[str, ...]]:
         return [(COMPROBANTE,)]
     sin_autorizacion = any(n in c for n in CONTRATOS_SIN_AUTORIZACION)
     if 'COLSANITAS' in c:
-        return (([(ORDEN,)] if es_consulta else []) + ([] if sin_autorizacion else [(AUTORIZACION,)])
+        # Plan Integral: la consulta de primera vez no requiere orden; el control sí (regla 2026-11-19)
+        pide_orden = es_consulta and not (primera_vez and any(n in c for n in COLSANITAS_SIN_ORDEN_PRIMERA_VEZ))
+        return (([(ORDEN,)] if pide_orden else []) + ([] if sin_autorizacion else [(AUTORIZACION,)])
                 + [(COMPROBANTE,)])
     if any(n in c for n in CONTRATOS_ORDEN_O_AUTORIZACION):
         return [(ORDEN, AUTORIZACION), (COMPROBANTE,)]
@@ -72,20 +77,21 @@ def requisitos(contrato: str, es_consulta: bool) -> list[tuple[str, ...]]:
     return [(ORDEN,), (AUTORIZACION,), (COMPROBANTE,)]
 
 
-def faltantes(contrato: str, es_consulta: bool, tipos_cargados) -> list[str]:
+def faltantes(contrato: str, es_consulta: bool, tipos_cargados, primera_vez: bool = False) -> list[str]:
     """Requisitos sin cumplir, para mostrar: ['ORDEN', 'ORDEN o AUTORIZACION', ...]."""
     tipos = {(t or '').upper() for t in tipos_cargados}
-    return [' o '.join(r) for r in requisitos(contrato, es_consulta) if not tipos & set(r)]
+    return [' o '.join(r) for r in requisitos(contrato, es_consulta, primera_vez) if not tipos & set(r)]
 
 
-def cumple(contrato: str, es_consulta: bool, tipos) -> bool:
+def cumple(contrato: str, es_consulta: bool, tipos, primera_vez: bool = False) -> bool:
     """True si los tipos dados (cargados, o aprobados por la IA) cubren todos los requisitos."""
-    return not faltantes(contrato, es_consulta, tipos)
+    return not faltantes(contrato, es_consulta, tipos, primera_vez)
 
 
 def datos_admisiones(admision_ids) -> dict:
     """
-    {admisión: {'contrato', 'es_consulta', 'anulada'}} desde ZeusSalud. Una admisión ANULADA en SIESA (el paciente
+    {admisión: {'contrato', 'es_consulta', 'primera_vez', 'anulada'}} desde ZeusSalud. primera_vez: tiene consulta
+    de primera vez (CUPS 8902xx) y ninguna de control (8903xx), sin contar cargos revertidos. Una admisión ANULADA en SIESA (el paciente
     canceló y no se hizo el examen) no exige documentos ni pasa por Cuentas Médicas.
     """
     ids = [int(i) for i in admision_ids if i]
@@ -96,11 +102,19 @@ def datos_admisiones(admision_ids) -> dict:
             cursor.execute(
                 f"""SELECT sm.con_estudio,
                            LTRIM(RTRIM(ISNULL(NULLIF(LTRIM(RTRIM(c.alias)), ''), ISNULL(c.nombre, '')))),
-                           sm.ufuncional, ISNULL(sm.estado, '')
+                           sm.ufuncional, ISNULL(sm.estado, ''),
+                           CASE WHEN EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
+                                             AND ISNULL(d.ItemRevertido, 0) = 0
+                                             AND LEFT(LTRIM(d.cod_servicio), 4) = '8902')
+                                 AND NOT EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
+                                             AND ISNULL(d.ItemRevertido, 0) = 0
+                                             AND LEFT(LTRIM(d.cod_servicio), 4) = '8903')
+                                THEN 1 ELSE 0 END
                     FROM sis_maes sm LEFT JOIN contratos c ON sm.contrato = c.codigo
                     WHERE sm.con_estudio IN ({', '.join(str(x) for x in bloque)})""")
-            for estudio, contrato, ufuncional, estado in cursor.fetchall():
+            for estudio, contrato, ufuncional, estado, primera_vez in cursor.fetchall():
                 resultado[int(estudio)] = {'contrato': contrato or '',
                                            'es_consulta': ufuncional == UFUNCIONAL_CONSULTA,
+                                           'primera_vez': bool(primera_vez),
                                            'anulada': (estado or '').strip().upper() == 'N'}
     return resultado

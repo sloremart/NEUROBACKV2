@@ -509,9 +509,9 @@ class AplicacionMedicamentoTests(SimpleTestCase):
 class DocumentosRequeridosTests(SimpleTestCase):
     """Documentos exigidos por contrato (pestaña Documentos faltantes, bandeja CM, Gestión de facturación)."""
 
-    def f(self, contrato, consulta, tipos):
+    def f(self, contrato, consulta, tipos, primera_vez=False):
         from gedocumental.services.documentos_requeridos import faltantes
-        return faltantes(contrato, consulta, tipos)
+        return faltantes(contrato, consulta, tipos, primera_vez)
 
     def test_eps_exige_los_tres(self):
         for contrato in ('CAPITAL SALUD SUBSIDIADO', 'SANITAS EVENTO CONTRIBUTIVO', 'FOMAG', 'SALUD TOTAL CONTRIBUTIVO',
@@ -526,6 +526,9 @@ class DocumentosRequeridosTests(SimpleTestCase):
         self.assertEqual(self.f('COLMEDICA LINEA ZAFIRO', False, set()), ['ORDEN', 'COMPROBANTE'])
         self.assertEqual(self.f('COLMEDICA LINEA RUBI', False, set()), ['ORDEN', 'AUTORIZACION', 'COMPROBANTE'])
         self.assertEqual(self.f('COLSANITAS PLAN INTEGRAL', True, set()), ['ORDEN', 'COMPROBANTE'])
+        # Plan Integral: consulta de primera vez sin orden; control con orden
+        self.assertEqual(self.f('COLSANITAS PLAN INTEGRAL', True, set(), True), ['COMPROBANTE'])
+        self.assertEqual(self.f('COLSANITAS PLAN MODULAR', True, set(), True), ['ORDEN', 'AUTORIZACION', 'COMPROBANTE'])
         self.assertEqual(self.f('COLSANITAS PLAN INTEGRAL', False, set()), ['COMPROBANTE'])
         self.assertEqual(self.f('COLSANITAS PLAN MODULAR', False, set()), ['AUTORIZACION', 'COMPROBANTE'])
 

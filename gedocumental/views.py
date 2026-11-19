@@ -414,7 +414,8 @@ def archivos_por_admision(request, numero_admision):
         documentos_faltantes = None
         if regla and not regla['anulada'] and not es_particular(regla['contrato']):
             documentos_faltantes = doc_faltantes(regla['contrato'], regla['es_consulta'],
-                                                 {(a.Tipo or '').upper() for a in archivos})
+                                                 {(a.Tipo or '').upper() for a in archivos},
+                                                 regla.get('primera_vez', False))
 
         response_data = {
             "success": True,
