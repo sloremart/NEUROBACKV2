@@ -767,6 +767,34 @@ class CantidadPorCupsTests(SimpleTestCase):
         # 33030: la anotación (8) no es la de Zeus (1): sigue siendo hallazgo
         self.assertEqual(_cantidades_distintas_zeus('930860:2; 891509:8', self.ADM, '8'), [('891509', 8, 1)])
 
+    def test_dos_autorizaciones_con_anotaciones_distintas(self):
+        # Caso 36927: tabla 1 en ambas, "CANTIDAD 8" (891509) y "CANTIDAD 2" (930860); Zeus 8 y 2. La IA leyó
+        # solo una anotación (2): la relectura por autorización trae las dos y coinciden con Zeus
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai, _anotada_igual_zeus
+        adm = dict(self.ADM, cups=['891509 - NEUROCONDUCCIÓN (CADA NERVIO) 8 NERVIOS (cant. 8)',
+                                   '930860 - ELECTROMIOGRAFÍA EN CADA EXTREMIDAD (UNO O MÁS MÚSCULOS) (cant. 2)'])
+        revision = {"nombre_documento": "ARNOLDO ROJAS", "identificacion_documento": "17313342",
+                    "paciente_coincide": "SI", "procedimientos_coinciden": "SI", "firma_paciente": "NO_APLICA",
+                    "tipo": "OK", "descripcion": "Documento correcto", "cantidades_documento": "891509:1; 930860:2",
+                    "cantidad_anotada": "2"}
+        def respuesta(contenido):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
+                                  usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [
+            respuesta(revision),
+            respuesta({"anotaciones": [{"cups": "891509", "cantidad": "CANTIDAD 8"}, {"cups": "930860", "cantidad": "2"}]})]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            r = _llamar_openai('', ['img'], 'AUTORIZACION', adm)
+        self.assertEqual(r['tipo'], 'OK')
+        self.assertEqual(r['cantidad_anotada'], '891509:8; 930860:2')
+        # Anotación de otra cantidad o sin la del CUPS del hallazgo: sigue
+        d = 'Cantidad autorizada en el documento es 1, se esperaba 8 para el procedimiento 891509.'
+        self.assertFalse(_anotada_igual_zeus('891509:6; 930860:2', adm, d))
+        self.assertFalse(_anotada_igual_zeus('930860:2', adm, d))
+
     def test_mismo_cups_en_dos_autorizaciones_se_suma(self):
         from gedocumental.services.ai_revision import _cantidades_distintas_zeus
         self.assertEqual(_cantidades_distintas_zeus('930860:1; 930860:1', self.ADM), [])

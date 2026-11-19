@@ -401,9 +401,13 @@ PROMPT_RELEER_NOMBRE = (
 
 
 PROMPT_RELEER_CANTIDAD = (
-    "En esta autorización de servicios, busca una anotación de cantidad que esté FUERA de la tabla de servicios "
+    "En esta autorización de servicios, busca la anotación de cantidad que está FUERA de la tabla de servicios "
     "(ej. \"CANTIDAD 8\" al pie, escrita a mano, con sello o en observaciones). No tomes la columna \"Cantidad\" "
-    "de la tabla. Responde en JSON: {\"cantidad_anotada\": \"<el número, o '' si no hay anotación>\"}"
+    "de la tabla. El documento puede traer VARIAS autorizaciones (una por página o una debajo de otra): para CADA "
+    "una da el código CUPS de su servicio autorizado y el número de SU anotación (si dice \"CANTIDAD\" y debajo "
+    "\"CANTIDAD 8\", es 8). Responde en JSON: "
+    "{\"anotaciones\": [{\"cups\": \"<código de 6 dígitos>\", \"cantidad\": \"<número, o '' si esa autorización "
+    "no tiene anotación>\"}]}"
 )
 
 
@@ -422,15 +426,37 @@ def _releer_cantidad(client, modelo: str, imagenes: list[str]) -> tuple[str, lis
         )
         uso = getattr(respuesta, 'usage', None)
         tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
-        return str(json.loads(respuesta.choices[0].message.content).get("cantidad_anotada") or ''), tokens
+        datos = json.loads(respuesta.choices[0].message.content)
+        anotaciones = datos.get("anotaciones")
+        if isinstance(anotaciones, list):
+            # "891509:8; 930860:2" (sin CUPS legible queda solo el número)
+            partes = []
+            for a in anotaciones:
+                if not isinstance(a, dict):
+                    continue
+                n = re.findall(r'\d+', str(a.get("cantidad") or ''))
+                cups = re.findall(r'\d{6}', str(a.get("cups") or ''))
+                if n:
+                    partes.append(f"{cups[0]}:{n[0]}" if cups else n[0])
+            return "; ".join(partes), tokens
+        return str(datos.get("cantidad_anotada") or ''), tokens
     except Exception as exc:
         logger.warning("No se pudo releer la cantidad anotada: %s", exc)
         return '', [0, 0]
 
 
-def _anotada_igual_zeus(anotada, datos_admision: dict) -> bool:
-    """La anotación "CANTIDAD N" es la cantidad de Zeus (todos los CUPS de la admisión con la misma cantidad)."""
-    import re
+def _anotada_igual_zeus(anotada, datos_admision: dict, descripcion: str = '') -> bool:
+    """
+    La anotación "CANTIDAD N" es la cantidad de Zeus. Con varias autorizaciones en el PDF ('891509:8; 930860:2',
+    caso 36927) se compara cada CUPS con su cantidad en Zeus; los CUPS del hallazgo deben tener su anotación.
+    """
+    por_cups = _cantidades_por_cups(datos_admision)
+    leidas = _parsear_cantidades(anotada)
+    if leidas:
+        en_zeus = {c: n for c, n in leidas.items() if c in por_cups}
+        del_hallazgo = set(re.findall(r'\b(\d{6})\b', str(descripcion or ''))) & set(por_cups)
+        return (bool(en_zeus) and all(por_cups[c] == n for c, n in en_zeus.items())
+                and del_hallazgo <= set(en_zeus))
     zeus = _cantidades_zeus(datos_admision)
     numeros = set(re.findall(r'\d+', str(anotada or '')))
     return bool(zeus) and len(set(zeus)) == 1 and len(numeros) == 1 and int(numeros.pop()) == zeus[0]
@@ -888,10 +914,13 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     if ((tipo_documento or '').upper() == 'AUTORIZACION' and imagenes and not _reintento
             and resultado["tipo"] != "OK" and resultado.get("paciente_coincide") != "NO"
             and (resultado.get("ajuste_cantidad_cups") or _solo_motivo_cantidad(resultado.get("descripcion")))
-            and not re.findall(r'\d+', str(resultado.get("cantidad_anotada") or ''))):
+            # Con una anotación leída solo se relee si la admisión tiene varios CUPS con cantidades distintas
+            # (varias autorizaciones en el PDF: la IA pudo leer la anotación de una sola, caso 36927)
+            and (not re.findall(r'\d+', str(resultado.get("cantidad_anotada") or ''))
+                 or len(set(_cantidades_zeus(datos_admision))) > 1)):
         anotada, tokens = _releer_cantidad(client, modelo, imagenes)
         resultado["tokens"] = [a + b for a, b in zip(resultado.get("tokens") or [0, 0], tokens)]
-        if _anotada_igual_zeus(anotada, datos_admision):
+        if _anotada_igual_zeus(anotada, datos_admision, resultado.get("descripcion")):
             logger.info("AUTORIZACION: relectura 'CANTIDAD %s' coincide con Zeus, se descarta '%s'",
                         anotada, resultado.get("descripcion"))
             resultado.update(tipo="OK", descripcion="Documento correcto", cantidad_anotada=anotada,
