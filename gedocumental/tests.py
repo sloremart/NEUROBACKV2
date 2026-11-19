@@ -606,6 +606,7 @@ class DocumentosRequeridosTests(SimpleTestCase):
         self.assertEqual(self.f('BOLIVAR SOAT', False, set()), ['ORDEN', 'AUTORIZACION', 'COMPROBANTE'])
         # Colmédica Línea Zafiro y Colsanitas Plan Integral: sin autorización (regla 2026-11-19)
         self.assertEqual(self.f('COLMEDICA LINEA ZAFIRO', False, set()), ['ORDEN', 'COMPROBANTE'])
+        self.assertEqual(self.f('AXA COLPATRIA SEGUROS S.A.', False, set()), ['ORDEN', 'COMPROBANTE'])
         self.assertEqual(self.f('COLMEDICA LINEA RUBI', False, set()), ['ORDEN', 'AUTORIZACION', 'COMPROBANTE'])
         self.assertEqual(self.f('COLSANITAS PLAN INTEGRAL', True, set()), ['ORDEN', 'COMPROBANTE'])
         # Plan Integral: consulta de primera vez sin orden; control con orden

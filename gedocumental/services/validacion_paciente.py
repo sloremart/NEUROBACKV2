@@ -95,6 +95,7 @@ SQL_CONTRATOS_CON_AUTORIZACION = """
       AND UPPER(co.alias) NOT LIKE '%%SOLIMED%%' AND UPPER(co.alias) NOT LIKE '%%BOLIVAR POLIZA%%'
       -- Colmédica Línea Zafiro y Colsanitas Plan Integral: tampoco (regla 2026-11-19)
       AND UPPER(co.alias) NOT LIKE '%%COLMEDICA LINEA ZAFIRO%%' AND UPPER(co.alias) NOT LIKE '%%COLSANITAS PLAN INTEGRAL%%'
+      AND UPPER(co.alias) NOT LIKE '%%AXA COLPATRIA%%'   -- SOAT (regla 2026-11-19)
     GROUP BY sm.contrato
     HAVING COUNT(*) >= %s
        AND 100.0 * SUM(CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0') THEN 1 ELSE 0 END)

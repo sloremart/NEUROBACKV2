@@ -25,7 +25,8 @@ CONTRATOS_ORDEN_O_AUTORIZACION = ('IPS CONSULTORIO', 'EQUIPO INTERDISCIPLINARIO'
 # Contratos en los que la orden y la autorización NO son obligatorias: solo el comprobante (regla 2026-11-19)
 CONTRATOS_SOLO_COMPROBANTE = ('SOLIMED',)
 # Contratos que no requieren autorización (ni el documento ni el número en SIESA), como MRC (regla 2026-11-19)
-CONTRATOS_SIN_AUTORIZACION = ('BOLIVAR POLIZA', 'COLMEDICA LINEA ZAFIRO', 'COLSANITAS PLAN INTEGRAL')
+CONTRATOS_SIN_AUTORIZACION = ('BOLIVAR POLIZA', 'COLMEDICA LINEA ZAFIRO', 'COLSANITAS PLAN INTEGRAL',
+                              'AXA COLPATRIA')   # AXA Colpatria Seguros: SOAT
 # Colsanitas: contratos en que la consulta de PRIMERA VEZ no requiere orden (el control sí)
 COLSANITAS_SIN_ORDEN_PRIMERA_VEZ = ('COLSANITAS PLAN INTEGRAL',)
 UFUNCIONAL_CONSULTA = 1   # CONSULTA EXTERNA en Zeus
