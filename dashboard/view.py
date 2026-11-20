@@ -244,8 +244,13 @@ class DashboardAgendadasView(APIView):
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute('''
                 SELECT
-                    COALESCE(NULLIF(LTRIM(RTRIM(c.estado)), ''), 'SE') AS estado,
+                    COALESCE(NULLIF(x.estado, ''), 'SE') AS estado,
                     COUNT(*) AS cnt
+                FROM (
+                -- En Zeus casi nunca se marca 'I': el paciente que no llega queda en 'P'.
+                -- Una cita 'P' de un día ya pasado (sin admisión) = incumplida.
+                SELECT CASE WHEN LTRIM(RTRIM(c.estado)) = 'P' AND c.fecha_cita < %s
+                            THEN 'I' ELSE LTRIM(RTRIM(c.estado)) END AS estado
                 FROM (
                     SELECT c.autoid, CONVERT(date, c.fecha) AS fecha_cita, c.asunto,
                            -- La visita solo es cancelada si TODOS sus espacios lo están (un espacio cancelado + otro activo = reprogramada)
@@ -255,8 +260,9 @@ class DashboardAgendadasView(APIView):
                       AND NOT (c.asunto IN (13, 14) AND c.meridiano = 'am')
                     GROUP BY c.autoid, CONVERT(date, c.fecha), c.asunto
                 ) c
-                GROUP BY COALESCE(NULLIF(LTRIM(RTRIM(c.estado)), ''), 'SE')
-            ''', [fecha_inicio, fecha_fin])
+                ) x
+                GROUP BY COALESCE(NULLIF(x.estado, ''), 'SE')
+            ''', [hoy, fecha_inicio, fecha_fin])
             estado_rows = cursor.fetchall()
 
         # Query 3: citas por médico con breakdown correcto de estados
@@ -266,9 +272,10 @@ class DashboardAgendadasView(APIView):
                     COALESCE(sm.nombre, CAST(c.cod_medi AS VARCHAR(20))) AS nombre_medico,
                     COUNT(*) AS total,
                     SUM(CASE WHEN c.estado NOT IN ('P','CA','C','I','IN','NC') AND c.estado != '' AND NOT (c.estado LIKE 'CA%%' OR c.estado LIKE 'CANCE%%') THEN 1 ELSE 0 END) AS atendidas,
-                    SUM(CASE WHEN c.estado = 'P' THEN 1 ELSE 0 END) AS programadas,
+                    -- 'P' de hoy o futuro = programada; 'P' de un día pasado = incumplida (no llegó)
+                    SUM(CASE WHEN c.estado = 'P' AND c.fecha_cita >= %s THEN 1 ELSE 0 END) AS programadas,
                     SUM(CASE WHEN c.estado IN ('CA','C','NC') OR c.estado LIKE 'CA%%' OR c.estado LIKE 'CANCE%%' THEN 1 ELSE 0 END) AS canceladas,
-                    SUM(CASE WHEN c.estado IN ('I','IN','INC') OR c.estado LIKE 'INCUMP%%' THEN 1 ELSE 0 END) AS incumplidas,
+                    SUM(CASE WHEN c.estado IN ('I','IN','INC') OR c.estado LIKE 'INCUMP%%' OR (c.estado = 'P' AND c.fecha_cita < %s) THEN 1 ELSE 0 END) AS incumplidas,
                     SUM(CASE WHEN c.estado = '' THEN 1 ELSE 0 END) AS sin_estado
                 FROM (
                     SELECT c.autoid, CONVERT(date, c.fecha) AS fecha_cita, c.asunto,
@@ -283,7 +290,7 @@ class DashboardAgendadasView(APIView):
                 LEFT JOIN sis_medi sm ON sm.codigo = c.cod_medi
                 GROUP BY sm.nombre, c.cod_medi
                 ORDER BY total DESC
-            ''', [fecha_inicio, fecha_fin])
+            ''', [hoy, hoy, fecha_inicio, fecha_fin])
             medico_rows = cursor.fetchall()
 
         def _categoria(nombre):
