@@ -295,11 +295,11 @@ class DashboardAgendadasView(APIView):
 
         def _categoria(nombre):
             n = nombre.upper()
-            if 'CONSULTA' in n:
+            if 'CONSULTA' in n or 'VALORACION' in n or 'VALORACIÓN' in n:
                 return 'Consultas'
             if any(x in n for x in ['RX', 'TOMOGRAF', 'RESONANCI', 'MAMOGRAF', 'ECOGRAF', 'DOPPLER', 'PET/CT', 'PET CT']):
                 return 'Imágenes'
-            if any(x in n for x in ['POLISOMNOGRAF', 'ELECTROENCEFALOGR', 'PROCEDIMIENTO', 'SOPORTE', 'SEDACI', 'VIDEOTELEMETR', 'APLICACION']):
+            if any(x in n for x in ['POLISOMNOGRAF', 'ELECTROENCEFALOGR', 'PROCEDIMIENTO', 'SOPORTE', 'SEDACI', 'VIDEOTELEMETR', 'APLICACION', 'BIOPSIA']):
                 return 'Procedimientos'
             return 'Otros'
 
