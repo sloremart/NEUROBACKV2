@@ -11,6 +11,7 @@ Documentos que el admisionista debe cargar en cada admisión, según el contrato
   IPS Solimed ...................................... solo COMPROBANTE (orden y autorización no son obligatorias)
   Bolívar Póliza ................................... ORDEN + COMPROBANTE (no requiere autorización)
   Particular ....................................... no se validan documentos
+  Admisión solo de sedación (998702) ............... no se exigen documentos (se factura aparte de la resonancia)
 
 El RESULTADO no está aquí: lo carga la coordinación médica.
 """
@@ -18,6 +19,8 @@ El RESULTADO no está aquí: lo carga la coordinación médica.
 import unicodedata
 
 from django.db import connections
+
+from gedocumental.services.validacion_paciente import SQL_SOLO_SEDACION
 
 ORDEN, AUTORIZACION, COMPROBANTE = 'ORDEN', 'AUTORIZACION', 'COMPROBANTE'
 # Contratos en los que la orden viene en el mismo documento que la autorización: basta con cualquiera de los dos
@@ -54,14 +57,15 @@ def admisiones_excluidas(admision_ids) -> set:
     return {adm for adm, d in datos_admisiones(admision_ids).items() if d['anulada'] or es_particular(d['contrato'])}
 
 
-def requisitos(contrato: str, es_consulta: bool, primera_vez: bool = False) -> list[tuple[str, ...]]:
+def requisitos(contrato: str, es_consulta: bool, primera_vez: bool = False, sedacion: bool = False) -> list[tuple[str, ...]]:
     """
     primera_vez: consulta de primera vez (CUPS 8902xx); Colsanitas Plan Integral no pide orden en ellas.
+    sedacion: la admisión solo factura la sedación (998702), complemento de la resonancia: no exige documentos.
     Lista de requisitos; cada uno es una tupla de tipos alternativos (basta con tener uno de ellos).
     Ej. IPS Consultorio: [('ORDEN', 'AUTORIZACION'), ('COMPROBANTE',)].
     """
     c = _plano(contrato)
-    if es_particular(c):
+    if sedacion or es_particular(c):
         return []
     if any(n in c for n in CONTRATOS_SOLO_COMPROBANTE):
         return [(COMPROBANTE,)]
@@ -78,20 +82,21 @@ def requisitos(contrato: str, es_consulta: bool, primera_vez: bool = False) -> l
     return [(ORDEN,), (AUTORIZACION,), (COMPROBANTE,)]
 
 
-def faltantes(contrato: str, es_consulta: bool, tipos_cargados, primera_vez: bool = False) -> list[str]:
+def faltantes(contrato: str, es_consulta: bool, tipos_cargados, primera_vez: bool = False,
+              sedacion: bool = False) -> list[str]:
     """Requisitos sin cumplir, para mostrar: ['ORDEN', 'ORDEN o AUTORIZACION', ...]."""
     tipos = {(t or '').upper() for t in tipos_cargados}
-    return [' o '.join(r) for r in requisitos(contrato, es_consulta, primera_vez) if not tipos & set(r)]
+    return [' o '.join(r) for r in requisitos(contrato, es_consulta, primera_vez, sedacion) if not tipos & set(r)]
 
 
-def cumple(contrato: str, es_consulta: bool, tipos, primera_vez: bool = False) -> bool:
+def cumple(contrato: str, es_consulta: bool, tipos, primera_vez: bool = False, sedacion: bool = False) -> bool:
     """True si los tipos dados (cargados, o aprobados por la IA) cubren todos los requisitos."""
-    return not faltantes(contrato, es_consulta, tipos, primera_vez)
+    return not faltantes(contrato, es_consulta, tipos, primera_vez, sedacion)
 
 
 def datos_admisiones(admision_ids) -> dict:
     """
-    {admisión: {'contrato', 'es_consulta', 'primera_vez', 'anulada'}} desde ZeusSalud. primera_vez: tiene consulta
+    {admisión: {'contrato', 'es_consulta', 'primera_vez', 'sedacion', 'anulada'}} desde ZeusSalud. primera_vez: tiene consulta
     de primera vez (CUPS 8902xx) y ninguna de control (8903xx), sin contar cargos revertidos. Una admisión ANULADA en SIESA (el paciente
     canceló y no se hizo el examen) no exige documentos ni pasa por Cuentas Médicas.
     """
@@ -110,11 +115,12 @@ def datos_admisiones(admision_ids) -> dict:
                                  AND NOT EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
                                              AND ISNULL(d.ItemRevertido, 0) = 0
                                              AND LEFT(LTRIM(d.cod_servicio), 4) = '8903')
-                                THEN 1 ELSE 0 END
+                                THEN 1 ELSE 0 END,
+                           CASE WHEN {SQL_SOLO_SEDACION} THEN 1 ELSE 0 END
                     FROM sis_maes sm LEFT JOIN contratos c ON sm.contrato = c.codigo
                     WHERE sm.con_estudio IN ({', '.join(str(x) for x in bloque)})""")
-            for estudio, contrato, ufuncional, estado, primera_vez in cursor.fetchall():
-                resultado[int(estudio)] = {'contrato': contrato or '',
+            for estudio, contrato, ufuncional, estado, primera_vez, sedacion in cursor.fetchall():
+                resultado[int(estudio)] = {'contrato': contrato or '', 'sedacion': bool(sedacion),
                                            'es_consulta': ufuncional == UFUNCIONAL_CONSULTA,
                                            'primera_vez': bool(primera_vez),
                                            'anulada': (estado or '').strip().upper() == 'N'}

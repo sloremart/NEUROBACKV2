@@ -600,6 +600,17 @@ class DocumentosRequeridosTests(SimpleTestCase):
                          'EJERCITO', 'COMPENSAR', 'MULTISALUD IPS', 'IPS ONCOLIFE', 'POLICIA ESTUDIOS DEL SUEÑO'):
             self.assertEqual(self.f(contrato, False, set()), ['ORDEN', 'AUTORIZACION', 'COMPROBANTE'], contrato)
 
+    def test_admision_solo_de_sedacion_no_exige_documentos(self):
+        # Caso 36991: 998702 (soporte de sedación) se factura aparte de la resonancia; no se pide nada
+        from gedocumental.services.documentos_requeridos import faltantes
+        self.assertEqual(faltantes('SANITAS EVENTO CONTRIBUTIVO', False, set(), sedacion=True), [])
+        self.assertEqual(faltantes('SANITAS EVENTO CONTRIBUTIVO', False, set()), ['ORDEN', 'AUTORIZACION', 'COMPROBANTE'])
+
+    def test_sedacion_cuenta_como_con_autorizacion(self):
+        from gedocumental.services.validacion_paciente import CAMPOS_SQL, SQL_SOLO_SEDACION
+        self.assertIn("'998702'", SQL_SOLO_SEDACION)
+        self.assertIn(SQL_SOLO_SEDACION, CAMPOS_SQL)
+
     def test_bolivar_poliza_sin_autorizacion(self):
         self.assertEqual(self.f('BOLIVAR POLIZA', False, set()), ['ORDEN', 'COMPROBANTE'])
         self.assertEqual(self.f('BOLIVAR POLIZA', False, {'ORDEN', 'COMPROBANTE'}), [])

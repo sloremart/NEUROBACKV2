@@ -357,7 +357,8 @@ class Command(BaseCommand):
             NotaResolucion='El número de autorización ya está diligenciado en SIESA.')
         cerrados += abiertos.filter(AdmisionId__in=[a for a, e in estados.items() if e == 'NO_APLICA']).update(
             Resuelta=True, Resolucion='DESCARTADO', FechaResolucion=ahora,
-            NotaResolucion='No aplica: contrato sin número de autorización (MRC, particular...) o admisión antigua.')
+            NotaResolucion='No aplica: contrato sin número de autorización (MRC, particular...), admisión antigua o '
+                          'solo de sedación (998702).')
         ya = set(abiertos.values_list('AdmisionId', flat=True))
         nuevos = [RevisionIA(
             IdArchivo=None, AdmisionId=adm, TipoDocumento='AUTORIZACION',

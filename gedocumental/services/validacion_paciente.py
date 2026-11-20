@@ -48,6 +48,15 @@ def _entero(valor):
         return None
 
 
+# Admisión que solo factura la sedación (998702, soporte de sedación de la resonancia): es el complemento del
+# estudio y se factura aparte; no exige número de autorización ni documentos (regla 2026-11-20, caso 36991)
+CUPS_SEDACION = ('998702',)
+SQL_SOLO_SEDACION = (
+    "(EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio AND ISNULL(d.ItemRevertido, 0) = 0"
+    " AND LEFT(LTRIM(d.cod_servicio), 6) IN (" + ', '.join(f"'{c}'" for c in CUPS_SEDACION) + "))"
+    " AND NOT EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio AND ISNULL(d.ItemRevertido, 0) = 0"
+    " AND LEFT(LTRIM(d.cod_servicio), 6) NOT IN (" + ', '.join(f"'{c}'" for c in CUPS_SEDACION) + ")))")
+
 CAMPOS_SQL = """
     sm.con_estudio,
     sp.tipo_id, sp.num_id, sp.primer_nom, sp.primer_ape, sp.fecha_naci, sp.sexo,
@@ -67,6 +76,7 @@ CAMPOS_SQL = """
               OR EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
                          AND ISNULL(d.ItemRevertido, 0) = 0
                          AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0'))
+              OR """ + SQL_SOLO_SEDACION + """
          THEN 1 ELSE 0 END,
     ISNULL(sm.estado, ''), LTRIM(RTRIM(ISNULL(sm.MotivoAnulacion, '')))
 """
@@ -112,7 +122,7 @@ def estado_autorizacion(consecutivos) -> dict:
     """
     {admisión: 'SIN' | 'CON' | 'NO_APLICA'}: SIN = contrato que exige número de autorización, admisión de los
     últimos DIAS_ADMISION_AUTORIZACION días y sin número en SIESA; NO_APLICA = MRC, particular, contrato que no
-    la usa, admisión antigua o anulada en SIESA.
+    la usa, admisión antigua, anulada en SIESA o que solo factura la sedación (998702).
     """
     ids = [int(c) for c in consecutivos]
     estados = {}
@@ -127,11 +137,12 @@ def estado_autorizacion(consecutivos) -> dict:
                                    OR EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
                                               AND ISNULL(d.ItemRevertido, 0) = 0
                                               AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0'))
-                              THEN 1 ELSE 0 END
+                              THEN 1 ELSE 0 END,
+                         CASE WHEN {SQL_SOLO_SEDACION} THEN 1 ELSE 0 END
                     FROM sis_maes sm WHERE sm.con_estudio IN ({', '.join(['%s'] * len(bloque))})""",
                 bloque)
-            for estudio, contrato, fecha_ing, estado, tiene in cursor.fetchall():
-                if (contrato not in requieren or not fecha_ing or fecha_ing < limite
+            for estudio, contrato, fecha_ing, estado, tiene, solo_sedacion in cursor.fetchall():
+                if (contrato not in requieren or not fecha_ing or fecha_ing < limite or solo_sedacion
                         or (estado or '').strip().upper() == ESTADO_ANULADA):
                     estados[int(estudio)] = 'NO_APLICA'
                 else:

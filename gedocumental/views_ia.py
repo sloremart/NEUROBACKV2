@@ -333,7 +333,7 @@ def bandeja_cuentas_medicas(request):
             if (req.get('anulada') or es_particular(req['contrato']) or es_particular(contratos.get(adm_id, ''))
                     or entidad.upper().startswith('PAR')):
                 continue
-            faltantes_doc = doc_faltantes(req['contrato'], req['es_consulta'], cargados, req.get('primera_vez', False)) + \
+            faltantes_doc = doc_faltantes(req['contrato'], req['es_consulta'], cargados, req.get('primera_vez', False), req.get('sedacion', False)) + \
                 ([] if tiene_resultado else ['RESULTADO'])
             val = validaciones.get(adm_id)
             completo = val['completo'] if val else None
@@ -349,7 +349,7 @@ def bandeja_cuentas_medicas(request):
                 estado_ia = 'esperando_resultado'
             elif (revisados >= docs and 'RESULTADO' in tipos_ok_ia.get(adm_id, set())
                   and doc_cumple(req['contrato'], req['es_consulta'], tipos_ok_ia.get(adm_id, set()),
-                             req.get('primera_vez', False))):
+                             req.get('primera_vez', False), req.get('sedacion', False))):
                 # Pre-auditada solo si la IA revisó y aprobó los documentos exigidos por el contrato y el
                 # RESULTADO (evita que entren admisiones antiguas con 0/0 documentos por revisar)
                 estado_ia = 'listas'
@@ -440,7 +440,7 @@ def documentos_faltantes(request):
             r = reglas.get(a)
             if r is None or r.get('anulada'):
                 continue   # no está en Zeus, o está anulada en SIESA (no se hizo el examen)
-            f = doc_faltantes(r['contrato'], r['es_consulta'], cargados.get(a, set()), r.get('primera_vez', False))
+            f = doc_faltantes(r['contrato'], r['es_consulta'], cargados.get(a, set()), r.get('primera_vez', False), r.get('sedacion', False))
             if f:
                 faltan[a] = f
 
