@@ -248,7 +248,8 @@ class DashboardAgendadasView(APIView):
                     COUNT(*) AS cnt
                 FROM (
                     SELECT c.autoid, CONVERT(date, c.fecha) AS fecha_cita, c.asunto,
-                           MIN(LTRIM(RTRIM(COALESCE(c.estado, '')))) AS estado
+                           -- La visita solo es cancelada si TODOS sus espacios lo están (un espacio cancelado + otro activo = reprogramada)
+                           COALESCE(MIN(CASE WHEN LTRIM(RTRIM(COALESCE(c.estado, ''))) IN ('CA', 'C', 'NC') OR LTRIM(RTRIM(COALESCE(c.estado, ''))) LIKE 'CA%%' OR LTRIM(RTRIM(COALESCE(c.estado, ''))) LIKE 'CANCE%%' THEN NULL ELSE LTRIM(RTRIM(COALESCE(c.estado, ''))) END), 'C') AS estado
                     FROM citas c
                     WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                       AND NOT (c.asunto IN (13, 14) AND c.meridiano = 'am')
@@ -272,7 +273,8 @@ class DashboardAgendadasView(APIView):
                 FROM (
                     SELECT c.autoid, CONVERT(date, c.fecha) AS fecha_cita, c.asunto,
                            c.cod_medi,
-                           MIN(LTRIM(RTRIM(COALESCE(c.estado, '')))) AS estado
+                           -- La visita solo es cancelada si TODOS sus espacios lo están (un espacio cancelado + otro activo = reprogramada)
+                           COALESCE(MIN(CASE WHEN LTRIM(RTRIM(COALESCE(c.estado, ''))) IN ('CA', 'C', 'NC') OR LTRIM(RTRIM(COALESCE(c.estado, ''))) LIKE 'CA%%' OR LTRIM(RTRIM(COALESCE(c.estado, ''))) LIKE 'CANCE%%' THEN NULL ELSE LTRIM(RTRIM(COALESCE(c.estado, ''))) END), 'C') AS estado
                     FROM citas c
                     WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                       AND NOT (c.asunto IN (13, 14) AND c.meridiano = 'am')
