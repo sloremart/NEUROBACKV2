@@ -219,11 +219,13 @@ class DashboardAgendadasView(APIView):
                                                     CHARINDEX('-', cp.id_procedimiento + '-') - 1)
                             AND spp_b.Tipo_proc   = '256'
                         WHERE CONVERT(date, cs.fecha) BETWEEN %s AND %s
-                          AND cs.estado != 'CA'
+                          -- Excluir canceladas con el mismo criterio de la tarjeta 'Canceladas'
+                          AND NOT (LTRIM(RTRIM(ISNULL(cs.estado, ''))) IN ('CA', 'C', 'NC') OR LTRIM(RTRIM(ISNULL(cs.estado, ''))) LIKE 'CA%%' OR LTRIM(RTRIM(ISNULL(cs.estado, ''))) LIKE 'CANCE%%')
                         GROUP BY cp.id_cita
                     ) vip_i ON vip_i.id_cita = c.id
                     WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
-                      AND c.estado != 'CA'
+                      -- Excluir canceladas con el mismo criterio de la tarjeta 'Canceladas' (CA, C, NC, CANCE...)
+                      AND NOT (LTRIM(RTRIM(ISNULL(c.estado, ''))) IN ('CA', 'C', 'NC') OR LTRIM(RTRIM(ISNULL(c.estado, ''))) LIKE 'CA%%' OR LTRIM(RTRIM(ISNULL(c.estado, ''))) LIKE 'CANCE%%')
                       -- Exclude poliso/videotelemetria AM slots: those are departure citas
                       -- from a study that STARTED the previous evening and should not be
                       -- counted as a new study on the departure date.
@@ -286,7 +288,7 @@ class DashboardAgendadasView(APIView):
             n = nombre.upper()
             if 'CONSULTA' in n:
                 return 'Consultas'
-            if any(x in n for x in ['RX', 'TOMOGRAF', 'RESONANCI', 'MAMOGRAF', 'ECOGRAF', 'PET/CT', 'PET CT']):
+            if any(x in n for x in ['RX', 'TOMOGRAF', 'RESONANCI', 'MAMOGRAF', 'ECOGRAF', 'DOPPLER', 'PET/CT', 'PET CT']):
                 return 'Imágenes'
             if any(x in n for x in ['POLISOMNOGRAF', 'ELECTROENCEFALOGR', 'PROCEDIMIENTO', 'SOPORTE', 'SEDACI', 'VIDEOTELEMETR', 'APLICACION']):
                 return 'Procedimientos'
