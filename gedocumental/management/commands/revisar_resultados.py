@@ -104,10 +104,43 @@ class Command(BaseCommand):
         anteriores = (ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO, *TIPOS_SIN_REVISION_IA])
                       .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'))
                       .filter(primer__lt=INICIO_IA).values('Admision_id'))
-        cerrados = RevisionIA.objects.filter(IdArchivo__isnull=True, Resuelta=False, AdmisionId__in=anteriores).update(
+        abiertos = RevisionIA.objects.filter(IdArchivo__isnull=True, Resuelta=False)
+        cerrados = abiertos.filter(AdmisionId__in=anteriores).update(
             Resuelta=True, Resolucion='DESCARTADO', FechaResolucion=datetime.now(),
             NotaResolucion=f'No aplica: documentos cargados antes del inicio de la revisión IA ({INICIO_IA:%Y-%m-%d}).')
+        # Admisiones que ingresaron antes de la IA aunque sus documentos se hayan cargado después (caso 14649)
+        viejas = self._ingreso_antes_ia(set(abiertos.values_list('AdmisionId', flat=True)))
+        cerrados += abiertos.filter(AdmisionId__in=viejas).update(
+            Resuelta=True, Resolucion='DESCARTADO', FechaResolucion=datetime.now(),
+            NotaResolucion=f'No aplica: admisión con ingreso anterior al inicio de la revisión IA ({INICIO_IA:%Y-%m-%d}).')
         self.stdout.write(f"Hallazgos del sistema anteriores a la IA (descartados): {cerrados}")
+
+    @staticmethod
+    def _ingreso_antes_ia(admisiones) -> set:
+        """Admisiones cuyo ingreso en SIESA (sis_maes.fecha_ing) es anterior al inicio de la IA."""
+        ids, viejas = [int(a) for a in admisiones if a], set()
+        with connections['zeussalud'].cursor() as cursor:
+            for i in range(0, len(ids), 500):
+                bloque = ids[i:i + 500]
+                cursor.execute(f"SELECT con_estudio FROM sis_maes WHERE con_estudio IN ({', '.join(['%s'] * len(bloque))})"
+                               " AND fecha_ing < %s", [*bloque, INICIO_IA])
+                viejas.update(int(e) for (e,) in cursor.fetchall())
+        return viejas
+
+    def _cargues(self, ventana) -> dict:
+        """
+        {admisión: {'primer', 'usuario'}} de las admisiones con documentos cargados en la ventana, sin las que
+        ingresaron antes del inicio de la IA (ej. documentos de una admisión de septiembre cargados en noviembre).
+        """
+        cargues = {
+            r['Admision_id']: r for r in
+            ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO, *TIPOS_SIN_REVISION_IA])
+            .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'), usuario=Min('Usuario_id'))
+            .filter(primer__gte=self._desde(ventana))
+        }
+        for adm in self._ingreso_antes_ia(cargues):
+            cargues.pop(adm, None)
+        return cargues
 
     @staticmethod
     def _pdf_completo(archivo) -> bool:
@@ -283,12 +316,7 @@ class Command(BaseCommand):
         ahora = datetime.now()
 
         # Admisiones que se están trabajando en GE Documental (con documentos distintos de FACTURA)
-        admisiones = set(
-            ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO, *TIPOS_SIN_REVISION_IA])
-            .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'))
-            .filter(primer__gte=self._desde(ventana))
-            .values_list('Admision_id', flat=True)
-        )
+        admisiones = set(self._cargues(ventana))
         con_resultado = set(
             ArchivoFacturacion.objects.filter(Admision_id__in=admisiones, Tipo=TIPO)
             .values_list('Admision_id', flat=True)
@@ -357,12 +385,7 @@ class Command(BaseCommand):
         from gedocumental.services.validacion_paciente import SIN_AUTORIZACION, estado_autorizacion
 
         ahora = datetime.now()
-        cargues = {
-            r['Admision_id']: r for r in
-            ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO, *TIPOS_SIN_REVISION_IA])
-            .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'), usuario=Min('Usuario_id'))
-            .filter(primer__gte=self._desde(ventana))
-        }
+        cargues = self._cargues(ventana)
         quien_autorizacion = dict(
             ArchivoFacturacion.objects.filter(Admision_id__in=cargues, Tipo='AUTORIZACION')
             .values('Admision_id').annotate(u=Min('Usuario_id')).values_list('Admision_id', 'u')
@@ -403,12 +426,7 @@ class Command(BaseCommand):
         from gedocumental.services.validacion_paciente import SIN_AUTORIZACION, validar_datos_pacientes_bulk
 
         ahora = datetime.now()
-        cargues = {
-            r['Admision_id']: r for r in
-            ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO, *TIPOS_SIN_REVISION_IA])
-            .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'), usuario=Min('Usuario_id'))
-            .filter(primer__gte=self._desde(ventana))
-        }
+        cargues = self._cargues(ventana)
         abiertos = {h.AdmisionId: h for h in RevisionIA.objects.filter(
             IdArchivo__isnull=True, TipoDocumento=TIPO_DATOS, Resuelta=False)}
         ids = list(set(cargues) | set(abiertos))
