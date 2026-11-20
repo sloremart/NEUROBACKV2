@@ -44,6 +44,8 @@ MINUTOS_GRACIA = 15
 # Hallazgo de admisión (sin archivo) por datos del paciente o de la orden incompletos en SIESA
 TIPO_DATOS = 'DATOS_PACIENTE'
 DATOS_INCOMPLETOS = 'Datos del paciente incompletos en SIESA'
+# Inicio de la revisión IA: las admisiones cuyos documentos se cargaron antes no generan hallazgos del sistema
+INICIO_IA = datetime.strptime(getattr(settings, 'GESTION_FECHA_INICIO', '2026-10-20'), '%Y-%m-%d')
 
 
 class Command(BaseCommand):
@@ -84,9 +86,28 @@ class Command(BaseCommand):
             # Ya NO se regeneran resultados: el 17/11/2026 la regeneración reemplazó ~100 resultados ya
             # auditados por Cuentas Médicas. Un RESULTADO cargado no se reemplaza automáticamente nunca.
             paso('procedimiento_cambiado', self._revisar_procedimiento_cambiado, o['limite'])
+        paso('cerrar_anteriores_ia', self._cerrar_anteriores_ia)
         paso('registrar_faltantes', self._registrar_faltantes, o['ventana_faltantes'])
         paso('registrar_sin_autorizacion', self._registrar_sin_autorizacion, o['ventana_faltantes'])
         paso('registrar_datos_incompletos', self._registrar_datos_incompletos, o['ventana_faltantes'])
+
+    @staticmethod
+    def _desde(ventana):
+        """Inicio de la ventana de los hallazgos del sistema: últimos N días, nunca antes del inicio de la IA."""
+        return max(datetime.now() - timedelta(days=ventana), INICIO_IA)
+
+    def _cerrar_anteriores_ia(self):
+        """
+        Hallazgos del sistema (sin archivo: sin número de autorización, datos incompletos, reporte faltante) abiertos
+        en admisiones cuyos documentos se cargaron antes del inicio de la IA: no aplican → DESCARTADO.
+        """
+        anteriores = (ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO, *TIPOS_SIN_REVISION_IA])
+                      .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'))
+                      .filter(primer__lt=INICIO_IA).values('Admision_id'))
+        cerrados = RevisionIA.objects.filter(IdArchivo__isnull=True, Resuelta=False, AdmisionId__in=anteriores).update(
+            Resuelta=True, Resolucion='DESCARTADO', FechaResolucion=datetime.now(),
+            NotaResolucion=f'No aplica: documentos cargados antes del inicio de la revisión IA ({INICIO_IA:%Y-%m-%d}).')
+        self.stdout.write(f"Hallazgos del sistema anteriores a la IA (descartados): {cerrados}")
 
     @staticmethod
     def _pdf_completo(archivo) -> bool:
@@ -265,7 +286,7 @@ class Command(BaseCommand):
         admisiones = set(
             ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO, *TIPOS_SIN_REVISION_IA])
             .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'))
-            .filter(primer__gte=ahora - timedelta(days=ventana))
+            .filter(primer__gte=self._desde(ventana))
             .values_list('Admision_id', flat=True)
         )
         con_resultado = set(
@@ -340,7 +361,7 @@ class Command(BaseCommand):
             r['Admision_id']: r for r in
             ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO, *TIPOS_SIN_REVISION_IA])
             .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'), usuario=Min('Usuario_id'))
-            .filter(primer__gte=ahora - timedelta(days=ventana))
+            .filter(primer__gte=self._desde(ventana))
         }
         quien_autorizacion = dict(
             ArchivoFacturacion.objects.filter(Admision_id__in=cargues, Tipo='AUTORIZACION')
@@ -386,7 +407,7 @@ class Command(BaseCommand):
             r['Admision_id']: r for r in
             ArchivoFacturacion.objects.exclude(Tipo__in=['FACTURA', TIPO, *TIPOS_SIN_REVISION_IA])
             .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'), usuario=Min('Usuario_id'))
-            .filter(primer__gte=ahora - timedelta(days=ventana))
+            .filter(primer__gte=self._desde(ventana))
         }
         abiertos = {h.AdmisionId: h for h in RevisionIA.objects.filter(
             IdArchivo__isnull=True, TipoDocumento=TIPO_DATOS, Resuelta=False)}
