@@ -639,20 +639,25 @@ def guardar_gestion_llamada(request):
     })
 
 
+# (capacidad_mensual, unidad_de_medida)
+# Unidades según hoja GENERAL del Excel de Capacidad Instalada:
+#   ESTUDIOS  = citas individuales (TAC, RX, EEG, Poli, Consultas, etc.)
+#   ESPACIOS  = espacios de tiempo (cada espacio = slot de duración fija)
+#   SERVICIOS = servicios continuos (Monitorizaciones)
 _CAPACIDAD_EXCEL = {
-    'Polisomnografías':                               270,
-    'Electroencefalograma':                          1440,
-    'Monitorizaciones':                              4320,
-    'TAC':                                           1440,
-    'RX':                                            3456,
-    'RESONANCIAS':                                   1080,
-    'PET-CT':                                         280,
-    'Ecografías y Doppler':                          1680,
-    'Procedimientos de fisiatría(Potenciales)':        200,
-    'Procedimientos de fisiatría':                   1200,
-    'Aplicación de medicamentos':                    1080,
-    'Consultas,Bloqueos,Inyecciones,Infiltraciones': 5040,
-    'Consultas,Bloqueos,Inyecciones':                1680,
+    'Polisomnografías':                               (270,  'estudios'),
+    'Electroencefalograma':                          (1440,  'estudios'),
+    'Monitorizaciones':                              (4320,  'servicios'),
+    'TAC':                                           (1440,  'estudios'),
+    'RX':                                            (3456,  'estudios'),
+    'RESONANCIAS':                                   (1080,  'estudios'),
+    'PET-CT':                                        (280,   'estudios'),
+    'Ecografías y Doppler':                          (1680,  'estudios'),
+    'Procedimientos de fisiatría(Potenciales)':       (200,   'estudios'),
+    'Procedimientos de fisiatría':                   (1200,  'espacios'),
+    'Aplicación de medicamentos':                    (1080,  'estudios'),
+    'Consultas,Bloqueos,Inyecciones,Infiltraciones': (5040,  'espacios'),
+    'Consultas,Bloqueos,Inyecciones':                (1680,  'espacios'),
 }
 
 def _mapear_servicio_excel(nombre_db):
@@ -790,8 +795,11 @@ def capacidad_instalada_view(request):
             for svc, cnt in _canceladas_map.items():
                 _canceladas[svc] += cnt
 
-            _comp = {k: {'servicio': k, 'capacidad_excel': v, 'agendados': 0, 'confirmadas': 0, 'canceladas': 0}
-                     for k, v in _CAPACIDAD_EXCEL.items()}
+            _comp = {
+                k: {'servicio': k, 'capacidad_excel': cap, 'unidad': unidad,
+                    'agendados': 0, 'confirmadas': 0, 'canceladas': 0}
+                for k, (cap, unidad) in _CAPACIDAD_EXCEL.items()
+            }
             # merge activos
             for db_svc, ag in _agenda.items():
                 key = _mapear_servicio_excel(db_svc)
@@ -799,7 +807,8 @@ def capacidad_instalada_view(request):
                     _comp[key]['agendados']   += ag
                     _comp[key]['confirmadas'] += _confirmadas[db_svc]
                 else:
-                    _comp.setdefault(db_svc, {'servicio': db_svc, 'capacidad_excel': 0, 'agendados': 0, 'confirmadas': 0, 'canceladas': 0})
+                    _comp.setdefault(db_svc, {'servicio': db_svc, 'capacidad_excel': 0, 'unidad': 'estudios',
+                                               'agendados': 0, 'confirmadas': 0, 'canceladas': 0})
                     _comp[db_svc]['agendados']   += ag
                     _comp[db_svc]['confirmadas'] += _confirmadas[db_svc]
             # merge cancelados
@@ -807,7 +816,8 @@ def capacidad_instalada_view(request):
                 key = _mapear_servicio_excel(db_svc)
                 dest = key if key else db_svc
                 if dest not in _comp:
-                    _comp[dest] = {'servicio': dest, 'capacidad_excel': 0, 'agendados': 0, 'confirmadas': 0, 'canceladas': 0}
+                    _comp[dest] = {'servicio': dest, 'capacidad_excel': 0, 'unidad': 'estudios',
+                                   'agendados': 0, 'confirmadas': 0, 'canceladas': 0}
                 _comp[dest]['canceladas'] += cant
 
             comparativo = []
