@@ -606,6 +606,23 @@ class DocumentosRequeridosTests(SimpleTestCase):
         self.assertEqual(faltantes('SANITAS EVENTO CONTRIBUTIVO', False, set(), sedacion=True), [])
         self.assertEqual(faltantes('SANITAS EVENTO CONTRIBUTIVO', False, set()), ['ORDEN', 'AUTORIZACION', 'COMPROBANTE'])
 
+    def test_admision_de_anestesiologia_no_se_valida(self):
+        # Caso 15798: consulta de anestesiología con la orden de la resonancia → no es hallazgo
+        from gedocumental.services.ai_revision import _es_anestesia
+        from gedocumental.services.reverificacion import DESCARTADO, evaluar_hallazgo
+        adm = {'cups': ['890226 - CONSULTA DE PRIMERA VEZ POR ESPECIALISTA EN ANESTESIOLOGIA (cant. 1)'],
+               'contrato': 'FOMAG', 'paciente': 'ANA PEREZ ROJAS', 'identificacion': '1000000001'}
+        self.assertTrue(_es_anestesia(adm))
+        self.assertTrue(_es_anestesia(dict(adm, cups=['998702 - SOPORTE DE SEDACION', '998701 - SOPORTE ANESTESICO'])))
+        self.assertFalse(_es_anestesia(dict(adm, cups=['883108 - RESONANCIA MAGNETICA DE PARES CRANEANOS',
+                                                       '998702 - SOPORTE DE SEDACION'])))
+        self.assertFalse(_es_anestesia(dict(adm, cups=[])))
+        d = ("Procedimiento no coincide: la orden no trae el CUPS de la admisión. Admisión: 890226 (CONSULTA DE "
+             "PRIMERA VEZ POR ESPECIALISTA EN ANESTESIOLOGIA). La orden trae: 883108 (RESONANCIA MAGNETICA DE "
+             "PARES CRANEANOS).")
+        r = evaluar_hallazgo('ORDEN', d, adm)
+        self.assertEqual(r[0], DESCARTADO)
+
     def test_sedacion_cuenta_como_con_autorizacion(self):
         from gedocumental.services.validacion_paciente import CAMPOS_SQL, SQL_SOLO_SEDACION
         self.assertIn("'998702'", SQL_SOLO_SEDACION)

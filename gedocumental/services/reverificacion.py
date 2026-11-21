@@ -33,7 +33,7 @@ from gedocumental.services.ai_revision import (
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _imagen_documentada, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE, TIPOS_NO_REVISADOS,
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida,
-    _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
+    _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _es_anestesia, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
     _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden, _autorizacion_aplicacion_de_mas, _autorizacion_de_mas,
     obtener_contexto_admision, cantidades_orden, _clasificar_paciente, _es_recien_nacido,
 )
@@ -330,6 +330,9 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
         return DESCARTADO, "Las historias clínicas y los soportes ADICIONALES no se revisan."
     if d and _autorizacion_soat(tipo_documento, datos_admision):
         return DESCARTADO, "Autorización SOAT (radicado SIRAS): se anexa tal cual y no se valida."
+    if d and _es_anestesia(datos_admision):
+        return DESCARTADO, ("Admisión de anestesiología (consulta, soporte anestésico o sedación): complemento de la "
+                            "resonancia que se factura aparte; sus documentos no se validan.")
     if d and _es_particular(datos_admision):
         return DESCARTADO, "Admisión particular: sus documentos no se validan (el examen se toma con o sin orden)."
     if d and _cups_y_cantidades_como_zeus(d, datos_admision):

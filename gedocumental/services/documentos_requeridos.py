@@ -11,7 +11,8 @@ Documentos que el admisionista debe cargar en cada admisión, según el contrato
   IPS Solimed ...................................... solo COMPROBANTE (orden y autorización no son obligatorias)
   Bolívar Póliza ................................... ORDEN + COMPROBANTE (no requiere autorización)
   Particular ....................................... no se validan documentos
-  Admisión solo de sedación (998702) ............... no se exigen documentos (se factura aparte de la resonancia)
+  Admisión solo de anestesiología (890226, 890326,
+  998701, 998702) ................................. no se exigen documentos (complemento de la resonancia)
 
 El RESULTADO no está aquí: lo carga la coordinación médica.
 """
@@ -60,7 +61,7 @@ def admisiones_excluidas(admision_ids) -> set:
 def requisitos(contrato: str, es_consulta: bool, primera_vez: bool = False, sedacion: bool = False) -> list[tuple[str, ...]]:
     """
     primera_vez: consulta de primera vez (CUPS 8902xx); Colsanitas Plan Integral no pide orden en ellas.
-    sedacion: la admisión solo factura la sedación (998702), complemento de la resonancia: no exige documentos.
+    sedacion: la admisión solo factura anestesiología (consulta, soporte anestésico o sedación): no exige documentos.
     Lista de requisitos; cada uno es una tupla de tipos alternativos (basta con tener uno de ellos).
     Ej. IPS Consultorio: [('ORDEN', 'AUTORIZACION'), ('COMPROBANTE',)].
     """

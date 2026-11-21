@@ -48,9 +48,12 @@ def _entero(valor):
         return None
 
 
-# Admisión que solo factura la sedación (998702, soporte de sedación de la resonancia): es el complemento del
-# estudio y se factura aparte; no exige número de autorización ni documentos (regla 2026-11-20, caso 36991)
-CUPS_SEDACION = ('998702',)
+# Admisión que solo factura anestesiología: consulta de anestesiología (890226 primera vez, 890326 control) y
+# soporte anestésico / de sedación (998701, 998702), complementos de la resonancia bajo sedación que se facturan
+# aparte. No exige número de autorización ni documentos ni genera hallazgos (reglas 2026-11-20 caso 36991 y
+# 2026-11-21 caso 15798)
+CUPS_ANESTESIA = ('890226', '890326', '998701', '998702')
+CUPS_SEDACION = CUPS_ANESTESIA
 SQL_SOLO_SEDACION = (
     "(EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio AND ISNULL(d.ItemRevertido, 0) = 0"
     " AND LEFT(LTRIM(d.cod_servicio), 6) IN (" + ', '.join(f"'{c}'" for c in CUPS_SEDACION) + "))"
@@ -122,7 +125,7 @@ def estado_autorizacion(consecutivos) -> dict:
     """
     {admisión: 'SIN' | 'CON' | 'NO_APLICA'}: SIN = contrato que exige número de autorización, admisión de los
     últimos DIAS_ADMISION_AUTORIZACION días y sin número en SIESA; NO_APLICA = MRC, particular, contrato que no
-    la usa, admisión antigua, anulada en SIESA o que solo factura la sedación (998702).
+    la usa, admisión antigua, anulada en SIESA o que solo factura anestesiología (CUPS_ANESTESIA).
     """
     ids = [int(c) for c in consecutivos]
     estados = {}

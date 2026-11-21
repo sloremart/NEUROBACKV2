@@ -109,10 +109,15 @@ class Command(BaseCommand):
             Resuelta=True, Resolucion='DESCARTADO', FechaResolucion=datetime.now(),
             NotaResolucion=f'No aplica: documentos cargados antes del inicio de la revisión IA ({INICIO_IA:%Y-%m-%d}).')
         # Admisiones que ingresaron antes de la IA aunque sus documentos se hayan cargado después (caso 14649)
-        viejas = self._ingreso_antes_ia(set(abiertos.values_list('AdmisionId', flat=True)))
+        ids_abiertos = set(abiertos.values_list('AdmisionId', flat=True))
+        viejas = self._ingreso_antes_ia(ids_abiertos)
         cerrados += abiertos.filter(AdmisionId__in=viejas).update(
             Resuelta=True, Resolucion='DESCARTADO', FechaResolucion=datetime.now(),
             NotaResolucion=f'No aplica: admisión con ingreso anterior al inicio de la revisión IA ({INICIO_IA:%Y-%m-%d}).')
+        # Admisiones solo de anestesiología (consulta, soporte anestésico, sedación): no generan hallazgos
+        cerrados += abiertos.filter(AdmisionId__in=self._solo_anestesia(ids_abiertos - viejas)).update(
+            Resuelta=True, Resolucion='DESCARTADO', FechaResolucion=datetime.now(),
+            NotaResolucion='No aplica: admisión de anestesiología (complemento de la resonancia bajo sedación).')
         self.stdout.write(f"Hallazgos del sistema anteriores a la IA (descartados): {cerrados}")
 
     @staticmethod
@@ -130,7 +135,8 @@ class Command(BaseCommand):
     def _cargues(self, ventana) -> dict:
         """
         {admisión: {'primer', 'usuario'}} de las admisiones con documentos cargados en la ventana, sin las que
-        ingresaron antes del inicio de la IA (ej. documentos de una admisión de septiembre cargados en noviembre).
+        ingresaron antes del inicio de la IA (ej. documentos de una admisión de septiembre cargados en noviembre) y
+        las que solo facturan anestesiología.
         """
         cargues = {
             r['Admision_id']: r for r in
@@ -138,9 +144,15 @@ class Command(BaseCommand):
             .values('Admision_id').annotate(primer=Min('FechaCreacionArchivo'), usuario=Min('Usuario_id'))
             .filter(primer__gte=self._desde(ventana))
         }
-        for adm in self._ingreso_antes_ia(cargues):
+        for adm in self._ingreso_antes_ia(cargues) | self._solo_anestesia(cargues):
             cargues.pop(adm, None)
         return cargues
+
+    @staticmethod
+    def _solo_anestesia(admisiones) -> set:
+        """Admisiones que solo facturan anestesiología (validacion_paciente.CUPS_ANESTESIA)."""
+        from gedocumental.services.documentos_requeridos import datos_admisiones
+        return {a for a, d in datos_admisiones(admisiones).items() if d['sedacion']}
 
     @staticmethod
     def _pdf_completo(archivo) -> bool:
@@ -402,7 +414,7 @@ class Command(BaseCommand):
         cerrados += abiertos.filter(AdmisionId__in=[a for a, e in estados.items() if e == 'NO_APLICA']).update(
             Resuelta=True, Resolucion='DESCARTADO', FechaResolucion=ahora,
             NotaResolucion='No aplica: contrato sin número de autorización (MRC, particular...), admisión antigua o '
-                          'solo de sedación (998702).')
+                          'solo de anestesiología / sedación.')
         ya = set(abiertos.values_list('AdmisionId', flat=True))
         nuevos = [RevisionIA(
             IdArchivo=None, AdmisionId=adm, TipoDocumento='AUTORIZACION',

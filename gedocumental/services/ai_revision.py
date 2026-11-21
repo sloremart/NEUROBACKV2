@@ -2158,6 +2158,18 @@ def _es_particular(datos_admision: dict) -> bool:
     return 'PARTICULAR' in str(datos_admision.get('entidad') or '').upper()
 
 
+def _es_anestesia(datos_admision: dict) -> bool:
+    """
+    Admisión que solo factura anestesiología (consulta 890226/890326, soporte anestésico 998701 o sedación 998702):
+    complemento de la resonancia bajo sedación, se factura aparte y sus documentos no se validan (caso 15798).
+    """
+    import re
+    from gedocumental.services.validacion_paciente import CUPS_ANESTESIA
+    codigos = [m.group(1) for c in (datos_admision.get('cups') or [])
+               if (m := re.match(r'\s*(\d{6})', str(c)))]
+    return bool(codigos) and all(c in CUPS_ANESTESIA for c in codigos)
+
+
 def _es_soat(datos_admision: dict) -> bool:
     """Admisión de una aseguradora SOAT (accidente de tránsito): su 'autorización' es el radicado de SIRAS."""
     import re
@@ -2548,6 +2560,13 @@ def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
     # no se validan. Se registra OK sin llamar a la IA (sin costo) para que no quede como pendiente de revisión.
     if _es_particular(datos_admision):
         resultado = {"tipo": "OK", "descripcion": "Documento correcto (admisión particular: no se valida)",
+                     "modo": "sistema"}
+        _registrar_revision(archivo_obj, resultado)
+        return resultado
+
+    # Solo anestesiología (consulta de anestesiología, soporte anestésico, sedación): no se valida (caso 15798)
+    if _es_anestesia(datos_admision):
+        resultado = {"tipo": "OK", "descripcion": "Documento correcto (admisión de anestesiología: no se valida)",
                      "modo": "sistema"}
         _registrar_revision(archivo_obj, resultado)
         return resultado
