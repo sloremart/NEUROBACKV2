@@ -213,9 +213,17 @@ class AuditoriaLinea(models.Model):
     cod_medico     = models.IntegerField(null=True, blank=True, db_index=True)
     estado         = models.CharField(max_length=10, choices=ESTADOS, default='PENDIENTE')
     valor_ajustado = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    # Glosa parcial: valor que no se paga (vacío con estado GLOSA = se glosa todo)
+    valor_glosa    = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     observacion    = models.TextField(blank=True, default='')
     usuario        = models.CharField(max_length=150, blank=True, default='')
     fecha          = models.DateTimeField(auto_now=True)
+    # Foto de la línea al auditarla (para los indicadores sin volver a consultar Zeus)
+    honorario_calculado = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    honorario_final     = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    cups           = models.CharField(max_length=20, blank=True, default='')
+    descripcion    = models.CharField(max_length=255, blank=True, default='')
+    contrato       = models.CharField(max_length=150, blank=True, default='')
 
     class Meta:
         db_table = 'auditoria_linea'

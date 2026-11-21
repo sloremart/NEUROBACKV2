@@ -9,6 +9,9 @@ Auditoría de honorarios médicos — /api/v2/gestion-facturacion/auditoria/...
   GET  tarifas/  · POST tarifas/importar/ · POST tarifas/<id>/ · POST tarifas/asignar-medico/
   GET  medicos/
   POST lumier/cargar/ · GET lumier/hallazgos/?periodo= · POST lumier/resolver/
+  GET  sin-facturar/?periodo= [&exportar=1]     → servicios sin número de factura en SIESA
+  GET  sin-tarifa/?periodo=                     → CUPS facturados por cada médico que no tienen tarifa
+  GET  indicadores/?desde=YYYY-MM&hasta=YYYY-MM  → glosas y pagos por médico (de las líneas auditadas)
 
 Reglas en controlfacturacion/services/honorarios.py.
 """
@@ -123,6 +126,53 @@ def _lineas_zeus(periodo: str) -> list[dict]:
     return lineas
 
 
+def _agenda_zeus(periodo: str, cods: set) -> dict:
+    """
+    {cod_medico: [bloques]} de la agenda de Zeus (programacion_medico_detalle) en el mes. Cuenta los cupos
+    programados (no bloqueados, o bloqueados pero con cita).
+    """
+    if not cods:
+        return {}
+    inicio, fin = h.rango_periodo(periodo)
+    marcas = ', '.join(['%s'] * len(cods))
+    with connections['zeussalud'].cursor() as cur:
+        cur.execute(
+            f"""SELECT d.Medico, CAST(d.Fecha AS DATE), d.IdProgramacionMedico, ISNULL(pm.intervalo, 0),
+                       MIN(CONVERT(VARCHAR(5), d.Fecha, 108)), MAX(CONVERT(VARCHAR(5), d.Fecha, 108)), COUNT(*)
+                FROM programacion_medico_detalle d
+                JOIN programacion_medico pm ON pm.id = d.IdProgramacionMedico
+                WHERE d.Medico IN ({marcas}) AND d.Fecha >= %s AND d.Fecha < %s
+                  AND ISNULL(d.SinProgramacion, 0) = 0
+                  AND (ISNULL(d.Bloqueado, 0) = 0 OR d.IdCita IS NOT NULL)
+                GROUP BY d.Medico, CAST(d.Fecha AS DATE), d.IdProgramacionMedico, pm.intervalo""",
+            [*sorted(cods), inicio.isoformat(), fin.isoformat()])
+        filas = cur.fetchall()
+    agenda = defaultdict(list)
+    for medico, dia, _, intervalo, ini, fin_, cupos in filas:
+        agenda[int(medico)].append({'dia': dia, 'inicio': ini, 'fin': fin_, 'intervalo': int(intervalo),
+                                    'cupos': int(cupos)})
+    return agenda
+
+
+def _lineas_agenda(periodo: str, valor_hora: dict) -> list[dict]:
+    """Una línea por día de agenda de cada médico pagado por hora: horas × valor de la hora."""
+    lineas = []
+    for cod, bloques in _agenda_zeus(periodo, set(valor_hora)).items():
+        for d in h.horas_agenda(bloques):
+            texto = ' y '.join(f"{b['inicio']}–{b['fin']}" for b in d['bloques'])
+            horas = d['horas']
+            lineas.append({
+                'sis_deta_id': h.id_agenda(d['dia'], cod), 'estudio': 0, 'fecha': d['dia'],
+                'cod_servicio': 'AGENDA', 'descripcion': f"{texto} ({float(horas):g} h)",
+                'cantidad': float(horas), 'valor_facturado': Decimal(0), 'cod_medico_zeus': cod,
+                'paciente': 'HORAS DE AGENDA', 'tipo_id': '', 'documento': '', 'contrato': '', 'factura': '',
+                'tipo': 'AGENDA', 'bloques': [{'inicio': b['inicio'], 'fin': b['fin'], 'horas': float(b['horas'])}
+                                               for b in d['bloques']],
+                '_valor_hora': valor_hora[cod],
+            })
+    return lineas
+
+
 def _clave_md(sid):
     return f"MD:{sid}"
 
@@ -148,6 +198,15 @@ def construir(periodo: str) -> dict:
     tarifas = defaultdict(list)
     for t in TarifaHonorario.objects.filter(activo=True, cod_medico__isnull=False):
         tarifas[t.cod_medico].append(t)
+    # Médicos pagados por horas de agenda: valor de la hora = su tarifa "(HORA)" de entidades
+    valor_hora = {}
+    for cod, ts in tarifas.items():
+        de_hora = [t for t in ts if h.es_tarifa_hora(t) and t.tipo == 'FIJO' and t.valor]
+        if de_hora:
+            valor_hora[cod] = max(t.valor for t in de_hora)
+    for l in lineas:
+        l['tipo'] = 'SERVICIO'
+    lineas += _lineas_agenda(periodo, valor_hora)
     decisiones = {d.sis_deta_id: d for d in AuditoriaLinea.objects.filter(
         sis_deta_id__in=[l['sis_deta_id'] for l in lineas])} if lineas else {}
 
@@ -189,32 +248,44 @@ def construir(periodo: str) -> dict:
             if f"SZ:{sid}" not in resoluciones:
                 alertas.append('No está en Lumier')
 
-        if l['cod_medico'] == SIN_MEDICO:
+        l['por_horas'] = False
+        if l['tipo'] == 'AGENDA':
+            tarifa = None
+            calculado = h._redondear(Decimal(str(l['cantidad'])) * l['_valor_hora'])
+            l['tarifa'] = f"${int(l['_valor_hora']):,} por hora".replace(',', '.')
+        elif l['cod_medico'] == SIN_MEDICO:
             alertas.append('Sin médico en Zeus')
-            tarifa, alertas_t = None, []
+            tarifa, calculado, l['tarifa'] = None, Decimal(0), ''
         else:
-            tarifa, alertas_t = h.elegir_tarifa(tarifas.get(l['cod_medico'], []), l['cod_servicio'], l['contrato'])
-        alertas += alertas_t
-        if tarifa is not None:
-            calculado, alertas_c = h.calcular_honorario(tarifa, l['cantidad'], l['valor_facturado'],
-                                                        len(por_estudio.get(l['estudio'], ())))
-            alertas += alertas_c
-            l['tarifa'] = _texto_tarifa(tarifa)
-        else:
-            calculado, l['tarifa'] = Decimal(0), ''
-        if not l['factura']:
+            tarifa, alertas_t = h.elegir_tarifa(tarifas.get(l['cod_medico'], []), l['cod_servicio'], l['contrato'],
+                                                l['cantidad'])
+            alertas += alertas_t
+            if tarifa is not None and h.es_tarifa_hora(tarifa):
+                # Consulta de un médico pagado por horas: se paga en la línea de agenda del día
+                calculado, l['tarifa'], l['por_horas'] = Decimal(0), 'Incluida en las horas de agenda', True
+            elif tarifa is not None:
+                calculado, alertas_c = h.calcular_honorario(tarifa, l['cantidad'], l['valor_facturado'],
+                                                            len(por_estudio.get(l['estudio'], ())),
+                                                            l['descripcion'])
+                alertas += alertas_c
+                l['tarifa'] = _texto_tarifa(tarifa)
+            else:
+                calculado, l['tarifa'] = Decimal(0), ''
+        if not l['factura'] and l['tipo'] != 'AGENDA':
             alertas.append('Sin factura en Zeus')
         d = decisiones.get(sid)
-        l['grupo'] = h.grupo_contrato(l['contrato'])
+        l['grupo'] = h.grupo_contrato(l['contrato']) if l['tipo'] != 'AGENDA' else 'AGENDA'
         l['honorario_calculado'] = calculado
         l['estado'] = d.estado if d else 'PENDIENTE'
         l['valor_ajustado'] = d.valor_ajustado if d else None
+        l['valor_glosa'] = d.valor_glosa if d else None
         l['observacion'] = d.observacion if d else ''
         l['auditado_por'] = d.usuario if d else ''
-        l['honorario'] = (Decimal(0) if l['estado'] == 'GLOSA'
-                          else l['valor_ajustado'] if l['valor_ajustado'] is not None else calculado)
+        l['honorario'] = h.honorario_final(calculado, l['estado'], l['valor_ajustado'], l['valor_glosa'])
+        base = l['valor_ajustado'] if l['valor_ajustado'] is not None else calculado
+        l['valor_glosado'] = (base - l['honorario']) if l['estado'] == 'GLOSA' else Decimal(0)
         l['alertas'] = alertas
-        l['sin_tarifa'] = tarifa is None
+        l['sin_tarifa'] = tarifa is None and l['tipo'] != 'AGENDA' and not l['por_horas']
 
     for e in sin_pareja:
         hallazgos.append({
@@ -233,7 +304,7 @@ def construir(periodo: str) -> dict:
         x['nota'] = r.nota if r else ''
         x['validado_por'] = r.usuario if r else ''
     return {'lineas': lineas, 'medicos': medicos, 'hallazgos': hallazgos, 'lumier_cargado': lumier_cargado,
-            'lumier_estudios': len(estudios)}
+            'lumier_estudios': len(estudios), 'valor_hora': valor_hora}
 
 
 def _texto_tarifa(t) -> str:
@@ -259,7 +330,8 @@ def _linea_json(l: dict) -> dict:
         'honorario': _num(l['honorario']), 'estado': l['estado'], 'observacion': l['observacion'],
         'auditado_por': l['auditado_por'], 'alertas': l['alertas'], 'sin_tarifa': l['sin_tarifa'],
         'cod_medico': l['cod_medico'], 'cod_medico_zeus': l['cod_medico_zeus'],
-        'lumier': l['lumier'],
+        'lumier': l['lumier'], 'tipo': l['tipo'], 'por_horas': l['por_horas'], 'bloques': l.get('bloques'),
+        'valor_glosa': _num(l['valor_glosa']), 'valor_glosado': _num(l['valor_glosado']),
     }
 
 
@@ -284,7 +356,8 @@ def resumen(request):
                 if cod is not None:
                     hall_pend[cod] += 1
     filas = defaultdict(lambda: {'lineas': 0, 'honorario': Decimal(0), 'pendientes': 0, 'ok': 0, 'glosas': 0,
-                                 'con_alertas': 0, 'sin_tarifa': 0, 'facturado': Decimal(0)})
+                                 'con_alertas': 0, 'sin_tarifa': 0, 'facturado': Decimal(0),
+                                 'glosado': Decimal(0)})
     for l in datos['lineas']:
         f = filas[l['cod_medico']]
         f['lineas'] += 1
@@ -293,6 +366,7 @@ def resumen(request):
         f['pendientes'] += l['estado'] == 'PENDIENTE'
         f['ok'] += l['estado'] == 'OK'
         f['glosas'] += l['estado'] == 'GLOSA'
+        f['glosado'] += l['valor_glosado']
         f['con_alertas'] += bool(l['alertas'])
         f['sin_tarifa'] += l['sin_tarifa']
     salida = []
@@ -303,7 +377,7 @@ def resumen(request):
             'cod_medico': cod, 'medico': m.get('nombre') or 'SIN MÉDICO ASIGNADO',
             'especialidad': m.get('especialidad', ''), 'lineas': f['lineas'],
             'honorario': _num(f['honorario']), 'facturado': _num(f['facturado']),
-            'pendientes': f['pendientes'], 'ok': f['ok'], 'glosas': f['glosas'],
+            'pendientes': f['pendientes'], 'ok': f['ok'], 'glosas': f['glosas'], 'glosado': _num(f['glosado']),
             'con_alertas': f['con_alertas'], 'sin_tarifa': f['sin_tarifa'],
             'hallazgos_lumier': hall_pend.get(cod, 0),
             'cerrada': bool(c), 'cerrada_por': c.usuario if c else '',
@@ -333,6 +407,8 @@ def detalle_medico(request, cod_medico: int):
         'medico': m.get('nombre') or 'SIN MÉDICO ASIGNADO', 'especialidad': m.get('especialidad', ''),
         'cerrada': bool(c), 'cerrada_por': c.usuario if c else '',
         'lineas': [_linea_json(l) for l in lineas],
+        'por_horas': cod_medico in datos['valor_hora'],
+        'valor_hora': _num(datos['valor_hora'].get(cod_medico)),
         'tiene_formato_fisiatria': any(h.cups_base(l['cod_servicio']) in sum((list(c) for _, c in COLUMNAS_FISIATRIA), [])
                                        for l in lineas),
     })
@@ -354,6 +430,8 @@ def guardar_linea(request):
         existente = AuditoriaLinea.objects.filter(sis_deta_id=ids[0]).first()
         if not (existente and existente.observacion.strip()):
             return JsonResponse({'error': 'La glosa necesita una observación'}, status=400)
+    # Foto de cada línea (lo que vio el auditor): {sis_deta_id: {honorario_calculado, cups, descripcion, contrato}}
+    fotos = request.data.get('lineas') or {}
     usuario = _usuario(request)
     with transaction.atomic():
         for sid in ids:
@@ -367,6 +445,19 @@ def guardar_linea(request):
                 d.observacion = (request.data.get('observacion') or '').strip()
             if 'valor_ajustado' in request.data:
                 d.valor_ajustado = _dec(request.data.get('valor_ajustado'))
+            if d.estado != 'GLOSA':
+                d.valor_glosa = None
+            elif 'valor_glosa' in request.data:
+                d.valor_glosa = _dec(request.data.get('valor_glosa'))   # vacío = se glosa todo
+            foto = fotos.get(str(sid)) or {}
+            if foto:
+                d.honorario_calculado = _dec(foto.get('honorario_calculado'))
+                d.cups = str(foto.get('cups') or '')[:20]
+                d.descripcion = str(foto.get('descripcion') or '')[:255]
+                d.contrato = str(foto.get('contrato') or '')[:150]
+            if d.honorario_calculado is not None:
+                d.honorario_final = h.honorario_final(d.honorario_calculado, d.estado, d.valor_ajustado,
+                                                      d.valor_glosa)
             d.usuario = usuario
             d.save()
     return JsonResponse({'ok': True, 'actualizadas': len(ids)})
@@ -386,6 +477,12 @@ def cerrar(request):
     if pendientes:
         return JsonResponse({'error': f'Quedan {pendientes} líneas pendientes por auditar'}, status=400)
     total = sum((l['honorario'] for l in lineas), Decimal(0))
+    # Foto definitiva de las líneas (indicadores)
+    with transaction.atomic():
+        for l in lineas:
+            AuditoriaLinea.objects.filter(sis_deta_id=l['sis_deta_id']).update(
+                cod_medico=cod_medico, honorario_calculado=l['honorario_calculado'], honorario_final=l['honorario'],
+                cups=l['cod_servicio'][:20], descripcion=l['descripcion'][:255], contrato=l['contrato'][:150])
     AuditoriaCierre.objects.update_or_create(periodo=periodo, cod_medico=cod_medico,
                                              defaults={'total': total, 'usuario': _usuario(request)})
     return JsonResponse({'ok': True, 'cerrada': True, 'total': _num(total)})
@@ -406,7 +503,9 @@ def exportar(request):
     cod_medico = int(request.GET.get('cod_medico'))
     formato = request.GET.get('formato', 'general')
     datos = construir(periodo)
-    lineas = [l for l in datos['lineas'] if l['cod_medico'] == cod_medico and l['estado'] != 'GLOSA']
+    # Sin las glosas totales ni las consultas que se pagan en las horas de agenda (valen 0)
+    lineas = [l for l in datos['lineas'] if l['cod_medico'] == cod_medico and not l['por_horas']
+              and (l['estado'] != 'GLOSA' or l['honorario'] > 0)]
     lineas.sort(key=lambda l: (l['fecha'] or h.date.min, l['paciente']))
     m = datos['medicos'].get(cod_medico, {})
     anio, mes = periodo.split('-')
@@ -418,37 +517,47 @@ def exportar(request):
         ws['A4'] = f"PROFESIONAL: {m.get('nombre', '')}"
         ws['A5'] = f"MES DE SERVICIOS: {nombre_mes}"
         ws['D5'] = f"AÑO: {anio}"
-        filas = defaultdict(lambda: defaultdict(Decimal))
+        # Una fila por paciente: en EMG / VCN / REF H / ONDA F va la CANTIDAD y en TOTAL el honorario
+        # (regla 2026-11-21). Los paquetes particulares (000004/5/6) suman sus electromiografías y
+        # neuroconducciones.
+        cantidades = defaultdict(lambda: defaultdict(Decimal))
+        totales = defaultdict(lambda: defaultdict(Decimal))
         info = {}
         for l in lineas:
-            base = h.cups_base(l['cod_servicio'])
-            col = next((i for i, (_, cups) in enumerate(COLUMNAS_FISIATRIA) if base in cups), None)
-            if col is None:
+            sanitas = l['grupo'] == 'SANITAS'
+            partes = _columnas_fisiatria(l)
+            if not partes:
                 continue
-            clave = (l['fecha'], l['documento'], l['estudio'])
-            info[clave] = l
-            filas[clave][(l['grupo'] == 'SANITAS', col)] += l['honorario']
+            clave = l['documento'] or l['paciente']
+            if clave not in info or (l['fecha'] or h.date.max) < (info[clave]['fecha'] or h.date.max):
+                info[clave] = l
+            for col, cant in partes:
+                cantidades[clave][(sanitas, col)] += cant
+            totales[clave][sanitas] += l['honorario']
         estilo = [ws.cell(row=7, column=c) for c in range(1, 15)]
-        for n, clave in enumerate(sorted(filas, key=lambda k: (k[0] or h.date.min, k[1])), start=1):
+        orden = sorted(info, key=lambda k: (info[k]['fecha'] or h.date.min, info[k]['paciente']))
+        for n, clave in enumerate(orden, start=1):
             r = 6 + n
-            l, valores = info[clave], filas[clave]
+            l = info[clave]
             fila = [n, l['fecha'], l['paciente'], l['documento']]
             for sanitas in (False, True):
-                parte = [float(valores.get((sanitas, i), 0)) or None for i in range(4)]
-                fila += parte + [sum(x or 0 for x in parte) or None]
+                parte = [float(cantidades[clave].get((sanitas, i), 0)) or None for i in range(4)]
+                fila += parte + [float(totales[clave].get(sanitas, 0)) or None]
             for c, v in enumerate(fila, start=1):
                 celda = ws.cell(row=r, column=c, value=v)
                 _copiar_estilo(estilo[c - 1], celda)
                 if c == 2:
                     celda.number_format = 'DD/MM/YYYY'
-                elif c >= 5:
+                elif c in (9, 14):
                     celda.number_format = '"$"#,##0'
-        total_r = 7 + len(filas)
+                elif c >= 5:
+                    celda.number_format = '0'
+        total_r = 7 + len(orden)
         ws.cell(row=total_r, column=3, value='TOTAL').font = copy(ws['A6'].font)
-        for c in (9, 14):
+        for c in range(5, 15):
             letra = openpyxl.utils.get_column_letter(c)
             celda = ws.cell(row=total_r, column=c, value=f"=SUM({letra}7:{letra}{total_r - 1})")
-            celda.number_format = '"$"#,##0'
+            celda.number_format = '"$"#,##0' if c in (9, 14) else '0'
             celda.font = copy(ws['A6'].font)
     else:
         wb = openpyxl.load_workbook(os.path.join(PLANTILLAS, 'honorarios_general.xlsx'))
@@ -492,6 +601,197 @@ def exportar(request):
     return respuesta
 
 
+def _columnas_fisiatria(l) -> list[tuple[int, Decimal]]:
+    """[(columna EMG=0/VCN=1/REF H=2/ONDA F=3, cantidad)] de una línea para el formato de Fisiatría."""
+    base = h.cups_base(l['cod_servicio'])
+    col = next((i for i, (_, cups) in enumerate(COLUMNAS_FISIATRIA) if base in cups), None)
+    if col is not None:
+        return [(col, Decimal(str(l['cantidad'] or 1)))]
+    # Paquete particular: "PAQUETE 2 ELECTROMIOGRAFIAS + 2 NEUROCONDUCCIONES"
+    texto = h.plano(l['descripcion'])
+    if 'PAQUETE' in texto:
+        partes = []
+        for col, patron in ((0, r'(\d+)\s*ELECTROMIOGRAF'), (1, r'(\d+)\s*NEUROCONDUC')):
+            m = re.search(patron, texto)
+            if m:
+                partes.append((col, Decimal(m.group(1))))
+        return partes
+    return []
+
+
+# ── servicios sin factura en SIESA ───────────────────────────────────────────
+
+def _sin_facturar(periodo: str) -> list[dict]:
+    datos = construir(periodo)
+    salida = []
+    for l in datos['lineas']:
+        if l['tipo'] == 'AGENDA' or l['factura']:
+            continue
+        salida.append({
+            'sis_deta_id': l['sis_deta_id'], 'estudio': l['estudio'], 'fecha': l['fecha'],
+            'entidad': l['contrato'] or 'SIN CONTRATO', 'cups': l['cod_servicio'], 'descripcion': l['descripcion'],
+            'paciente': l['paciente'], 'tipo_id': l['tipo_id'], 'documento': l['documento'],
+            'cantidad': l['cantidad'], 'valor': l['valor_facturado'],
+            'medico': datos['medicos'].get(l['cod_medico'], {}).get('nombre', 'Sin médico'),
+        })
+    salida.sort(key=lambda x: (x['entidad'], x['cups'], x['fecha'] or h.date.min, x['paciente']))
+    return salida
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def sin_facturar(request):
+    periodo = _periodo(request)
+    filas = _sin_facturar(periodo)
+    if request.GET.get('exportar'):
+        return _exportar_sin_facturar(periodo, filas)
+    return JsonResponse({'periodo': periodo, 'filas': [
+        dict(f, fecha=f['fecha'].isoformat() if f['fecha'] else None, valor=_num(f['valor'])) for f in filas]})
+
+
+def _exportar_sin_facturar(periodo: str, filas: list[dict]) -> HttpResponse:
+    """Excel por entidad, procedimiento y fecha + hoja de resumen por entidad y procedimiento."""
+    import openpyxl
+    from openpyxl.styles import Alignment, Font, PatternFill
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Sin facturar'
+    encabezado = ['Entidad', 'CUPS', 'Procedimiento', 'Fecha', 'Estudio', 'Paciente', 'Documento', 'Médico',
+                  'Cantidad', 'Valor']
+    negrita, fondo = Font(bold=True, color='FFFFFF'), PatternFill('solid', fgColor='2D1B69')
+    ws.append(encabezado)
+    for c in ws[1]:
+        c.font, c.fill, c.alignment = negrita, fondo, Alignment(horizontal='center')
+    for f in filas:
+        ws.append([f['entidad'], f['cups'], f['descripcion'], f['fecha'], f['estudio'], f['paciente'],
+                   f"{f['tipo_id']} {f['documento']}".strip(), f['medico'], f['cantidad'], float(f['valor'])])
+    for fila in ws.iter_rows(min_row=2):
+        fila[3].number_format = 'DD/MM/YYYY'
+        fila[9].number_format = '"$"#,##0'
+    for letra, ancho in zip('ABCDEFGHIJ', (34, 11, 50, 12, 9, 34, 16, 30, 9, 13)):
+        ws.column_dimensions[letra].width = ancho
+    ws.auto_filter.ref = ws.dimensions
+    ws.freeze_panes = 'A2'
+
+    resumen = wb.create_sheet('Resumen')
+    resumen.append(['Entidad', 'CUPS', 'Procedimiento', 'Servicios', 'Valor'])
+    for c in resumen[1]:
+        c.font, c.fill = negrita, fondo
+    grupos = defaultdict(lambda: [0, Decimal(0), ''])
+    for f in filas:
+        g = grupos[(f['entidad'], f['cups'])]
+        g[0] += 1
+        g[1] += f['valor']
+        g[2] = f['descripcion']
+    entidad_actual = None
+    for (entidad, cups), (n, valor, desc) in sorted(grupos.items()):
+        if entidad_actual is not None and entidad != entidad_actual:
+            resumen.append([])
+        entidad_actual = entidad
+        resumen.append([entidad, cups, desc, n, float(valor)])
+        resumen.cell(row=resumen.max_row, column=5).number_format = '"$"#,##0'
+    for letra, ancho in zip('ABCDE', (34, 11, 50, 11, 14)):
+        resumen.column_dimensions[letra].width = ancho
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    respuesta = HttpResponse(buffer.getvalue(),
+                             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    respuesta['Content-Disposition'] = f'attachment; filename="Sin_facturar_SIESA_{periodo}.xlsx"'
+    return respuesta
+
+
+# ── CUPS sin tarifa ──────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def sin_tarifa(request):
+    periodo = _periodo(request)
+    datos = construir(periodo)
+    grupos = {}
+    for l in datos['lineas']:
+        if not l['sin_tarifa'] or l['cod_medico'] == SIN_MEDICO:
+            continue
+        clave = (l['cod_medico'], l['cod_servicio'])
+        g = grupos.setdefault(clave, {
+            'cod_medico': l['cod_medico'],
+            'medico': datos['medicos'].get(l['cod_medico'], {}).get('nombre', ''),
+            'cups': l['cod_servicio'], 'descripcion': l['descripcion'], 'lineas': 0, 'facturado': Decimal(0),
+            'contratos': set(), 'motivo': next((a for a in l['alertas'] if 'tarifa' in a.lower()), 'Sin tarifa'),
+        })
+        g['lineas'] += 1
+        g['facturado'] += l['valor_facturado']
+        g['contratos'].add(l['contrato'])
+    salida = [dict(g, facturado=_num(g['facturado']), contratos=sorted(g['contratos'])) for g in grupos.values()]
+    salida.sort(key=lambda g: (g['medico'], -g['lineas']))
+    return JsonResponse({'periodo': periodo, 'cups': salida})
+
+
+# ── indicadores ──────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def indicadores(request):
+    """Glosas y pagos por médico, por mes y por motivo, con las líneas ya auditadas (OK o glosa)."""
+    hasta = request.GET.get('hasta') or h.periodo_anterior()
+    desde = request.GET.get('desde') or hasta
+    if not (re.fullmatch(r'\d{4}-\d{2}', desde) and re.fullmatch(r'\d{4}-\d{2}', hasta)):
+        return JsonResponse({'error': 'Periodo no válido'}, status=400)
+    lineas = AuditoriaLinea.objects.filter(periodo__gte=desde, periodo__lte=hasta).exclude(estado='PENDIENTE')
+    nombres = {m['codigo']: m for m in medicos_zeus()}
+    por_medico = defaultdict(lambda: {'lineas': 0, 'ok': 0, 'glosas': 0, 'glosado': Decimal(0),
+                                      'pagado': Decimal(0), 'calculado': Decimal(0)})
+    por_mes = defaultdict(lambda: {'pagado': Decimal(0), 'glosado': Decimal(0), 'glosas': 0, 'lineas': 0})
+    motivos = defaultdict(lambda: {'glosas': 0, 'glosado': Decimal(0)})
+    cups_glosados = defaultdict(lambda: {'glosas': 0, 'glosado': Decimal(0), 'descripcion': ''})
+    for d in lineas:
+        calculado = d.honorario_calculado if d.honorario_calculado is not None else Decimal(0)
+        final = (d.honorario_final if d.honorario_final is not None
+                 else h.honorario_final(calculado, d.estado, d.valor_ajustado, d.valor_glosa))
+        base = d.valor_ajustado if d.valor_ajustado is not None else calculado
+        glosado = (base - final) if d.estado == 'GLOSA' else Decimal(0)
+        m = por_medico[d.cod_medico or 0]
+        m['lineas'] += 1
+        m['ok'] += d.estado == 'OK'
+        m['glosas'] += d.estado == 'GLOSA'
+        m['glosado'] += glosado
+        m['pagado'] += final
+        m['calculado'] += calculado
+        mes = por_mes[d.periodo]
+        mes['lineas'] += 1
+        mes['pagado'] += final
+        if d.estado == 'GLOSA':
+            mes['glosas'] += 1
+            mes['glosado'] += glosado
+            motivo = ' '.join((d.observacion or 'Sin motivo').split()).capitalize()[:120]
+            motivos[motivo]['glosas'] += 1
+            motivos[motivo]['glosado'] += glosado
+            if d.cups:
+                c = cups_glosados[d.cups]
+                c['glosas'] += 1
+                c['glosado'] += glosado
+                c['descripcion'] = d.descripcion
+    medicos_salida = []
+    for cod, m in por_medico.items():
+        info = nombres.get(cod, {})
+        medicos_salida.append({
+            'cod_medico': cod, 'medico': info.get('nombre') or 'SIN MÉDICO', 'especialidad': info.get('especialidad', ''),
+            'lineas': m['lineas'], 'ok': m['ok'], 'glosas': m['glosas'], 'glosado': _num(m['glosado']),
+            'pagado': _num(m['pagado']), 'calculado': _num(m['calculado']),
+            'pct_glosas': round(100 * m['glosas'] / m['lineas'], 1) if m['lineas'] else 0,
+        })
+    return JsonResponse({
+        'desde': desde, 'hasta': hasta, 'medicos': medicos_salida,
+        'meses': [dict(periodo=p, pagado=_num(v['pagado']), glosado=_num(v['glosado']), glosas=v['glosas'],
+                       lineas=v['lineas']) for p, v in sorted(por_mes.items())],
+        'motivos': sorted([dict(motivo=k, glosas=v['glosas'], glosado=_num(v['glosado'])) for k, v in motivos.items()],
+                          key=lambda x: -x['glosas'])[:15],
+        'cups': sorted([dict(cups=k, descripcion=v['descripcion'], glosas=v['glosas'], glosado=_num(v['glosado']))
+                        for k, v in cups_glosados.items()], key=lambda x: -x['glosas'])[:15],
+        'cierres': AuditoriaCierre.objects.filter(periodo__gte=desde, periodo__lte=hasta).count(),
+    })
+
+
 # ── tarifas ──────────────────────────────────────────────────────────────────
 
 def _tarifa_json(t: TarifaHonorario) -> dict:
@@ -527,7 +827,7 @@ def importar_tarifas(request):
     nombres = {m['codigo']: m['nombre'] for m in medicos_zeus()}
     campos = {f.name for f in TarifaHonorario._meta.get_fields()}
     with transaction.atomic():
-        TarifaHonorario.objects.all().delete()
+        TarifaHonorario.objects.exclude(area='Manual').delete()   # las creadas en la pantalla se conservan
         objetos = []
         for t in nuevas:
             if t.get('cod_medico') is None and manuales.get(t['encabezado']):

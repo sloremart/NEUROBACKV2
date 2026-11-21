@@ -143,3 +143,65 @@ class CruceLumierTests(SimpleTestCase):
         self.assertEqual([e.pk for e in pareja[1]], [10, 11])
         self.assertEqual([e.pk for e in otro[2]], [12])
         self.assertEqual([e.pk for e in sin], [13])
+
+
+class ReglasNoviembreTests(SimpleTestCase):
+    """Reglas 2026-11-21: por cantidad, doppler, agenda por horas y glosa parcial."""
+
+    def test_monitorizacion_potenciales_e_infiltraciones_por_cantidad(self):
+        t = _tarifa(cups='891901', valor=Decimal('23295'), descripcion='MONITORIZACION ELECTROENCEFALOGRAFICA')
+        valor, alertas = h.calcular_honorario(t, 12, 0, descripcion='MONITORIZACIÓN ... 12 HORAS')
+        self.assertEqual(valor, Decimal('279540'))
+        self.assertFalse(alertas)
+        pot = _tarifa(cups='954626', valor=Decimal('69000'), descripcion='POTENCIALES EVOCADOS AUDITIVOS')
+        self.assertEqual(h.calcular_honorario(pot, 2, 0)[0], Decimal('138000'))
+        inf = _tarifa(cups='861401', valor=Decimal('30000'), descripcion='INFILTRACION INTRALESIONAL')
+        self.assertEqual(h.calcular_honorario(inf, 3, 0)[0], Decimal('90000'))
+        # En particular la tarifa es por estudio (potenciales de Wilder: $150.000)
+        part = _tarifa(cups='952303', valor=Decimal('150000'), grupo='PARTICULAR', descripcion='POTENCIALES VISUALES')
+        self.assertEqual(h.calcular_honorario(part, 2, 0)[0], Decimal('150000'))
+
+    def test_doppler_por_cantidad(self):
+        tarifas = [
+            _tarifa(cups='882308', valor=Decimal('64437'), descripcion='ECOGRAFIA DOPPLER DE VASOS ARTERIALES DE MIEMBROS INFERIORES'),
+            _tarifa(cups='882308', valor=Decimal('80000'), descripcion='ECOGRAFIA DOPPLER DE VASOS ARTERIALES DE MIEMBROS INFERIORES - BILATERAL'),
+            _tarifa(cups='882317', valor=Decimal('80000'), descripcion='ECOGRAFIA DOPPLER DE VASOS VENOSOS DE MIEMBROS INFERIORES - BILATERAL'),
+        ]
+        uno, alertas = h.elegir_tarifa(tarifas, '882308', 'CAPITAL SALUD', 1)
+        self.assertEqual(uno.valor, Decimal('64437'))
+        self.assertFalse(alertas)
+        dos = h.elegir_tarifa(tarifas, '882308', 'CAPITAL SALUD', 2)[0]
+        self.assertEqual(dos.valor, Decimal('80000'))
+        self.assertEqual(h.calcular_honorario(dos, 2, 0), (Decimal('80000'), []))
+        # 882317 solo trae la fila bilateral: con cantidad 1 se paga la unilateral del médico
+        self.assertEqual(h.elegir_tarifa(tarifas, '882317', 'X', 1)[0].valor, Decimal('64437'))
+
+    def test_tarifa_con_sufijo_y_linea_sin_el(self):
+        t = h.elegir_tarifa([_tarifa(cups='891402-1', valor=Decimal('26000'))], '891402', 'X')[0]
+        self.assertEqual(t.valor, Decimal('26000'))
+
+    def test_paquete_particular_por_cups_de_zeus(self):
+        tarifas = [_tarifa(cups='5', grupo='PARTICULAR', valor=Decimal('180000'))]
+        self.assertEqual(h.elegir_tarifa(tarifas, '000005', 'PARTICULAR TARIFA PLENA')[0].valor, Decimal('180000'))
+
+    def test_medico_por_hora(self):
+        self.assertTrue(h.es_tarifa_hora(_tarifa(encabezado='SOFY (HORA)')))
+        self.assertFalse(h.es_tarifa_hora(_tarifa(encabezado='SEBASTIAN POSADA')))
+
+    def test_horas_de_agenda(self):
+        bloques = [{'dia': date(2026, 10, 13), 'inicio': '07:30', 'fin': '11:30', 'intervalo': 30, 'cupos': 9},
+                   {'dia': date(2026, 10, 13), 'inicio': '13:00', 'fin': '15:30', 'intervalo': 30, 'cupos': 6},
+                   {'dia': date(2026, 10, 10), 'inicio': '07:00', 'fin': '11:30', 'intervalo': 30, 'cupos': 10}]
+        dias = h.horas_agenda(bloques)
+        self.assertEqual([d['dia'].day for d in dias], [10, 13])
+        self.assertEqual(dias[0]['horas'], Decimal(5))
+        self.assertEqual(dias[0]['bloques'][0]['fin'], '12:00')
+        self.assertEqual(dias[1]['horas'], Decimal('7.5'))
+        self.assertLess(h.id_agenda(date(2026, 10, 13), 17), 0)
+        self.assertNotEqual(h.id_agenda(date(2026, 10, 13), 17), h.id_agenda(date(2026, 10, 13), 13))
+
+    def test_glosa_parcial(self):
+        self.assertEqual(h.honorario_final(Decimal('280000'), 'GLOSA', None, Decimal('35000')), Decimal('245000'))
+        self.assertEqual(h.honorario_final(Decimal('280000'), 'GLOSA'), Decimal(0))
+        self.assertEqual(h.honorario_final(Decimal('280000'), 'OK', Decimal('250000')), Decimal('250000'))
+        self.assertEqual(h.honorario_final(Decimal('100'), 'GLOSA', None, Decimal('500')), Decimal(0))

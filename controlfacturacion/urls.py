@@ -27,6 +27,9 @@ urlpatterns = [
     path('auditoria/lumier/cargar/',           aud.cargar_lumier,     name='aud-lumier-cargar'),
     path('auditoria/lumier/hallazgos/',        aud.hallazgos_lumier,  name='aud-lumier-hallazgos'),
     path('auditoria/lumier/resolver/',         aud.resolver_lumier,   name='aud-lumier-resolver'),
+    path('auditoria/sin-facturar/',            aud.sin_facturar,      name='aud-sin-facturar'),
+    path('auditoria/sin-tarifa/',              aud.sin_tarifa,        name='aud-sin-tarifa'),
+    path('auditoria/indicadores/',             aud.indicadores,       name='aud-indicadores'),
 
     path('realizados/',                    bandeja_realizados,         name='gf-realizados'),
     path('radicados/',                     bandeja_radicados,          name='gf-radicados'),

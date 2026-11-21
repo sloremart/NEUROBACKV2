@@ -9,6 +9,13 @@ Reglas acordadas (2026-11-18):
   - Médicos marcados "(HORA)" en el Excel: el valor ya es por CUPS; el término hora no aplica.
   - No entran: aplicación de medicamentos (992990) ni sedación 998701 / 890226.
   - Cuando el radiólogo de Lumier no coincide con el médico de Zeus se genera un hallazgo que se valida a mano.
+
+Reglas 2026-11-21:
+  - Monitorización (la tarifa es por hora), potenciales e infiltraciones se pagan por la cantidad facturada.
+  - Ecografía doppler: cantidad 1 = tarifa unilateral (64.437); cantidad 2 o más = tarifa BILATERAL del médico.
+  - Médicos "(HORA)" en el Excel (Sofy, Sebastián): las consultas se pagan por las horas de su agenda del mes
+    (horas × valor de la consulta del Excel); sus demás CUPS (EEG, monitorización...) se pagan por CUPS.
+  - Particular de fisiatría: paquetes de Zeus 000006 / 000005 / 000004 = 1 / 2 / 4 extremidades.
 """
 
 import re
@@ -22,6 +29,8 @@ CUPS_EXCLUIDOS = ('992990', '998701', '890226')
 # radiólogo en Lumier
 PREFIJOS_IMAGEN = ('87', '88', '9214')
 DIAS_TOLERANCIA_LUMIER = 5
+# Se pagan por la cantidad facturada aunque la tarifa no diga "cada" (monitorización = por hora)
+POR_CANTIDAD = r'MONITORIZ|POTENCIAL|INFILTRAC'
 GRUPOS_SUBENCABEZADO = {
     'PARTICULAR': 'PARTICULAR', 'ENTIDADES': 'ENTIDADES', 'OTRAS ENTIDADES': 'ENTIDADES', 'SANITAS': 'SANITAS',
 }
@@ -286,7 +295,21 @@ def _redondear(v: Decimal) -> Decimal:
     return v.quantize(Decimal('1'), rounding=ROUND_HALF_UP)
 
 
-def elegir_tarifa(tarifas_medico: list, cod_servicio: str, contrato: str) -> tuple[object | None, list[str]]:
+def es_bilateral(t) -> bool:
+    return 'BILATERAL' in plano(getattr(t, 'descripcion', ''))
+
+
+def es_doppler(t) -> bool:
+    return 'DOPPLER' in plano(getattr(t, 'descripcion', ''))
+
+
+def es_tarifa_hora(t) -> bool:
+    """Tarifa de un médico pagado por horas de agenda (encabezado 'SOFY (HORA)' en el Excel)."""
+    return '(HORA)' in plano(getattr(t, 'encabezado', ''))
+
+
+def elegir_tarifa(tarifas_medico: list, cod_servicio: str, contrato: str,
+                  cantidad=1) -> tuple[object | None, list[str]]:
     """Tarifa aplicable a la línea entre las del médico. Devuelve (tarifa, alertas)."""
     alertas = []
     exacto, base = norm_cups(cod_servicio), cups_base(cod_servicio)
@@ -294,7 +317,21 @@ def elegir_tarifa(tarifas_medico: list, cod_servicio: str, contrato: str) -> tup
     if not candidatas:
         candidatas = [t for t in tarifas_medico if norm_cups(t.cups) == base]
     if not candidatas:
+        # Tarifa con sufijo y línea sin él (891402-1 en el Excel, 891402 en Zeus)
+        candidatas = [t for t in tarifas_medico if cups_base(t.cups) == base]
+    if not candidatas:
         return None, ['Sin tarifa para este CUPS']
+    if any(es_doppler(t) for t in candidatas):
+        # Doppler: cantidad 1 = unilateral, 2 o más = bilateral (el Excel trae las dos filas por CUPS, o solo una:
+        # entonces se toma la del mismo tipo de otro doppler del médico)
+        bilateral = float(cantidad or 1) >= 2
+        propias = [t for t in candidatas if es_bilateral(t) == bilateral]
+        if not propias:
+            # Otro doppler de miembros (8823xx) del mismo tipo: todos valen igual (64.437 / bilateral)
+            propias = [t for t in tarifas_medico if es_doppler(t) and es_bilateral(t) == bilateral
+                       and cups_base(t.cups)[:4] == base[:4] and 'MIEMBRO' in plano(t.descripcion)]
+        if propias:
+            candidatas = propias
     contrato_plano = plano(contrato)
     permitidas = [t for t in candidatas if not t.solo_contrato or plano(t.solo_contrato) in contrato_plano]
     if not permitidas:
@@ -314,7 +351,8 @@ def elegir_tarifa(tarifas_medico: list, cod_servicio: str, contrato: str) -> tup
     return None, [f"Sin tarifa para el grupo {grupo.lower()}"]
 
 
-def calcular_honorario(tarifa, cantidad, valor_facturado, procedimientos_admision: int = 1) -> tuple[Decimal, list[str]]:
+def calcular_honorario(tarifa, cantidad, valor_facturado, procedimientos_admision: int = 1,
+                       descripcion: str = '') -> tuple[Decimal, list[str]]:
     """Honorario de una línea con su tarifa. Devuelve (valor, alertas)."""
     alertas = []
     cantidad = Decimal(str(cantidad or 1))
@@ -339,6 +377,12 @@ def calcular_honorario(tarifa, cantidad, valor_facturado, procedimientos_admisio
         return _redondear(valor * puntos), alertas
     if tarifa.por_unidad:
         return _redondear(valor * cantidad), alertas
+    texto = plano(f"{descripcion} {getattr(tarifa, 'descripcion', '')}")
+    # Monitorización (por hora), potenciales e infiltraciones: por cantidad. En particular la tarifa es por estudio.
+    if re.search(POR_CANTIDAD, texto) and getattr(tarifa, 'grupo', '') != 'PARTICULAR':
+        return _redondear(valor * cantidad), alertas
+    if es_doppler(tarifa):
+        return _redondear(valor), alertas   # la cantidad ya eligió la tarifa unilateral o bilateral
     if cantidad > 1:
         alertas.append(f"Cantidad {int(cantidad)}: la tarifa es por estudio, verificar")
     return _redondear(valor), alertas
@@ -444,3 +488,41 @@ def cruzar_lumier(lineas_imagen: list[dict], estudios: list) -> tuple[dict, dict
             otro_cups[linea['sis_deta_id']] = [elegido]
     sin_pareja = [e for e in estudios if e.pk not in usados]
     return pareja, otro_cups, sin_pareja
+
+
+# ── agenda (médicos pagados por hora) ────────────────────────────────────────
+
+def horas_agenda(bloques: list[dict]) -> list[dict]:
+    """
+    Bloques de agenda de Zeus [{'dia', 'inicio' ('07:30'), 'fin' (hora del último cupo), 'intervalo' (min),
+    'cupos'}] → días [{'dia', 'horas', 'bloques': [{'inicio', 'fin', 'horas'}]}]. Las horas de un bloque son
+    cupos × intervalo (de 07:30 a 12:00 con cupos de 30 min = 10 cupos = 5 h, hasta las 12:30).
+    """
+    dias: dict = {}
+    for b in sorted(bloques, key=lambda x: (x['dia'], x['inicio'])):
+        horas = Decimal(int(b['cupos']) * int(b['intervalo'] or 0)) / 60
+        h_fin, m_fin = (int(x) for x in b['fin'].split(':'))
+        total_min = h_fin * 60 + m_fin + int(b['intervalo'] or 0)
+        fin = f"{total_min // 60:02d}:{total_min % 60:02d}"
+        d = dias.setdefault(b['dia'], {'dia': b['dia'], 'horas': Decimal(0), 'bloques': []})
+        d['horas'] += horas
+        d['bloques'].append({'inicio': b['inicio'], 'fin': fin, 'horas': horas})
+    return [dias[k] for k in sorted(dias)]
+
+
+def id_agenda(dia: date, cod_medico: int) -> int:
+    """Identificador (negativo, para no chocar con sis_deta.id) de la línea de agenda de un médico en un día."""
+    return -((dia - date(2020, 1, 1)).days * 10000 + int(cod_medico))
+
+
+def honorario_final(calculado, estado: str, valor_ajustado=None, valor_glosa=None) -> Decimal:
+    """
+    Lo que se paga de la línea: el calculado (o el ajustado); con GLOSA se descuenta el valor glosado, y si la
+    glosa no dice valor se glosa todo.
+    """
+    base = Decimal(str(valor_ajustado)) if valor_ajustado is not None else Decimal(str(calculado or 0))
+    if estado != 'GLOSA':
+        return base
+    if valor_glosa is None:
+        return Decimal(0)
+    return max(base - Decimal(str(valor_glosa)), Decimal(0))
