@@ -333,10 +333,17 @@ def bandeja_cuentas_medicas(request):
             if (req.get('anulada') or es_particular(req['contrato']) or es_particular(contratos.get(adm_id, ''))
                     or entidad.upper().startswith('PAR')):
                 continue
-            faltantes_doc = doc_faltantes(req['contrato'], req['es_consulta'], cargados, req.get('primera_vez', False), req.get('sedacion', False)) + \
+            # Solo anestesiología (consulta, soporte anestésico, sedación): complemento de la resonancia; no exige
+            # documentos, RESULTADO ni datos del paciente: pasa a Cuentas Médicas con lo que tenga (caso 15798)
+            anestesia = req.get('sedacion', False)
+            if anestesia:
+                tiene_resultado = True
+            faltantes_doc = doc_faltantes(req['contrato'], req['es_consulta'], cargados, req.get('primera_vez', False), anestesia) + \
                 ([] if tiene_resultado else ['RESULTADO'])
             val = validaciones.get(adm_id)
             completo = val['completo'] if val else None
+            if anestesia:
+                completo = True
             fecha_ing = adm[6] if adm else None
 
             # Datos obligatorios del paciente o de la orden sin diligenciar en Zeus (médico/IPS/fecha que
@@ -347,6 +354,8 @@ def bandeja_cuentas_medicas(request):
                 estado_ia = 'documentos_incompletos'
             elif not tiene_resultado:
                 estado_ia = 'esperando_resultado'
+            elif anestesia and revisados >= docs:
+                estado_ia = 'listas'   # documentos revisados (OK de sistema), sin exigir RESULTADO
             elif (revisados >= docs and 'RESULTADO' in tipos_ok_ia.get(adm_id, set())
                   and doc_cumple(req['contrato'], req['es_consulta'], tipos_ok_ia.get(adm_id, set()),
                              req.get('primera_vez', False), req.get('sedacion', False))):
