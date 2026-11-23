@@ -536,15 +536,20 @@ def _releer_horas(client, modelo: str, imagenes: list[str]) -> tuple[str, list]:
 
 
 PROMPT_RELEER_BILATERAL = (
-    "En esta autorización de servicios, revisa la tabla de servicios autorizados. ¿El procedimiento aparece como "
-    "BILATERAL? Búscalo en la columna \"Tipo de intervención\" o \"Lateralidad\", en la descripción del "
-    "procedimiento o en las observaciones (ej. \"BILATERAL\", \"ambos oídos\", \"ambos ojos\"). "
-    "Responde en JSON: {\"bilateral\": \"SI | NO\"}"
+    "Este PDF trae una o varias autorizaciones de servicios (puede haber una por página). Para CADA procedimiento "
+    "autorizado (código CUPS de 6 dígitos), indica si está autorizado como BILATERAL. Cuenta como bilateral si lo "
+    "dice la columna \"Tipo de intervención\" o \"Lateralidad\", la descripción del procedimiento, las "
+    "observaciones o una línea suelta \"BILATERAL\" dentro de la MISMA autorización (ej. debajo de \"VALIDO "
+    "HASTA\"), o \"ambos oídos\"/\"ambos ojos\"/\"ambos miembros\". Una autorización sin esa palabra NO es bilateral. "
+    "Responde en JSON: {\"procedimientos\": [{\"cups\": \"<6 dígitos>\", \"bilateral\": \"SI | NO\"}]}"
 )
 
 
-def _releer_bilateral(client, modelo: str, imagenes: list[str]) -> tuple[bool, list]:
-    """Consulta corta: si la autorización escaneada dice BILATERAL (caso 37273). Devuelve (bool, [tokens])."""
+def _releer_bilateral(client, modelo: str, imagenes: list[str]) -> tuple[set, list]:
+    """
+    Consulta corta: los CUPS que la autorización escaneada da como BILATERAL (casos 37273 y 37074, varias
+    autorizaciones en un PDF). Devuelve ({cups}, [tokens]).
+    """
     contenido = [{"type": "text", "text": "Documento escaneado: ver imágenes adjuntas."}]
     contenido += [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"}}
                   for img in imagenes]
@@ -554,16 +559,21 @@ def _releer_bilateral(client, modelo: str, imagenes: list[str]) -> tuple[bool, l
             messages=[{"role": "system", "content": PROMPT_RELEER_BILATERAL},
                       {"role": "user", "content": contenido}],
             response_format={"type": "json_object"},
-            max_tokens=20,
+            max_tokens=200,
             temperature=0,
         )
         uso = getattr(respuesta, 'usage', None)
         tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
-        valor = str(json.loads(respuesta.choices[0].message.content).get("bilateral") or '').strip().upper()
-        return valor.startswith('SI') or valor.startswith('SÍ'), tokens
+        filas = json.loads(respuesta.choices[0].message.content).get("procedimientos") or []
+        bilaterales = set()
+        for f in filas if isinstance(filas, list) else []:
+            m = re.search(r'\d{6}', str((f or {}).get("cups") or ''))
+            if m and str((f or {}).get("bilateral") or '').strip().upper().startswith(('SI', 'SÍ')):
+                bilaterales.add(m.group(0))
+        return bilaterales, tokens
     except Exception as exc:
         logger.warning("No se pudo releer la lateralidad: %s", exc)
-        return False, [0, 0]
+        return set(), [0, 0]
 
 
 def _anotada_igual_zeus(anotada, datos_admision: dict, descripcion: str = '') -> bool:
@@ -1049,9 +1059,12 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
     if ((tipo_documento or '').upper() == 'AUTORIZACION' and imagenes and not _reintento
             and resultado["tipo"] != "OK" and resultado.get("paciente_coincide") != "NO"
             and _bilateral_cubre(resultado.get("descripcion"), 'BILATERAL')):
-        bilateral, tokens = _releer_bilateral(client, modelo, imagenes)
+        bilaterales, tokens = _releer_bilateral(client, modelo, imagenes)
         resultado["tokens"] = [a + b for a, b in zip(resultado.get("tokens") or [0, 0], tokens)]
-        if bilateral:
+        # Todos los CUPS del hallazgo deben estar autorizados como bilaterales
+        del_hallazgo = set(re.findall(r'\b(\d{6})\b', str(resultado.get("descripcion") or '')))
+        del_hallazgo = del_hallazgo or set(_cantidades_por_cups(datos_admision))
+        if bilaterales and {c.split('-')[0] for c in del_hallazgo} <= bilaterales:
             logger.info("AUTORIZACION: autorizado como BILATERAL, se descarta '%s'", resultado.get("descripcion"))
             resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cantidad=True,
                              cantidad_anotada="BILATERAL")

@@ -2373,14 +2373,46 @@ class BilateralCantidadTests(SimpleTestCase):
                                   usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
         adm = dict(self.ADM, identificacion='1000000001')
         client = mock.MagicMock()
-        client.chat.completions.create.side_effect = [respuesta(revision), respuesta({"bilateral": "SI"})]
+        client.chat.completions.create.side_effect = [respuesta(revision), respuesta({"procedimientos": [{"cups": "954626", "bilateral": "SI"}]})]
         with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
             r = _llamar_openai('', ['img'], 'AUTORIZACION', adm)
         self.assertEqual(r['tipo'], 'OK')
         # No dice bilateral: sigue la relectura de "CANTIDAD N" y el hallazgo
         client = mock.MagicMock()
         client.chat.completions.create.side_effect = [
-            respuesta(revision), respuesta({"bilateral": "NO"}),
+            respuesta(revision), respuesta({"procedimientos": [{"cups": "954626", "bilateral": "NO"}]}),
             respuesta({"anotaciones": [{"cups": "954626", "cantidad": "1"}]})]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            self.assertEqual(_llamar_openai('', ['img'], 'AUTORIZACION', adm)['tipo'], 'AUTORIZACION')
+
+    def test_escaneada_dos_autorizaciones_bilaterales(self):
+        # Caso 37074: un PDF con dos autorizaciones (doppler venoso y arterial), cada una cantidad 1 y "BILATERAL"
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        desc = ("Cantidad autorizada en el documento es 1, se esperaba 2 para el procedimiento 882317; Cantidad "
+                "autorizada en el documento es 1, se esperaba 2 para el procedimiento 882308.")
+        revision = {"nombre_documento": "PACIENTE PRUEBA", "identificacion_documento": "1000000001",
+                    "paciente_coincide": "SI", "procedimientos_coinciden": "SI", "firma_paciente": "NO_APLICA",
+                    "tipo": "AUTORIZACION", "cantidad_anotada": "", "cantidades_documento": "882317:1; 882308:1",
+                    "descripcion": desc}
+        adm = dict(self.ADM, identificacion='1000000001',
+                   cups=['882317 - ECOGRAFIA DOPPLER DE VASOS VENOSOS DE MIEMBROS INFERIORES (cant. 2)',
+                         '882308 - ECOGRAFIA DOPPLER DE VASOS ARTERIALES DE MIEMBROS INFERIORES (cant. 2)'])
+
+        def respuesta(contenido):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
+                                  usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [respuesta(revision), respuesta({"procedimientos": [
+            {"cups": "882317", "bilateral": "SI"}, {"cups": "882308", "bilateral": "SI"}]})]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            self.assertEqual(_llamar_openai('', ['img'], 'AUTORIZACION', adm)['tipo'], 'OK')
+        # Solo una es bilateral: sigue el hallazgo
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [
+            respuesta(revision), respuesta({"procedimientos": [
+                {"cups": "882317", "bilateral": "SI"}, {"cups": "882308", "bilateral": "NO"}]}),
+            respuesta({"anotaciones": [{"cups": "882317", "cantidad": "1"}, {"cups": "882308", "cantidad": "1"}]})]
         with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
             self.assertEqual(_llamar_openai('', ['img'], 'AUTORIZACION', adm)['tipo'], 'AUTORIZACION')
