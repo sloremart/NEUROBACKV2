@@ -226,10 +226,6 @@ class DashboardAgendadasView(APIView):
                     WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
                       -- Excluir canceladas con el mismo criterio de la tarjeta 'Canceladas' (CA, C, NC, CANCE...)
                       AND NOT (LTRIM(RTRIM(ISNULL(c.estado, ''))) IN ('CA', 'C', 'NC') OR LTRIM(RTRIM(ISNULL(c.estado, ''))) LIKE 'CA%%' OR LTRIM(RTRIM(ISNULL(c.estado, ''))) LIKE 'CANCE%%')
-                      -- Exclude poliso/videotelemetria AM slots: those are departure citas
-                      -- from a study that STARTED the previous evening and should not be
-                      -- counted as a new study on the departure date.
-                      AND NOT (c.asunto IN (13, 14) AND c.meridiano = 'am')
                     GROUP BY
                         c.autoid,
                         CONVERT(date, c.fecha),
@@ -257,7 +253,6 @@ class DashboardAgendadasView(APIView):
                            COALESCE(MIN(CASE WHEN LTRIM(RTRIM(COALESCE(c.estado, ''))) IN ('CA', 'C', 'NC') OR LTRIM(RTRIM(COALESCE(c.estado, ''))) LIKE 'CA%%' OR LTRIM(RTRIM(COALESCE(c.estado, ''))) LIKE 'CANCE%%' THEN NULL ELSE LTRIM(RTRIM(COALESCE(c.estado, ''))) END), 'C') AS estado
                     FROM citas c
                     WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
-                      AND NOT (c.asunto IN (13, 14) AND c.meridiano = 'am')
                     GROUP BY c.autoid, CONVERT(date, c.fecha), c.asunto
                 ) c
                 ) x
@@ -284,7 +279,6 @@ class DashboardAgendadasView(APIView):
                            COALESCE(MIN(CASE WHEN LTRIM(RTRIM(COALESCE(c.estado, ''))) IN ('CA', 'C', 'NC') OR LTRIM(RTRIM(COALESCE(c.estado, ''))) LIKE 'CA%%' OR LTRIM(RTRIM(COALESCE(c.estado, ''))) LIKE 'CANCE%%' THEN NULL ELSE LTRIM(RTRIM(COALESCE(c.estado, ''))) END), 'C') AS estado
                     FROM citas c
                     WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
-                      AND NOT (c.asunto IN (13, 14) AND c.meridiano = 'am')
                     GROUP BY c.autoid, CONVERT(date, c.fecha), c.asunto, c.cod_medi
                 ) c
                 LEFT JOIN sis_medi sm ON sm.codigo = c.cod_medi
