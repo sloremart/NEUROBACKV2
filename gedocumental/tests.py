@@ -2440,3 +2440,52 @@ class OrdenRecienNacidoMamaTests(SimpleTestCase):
         r = evaluar_hallazgo('ORDEN', self.DESC, self.ADM)
         self.assertEqual(r[0], DESCARTADO)
         self.assertIn('mamá', r[1])
+
+
+class NombreDelMedicoTests(SimpleTestCase):
+    """Caso 34508: la IA tomó como paciente a la médica que firma la última hoja de la orden (R.M., especialidad)."""
+    ADM = {'paciente': 'ROSA ELENA PARDO DIAZ', 'apellidos': 'PARDO DIAZ', 'identificacion': 'CC 1000000001',
+           'fecha': '2026-10-01', 'fecha_nacimiento': '1970-01-01', 'cups': ['890274 - CONSULTA NEUROLOGIA (cant. 1)']}
+    DESC = "Paciente no corresponde: documento 'MARTADANELA RUIZ OJEDA', admisión 'ROSA ELENA PARDO DIAZ'."
+
+    def test_es_profesional_con_mala_lectura(self):
+        from gedocumental.services.ai_revision import _es_profesional
+        self.assertTrue(_es_profesional('MARTADANELA RUIZ OJEDA', ['MARTA DANIELA RUIZ OJEDA']))
+        self.assertFalse(_es_profesional('LUIS CARLOS TORRES VEGA', ['MARTA DANIELA RUIZ OJEDA']))
+
+    def test_pdf_digital_nombre_con_registro(self):
+        from gedocumental.services.ai_revision import _nombre_de_profesional_en_texto, _clasificar_paciente
+        texto = "MONITOREO HOLTER 1(Un)\nMARTA DANIELA RUIZ OJEDA\nCardiologia\nR.M. CC2000000002"
+        self.assertTrue(_nombre_de_profesional_en_texto('MARTA DANIELA RUIZ OJEDA', texto))
+        self.assertFalse(_nombre_de_profesional_en_texto('MARTA DANIELA RUIZ OJEDA',
+                                                         "PACIENTE: MARTA DANIELA RUIZ OJEDA CC 2000000002"))
+        r = {'nombre_documento': 'MARTA DANIELA RUIZ OJEDA', 'identificacion_documento': ''}
+        self.assertEqual(_clasificar_paciente(r, texto, self.ADM), 'misma_persona')
+
+    def _respuesta(self, contenido):
+        import json
+        return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
+                              usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
+
+    def _revisar(self, relecturas):
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        revision = {"nombre_documento": "MARTADANELA RUIZ OJEDA", "identificacion_documento": "2000000002",
+                    "paciente_coincide": "NO", "procedimientos_coinciden": "SI", "firma_paciente": "NO_APLICA",
+                    "tipo": "INFORMACION", "descripcion": self.DESC}
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [self._respuesta(revision)] + [
+            self._respuesta(r) for r in relecturas]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client), \
+                mock.patch('gedocumental.services.ai_revision._parte_superior', return_value=None):
+            return _llamar_openai('', ['img'], 'ORDEN', self.ADM)
+
+    def test_escaneo_solo_con_la_firma_del_medico(self):
+        r = self._revisar([{"nombre": "", "identificaciones": ["2000000002"],
+                            "profesionales": ["MARTA DANIELA RUIZ OJEDA"]}])
+        self.assertEqual(r['tipo'], 'OK')
+
+    def test_escaneo_de_otro_paciente_sigue_hallazgo(self):
+        r = self._revisar([{"nombre": "LUIS CARLOS TORRES VEGA", "identificaciones": ["3000000003"],
+                            "profesionales": ["MARTA DANIELA RUIZ OJEDA"]}])
+        self.assertEqual(r['tipo'], 'INFORMACION')

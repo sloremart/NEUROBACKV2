@@ -409,8 +409,12 @@ PROMPT_RELEER_NOMBRE = (
     "ni omitir ninguno. No tomes al médico, al acompañante, a quien imprime, el nombre del ENCABEZADO (médico, "
     "consultorio o IPS con dirección, teléfono y NIT) ni el nombre ESCRITO A MANO junto a la firma (es quien firma, "
     "a veces un familiar). Además transcribe TODOS los números de documento de identidad (CC, TI, RC, CE...) "
-    "IMPRESOS en el documento, solo los dígitos. Responde en JSON: "
-    '{"nombre": "<nombre completo del paciente>", "identificaciones": ["<dígitos>", ...]}'
+    "IMPRESOS en el documento, solo los dígitos. Si en ninguna página aparece el nombre del paciente, nombre = ''. "
+    "En \"profesionales\" pon el nombre de CADA médico o profesional del documento: el que firma o aparece con "
+    "R.M., registro médico, T.P., tarjeta profesional o su especialidad (Cardiología, Neurología, Medicina general...). "
+    "Responde en JSON: "
+    '{"nombre": "<nombre completo del paciente>", "identificaciones": ["<dígitos>", ...], '
+    '"profesionales": ["<nombre>", ...]}'
 )
 
 
@@ -616,8 +620,10 @@ def _parte_superior(imagen_b64: str, fraccion: float = 0.55) -> str:
 def _releer_nombre(client, modelo: str, imagenes: list[str]) -> tuple[str, list, list]:
     """
     Consulta corta: el nombre del paciente del documento escaneado y los números de identificación impresos.
-    Devuelve (nombre, [identificaciones], [tokens]).
+    Devuelve (nombre, [identificaciones], [tokens]). Los médicos/profesionales leídos quedan en
+    _releer_nombre.profesionales (caso 34508: la IA tomó como paciente a la cardióloga que firma).
     """
+    _releer_nombre.profesionales = []
     contenido = [{"type": "text", "text": "Documento escaneado: ver imágenes adjuntas."}]
     contenido += [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"}}
                   for img in imagenes]
@@ -634,6 +640,9 @@ def _releer_nombre(client, modelo: str, imagenes: list[str]) -> tuple[str, list,
         datos = json.loads(respuesta.choices[0].message.content)
         ids = datos.get("identificaciones") or []
         ids = [re.sub(r'\D', '', str(i)) for i in (ids if isinstance(ids, list) else [ids])]
+        profesionales = datos.get("profesionales") or []
+        _releer_nombre.profesionales = [str(p) for p in (profesionales if isinstance(profesionales, list)
+                                                         else [profesionales]) if str(p or '').strip()]
         return str(datos.get("nombre") or ''), [i for i in ids if i], tokens
     except Exception as exc:
         logger.warning("No se pudo releer el nombre del paciente: %s", exc)
@@ -925,6 +934,17 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                 descripcion=(f"Nombre del usuario incorrecto: documento '{nombre}', "
                              f"admisión '{datos_admision.get('paciente')}'."),
                 ajuste_relectura_nombre=True)
+        elif otra_persona and _es_profesional(resultado.get("nombre_documento"),
+                                              getattr(_releer_nombre, 'profesionales', [])) and (
+                not nombre or _es_profesional(nombre, getattr(_releer_nombre, 'profesionales', []))):
+            # El "paciente" que leyó la IA es el médico que firma (R.M., especialidad; caso 34508: la última hoja
+            # de la orden solo trae la firma de la cardióloga) y la relectura no encuentra otro nombre de paciente
+            logger.info("'%s' es el profesional que firma, no el paciente: se descarta '%s'",
+                        resultado.get("nombre_documento"), resultado.get("descripcion"))
+            otro_motivo = tipo_ia != "OK" and not _solo_motivo_paciente(descripcion_ia)
+            resultado.update(tipo=tipo_ia if otro_motivo else "OK",
+                             descripcion=descripcion_ia if otro_motivo else "Documento correcto",
+                             paciente_coincide="SI", ajuste_nombre_profesional=True)
         elif otra_persona and len(id_adm) >= 6 and id_adm in ids_impresos:
             # El número de documento de la admisión está IMPRESO en el documento: es el paciente. El nombre
             # 'de otra persona' es el de quien firma a mano (caso 35533: 'Leidy Cardona' 1121853266, acompañante;
@@ -1304,6 +1324,44 @@ def _es_recien_nacido(nombre) -> bool:
     return bool(re.search(r'\b(HIJ[OA]|RN|R\.N\.?|NN)\s+(DE|DEL)\b|\bRECIEN\s+NACID[OA]\b|^\s*(RN|NN)\b', n))
 
 
+def _es_profesional(nombre, profesionales) -> bool:
+    """
+    El nombre leído es el de uno de los profesionales del documento (médico que firma con R.M./especialidad),
+    tolerando la mala lectura del escaneo (dos nombres leídos pegados y con letras cambiadas): mismos apellidos o nombre
+    completo muy parecido.
+    """
+    from difflib import SequenceMatcher
+    leido = [t for t in _tokens_nombre(nombre) if t not in _NO_SON_NOMBRE]
+    if len(leido) < 2:
+        return False
+    for p in profesionales or []:
+        prof = [t for t in _tokens_nombre(p) if t not in _NO_SON_NOMBRE]
+        if len(prof) < 2:
+            continue
+        if leido[-2:] == prof[-2:] or SequenceMatcher(None, ''.join(leido), ''.join(prof)).ratio() >= 0.85:
+            return True
+    return False
+
+
+_PROFESIONAL_CERCA = re.compile(r'\bR\.?\s*M\b|REGISTRO\s+MEDICO|\bT\.?\s*P\b|TARJETA\s+PROFESIONAL|'
+                                r'ESPECIALIDAD|ESPECIALISTA|CARDIOLOG|NEUROLOG|FISIATR|PEDIATR|ORTOPED|RADIOLOG|'
+                                r'MEDIC[OA]\s+(GENERAL|ESPECIALISTA|TRATANTE)|MEDICINA\s+(GENERAL|INTERNA|FISICA)')
+
+
+def _nombre_de_profesional_en_texto(nombre, texto) -> bool:
+    """PDF digital: el nombre leído aparece en el texto seguido (o precedido) de R.M., registro o especialidad."""
+    import unicodedata
+    leido = [t for t in _tokens_nombre(nombre) if t not in _NO_SON_NOMBRE]
+    if len(leido) < 2 or not texto:
+        return False
+    t = unicodedata.normalize('NFKD', texto).encode('ascii', 'ignore').decode().upper()
+    patron = r'\W+'.join(re.escape(x.upper()) for x in leido[-2:])
+    for m in re.finditer(patron, t):
+        if _PROFESIONAL_CERCA.search(t[max(0, m.start() - 60):m.end() + 120]):
+            return True
+    return False
+
+
 def _documento_de_la_mama(nombre, datos_admision: dict) -> bool:
     """
     Paciente menor de 1 año (a la fecha de la admisión) y el documento está a nombre de otra persona que comparte
@@ -1345,6 +1403,11 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
         return "misma_persona"
     if _documento_de_la_mama(resultado.get('nombre_documento') or resultado.get('paciente_documento'),
                              datos_admision):
+        return "misma_persona"
+
+    # PDF digital: el "paciente" leído es el médico que firma (va con R.M., registro o especialidad, caso 34508)
+    if _nombre_de_profesional_en_texto(resultado.get('nombre_documento') or resultado.get('paciente_documento'),
+                                       texto):
         return "misma_persona"
 
     # El nombre COMPLETO del paciente de la admisión está escrito en el documento: es su documento,
