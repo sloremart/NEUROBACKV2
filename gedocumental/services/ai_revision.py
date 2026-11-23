@@ -535,6 +535,37 @@ def _releer_horas(client, modelo: str, imagenes: list[str]) -> tuple[str, list]:
         return '', [0, 0]
 
 
+PROMPT_RELEER_BILATERAL = (
+    "En esta autorización de servicios, revisa la tabla de servicios autorizados. ¿El procedimiento aparece como "
+    "BILATERAL? Búscalo en la columna \"Tipo de intervención\" o \"Lateralidad\", en la descripción del "
+    "procedimiento o en las observaciones (ej. \"BILATERAL\", \"ambos oídos\", \"ambos ojos\"). "
+    "Responde en JSON: {\"bilateral\": \"SI | NO\"}"
+)
+
+
+def _releer_bilateral(client, modelo: str, imagenes: list[str]) -> tuple[bool, list]:
+    """Consulta corta: si la autorización escaneada dice BILATERAL (caso 37273). Devuelve (bool, [tokens])."""
+    contenido = [{"type": "text", "text": "Documento escaneado: ver imágenes adjuntas."}]
+    contenido += [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"}}
+                  for img in imagenes]
+    try:
+        respuesta = client.chat.completions.create(
+            model=modelo,
+            messages=[{"role": "system", "content": PROMPT_RELEER_BILATERAL},
+                      {"role": "user", "content": contenido}],
+            response_format={"type": "json_object"},
+            max_tokens=20,
+            temperature=0,
+        )
+        uso = getattr(respuesta, 'usage', None)
+        tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
+        valor = str(json.loads(respuesta.choices[0].message.content).get("bilateral") or '').strip().upper()
+        return valor.startswith('SI') or valor.startswith('SÍ'), tokens
+    except Exception as exc:
+        logger.warning("No se pudo releer la lateralidad: %s", exc)
+        return False, [0, 0]
+
+
 def _anotada_igual_zeus(anotada, datos_admision: dict, descripcion: str = '') -> bool:
     """
     La anotación "CANTIDAD N" es la cantidad de Zeus. Con varias autorizaciones en el PDF ('891509:8; 930860:2',
@@ -1012,6 +1043,18 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             resultado.update(tipo="AUTORIZACION", ajuste_cantidad_cups=True, descripcion="; ".join(
                 f"Cantidad autorizada en el documento es {doc}, se esperaba {zeus} para el procedimiento {cups}"
                 for cups, doc, zeus in distintas) + ".")
+
+    # AUTORIZACION escaneada: documento 1 y admisión 2 puede ser un procedimiento autorizado como BILATERAL que la
+    # IA no relacionó con la cantidad (caso 37273, "Tipo de intervención: BILATERAL"). Se pregunta solo eso.
+    if ((tipo_documento or '').upper() == 'AUTORIZACION' and imagenes and not _reintento
+            and resultado["tipo"] != "OK" and resultado.get("paciente_coincide") != "NO"
+            and _bilateral_cubre(resultado.get("descripcion"), 'BILATERAL')):
+        bilateral, tokens = _releer_bilateral(client, modelo, imagenes)
+        resultado["tokens"] = [a + b for a, b in zip(resultado.get("tokens") or [0, 0], tokens)]
+        if bilateral:
+            logger.info("AUTORIZACION: autorizado como BILATERAL, se descarta '%s'", resultado.get("descripcion"))
+            resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cantidad=True,
+                             cantidad_anotada="BILATERAL")
 
     # AUTORIZACION escaneada con hallazgo de cantidad y sin anotación leída: la IA suele tomar la columna de la
     # tabla (1) y no ver "CANTIDAD 8" al pie (caso 35377). Se pide solo la anotación; si es la de Zeus, no hay error.

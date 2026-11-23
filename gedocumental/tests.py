@@ -2358,3 +2358,29 @@ class BilateralCantidadTests(SimpleTestCase):
     def test_reverificacion_descarta(self):
         r = evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM, texto=self.TEXTO)
         self.assertEqual(r[0], DESCARTADO)
+
+    def test_escaneada_relee_bilateral(self):
+        import json
+        from django.test import override_settings
+        from gedocumental.services.ai_revision import _llamar_openai
+        revision = {"nombre_documento": "PACIENTE PRUEBA", "identificacion_documento": "1000000001",
+                    "paciente_coincide": "SI", "procedimientos_coinciden": "SI", "firma_paciente": "NO_APLICA",
+                    "tipo": "AUTORIZACION", "cantidad_anotada": "", "cantidades_documento": "954626:1",
+                    "descripcion": self.DESC}
+
+        def respuesta(contenido):
+            return mock.MagicMock(choices=[mock.MagicMock(message=mock.MagicMock(content=json.dumps(contenido)))],
+                                  usage=mock.MagicMock(prompt_tokens=100, completion_tokens=10))
+        adm = dict(self.ADM, identificacion='1000000001')
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [respuesta(revision), respuesta({"bilateral": "SI"})]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            r = _llamar_openai('', ['img'], 'AUTORIZACION', adm)
+        self.assertEqual(r['tipo'], 'OK')
+        # No dice bilateral: sigue la relectura de "CANTIDAD N" y el hallazgo
+        client = mock.MagicMock()
+        client.chat.completions.create.side_effect = [
+            respuesta(revision), respuesta({"bilateral": "NO"}),
+            respuesta({"anotaciones": [{"cups": "954626", "cantidad": "1"}]})]
+        with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
+            self.assertEqual(_llamar_openai('', ['img'], 'AUTORIZACION', adm)['tipo'], 'AUTORIZACION')
