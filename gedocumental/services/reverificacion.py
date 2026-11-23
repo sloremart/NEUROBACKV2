@@ -35,7 +35,7 @@ from gedocumental.services.ai_revision import (
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida, _bilateral_cubre,
     _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _es_anestesia, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
     _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden, _autorizacion_aplicacion_de_mas, _autorizacion_de_mas,
-    obtener_contexto_admision, cantidades_orden, _clasificar_paciente, _es_recien_nacido,
+    obtener_contexto_admision, cantidades_orden, _clasificar_paciente, _es_recien_nacido, _documento_de_la_mama,
 )
 
 logger = logging.getLogger(__name__)
@@ -378,6 +378,9 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     if (d.startswith((PACIENTE_NO_CORRESPONDE, NOMBRE_INCORRECTO)) and leido
             and not _mismo_paciente({'nombre_documento': leido, 'identificacion_documento': ''}, datos_admision)) and _clasificar_paciente(
             {'nombre_documento': leido, 'identificacion_documento': ''}, '', datos_admision) == 'misma_persona':
+        if _documento_de_la_mama(leido, datos_admision):
+            return DESCARTADO, (f"Paciente menor de 1 año: el documento está a nombre de la mamá ('{leido}'), que "
+                                f"comparte apellido con el paciente ({datos_admision.get('paciente')}).")
         if _es_recien_nacido(leido):
             return DESCARTADO, (f"Recién nacido sin registro: el documento lo nombra por la mamá ('{leido}'); "
                                 f"ZeusSalud: {datos_admision.get('paciente')}.")

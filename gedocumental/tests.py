@@ -2416,3 +2416,27 @@ class BilateralCantidadTests(SimpleTestCase):
             respuesta({"anotaciones": [{"cups": "882317", "cantidad": "1"}, {"cups": "882308", "cantidad": "1"}]})]
         with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
             self.assertEqual(_llamar_openai('', ['img'], 'AUTORIZACION', adm)['tipo'], 'AUTORIZACION')
+
+
+class OrdenRecienNacidoMamaTests(SimpleTestCase):
+    """Caso 33358: orden del recién nacido a nombre de la mamá, que comparte apellido con el bebé."""
+    ADM = {'paciente': 'ANA LUCIA PEREZ GOMEZ', 'apellidos': 'PEREZ GÓMEZ', 'identificacion': 'RC 1000000001',
+           'fecha': '2026-09-20', 'fecha_nacimiento': '2026-09-10', 'cups': ['954626 - POTENCIALES (cant. 2)']}
+    DESC = "Paciente no corresponde: documento 'MARIA ELENA GOMEZ RUIZ', admisión 'ANA LUCIA PEREZ GOMEZ'."
+
+    def test_bebe_con_orden_de_la_mama(self):
+        from gedocumental.services.ai_revision import _clasificar_paciente, _documento_de_la_mama
+        self.assertTrue(_documento_de_la_mama('MARIA ELENA GOMEZ RUIZ', self.ADM))
+        r = {'nombre_documento': 'MARIA ELENA GOMEZ RUIZ', 'identificacion_documento': '2000000002'}
+        self.assertEqual(_clasificar_paciente(r, '', self.ADM), 'misma_persona')
+
+    def test_sin_apellido_comun_o_mayor_de_un_anio(self):
+        from gedocumental.services.ai_revision import _documento_de_la_mama
+        self.assertFalse(_documento_de_la_mama('MARIA ELENA TORRES RUIZ', self.ADM))
+        self.assertFalse(_documento_de_la_mama('MARIA ELENA GOMEZ RUIZ', dict(self.ADM, fecha_nacimiento='2020-01-01')))
+        self.assertFalse(_documento_de_la_mama('MARIA ELENA GOMEZ RUIZ', dict(self.ADM, fecha_nacimiento='')))
+
+    def test_reverificacion_descarta(self):
+        r = evaluar_hallazgo('ORDEN', self.DESC, self.ADM)
+        self.assertEqual(r[0], DESCARTADO)
+        self.assertIn('mamá', r[1])

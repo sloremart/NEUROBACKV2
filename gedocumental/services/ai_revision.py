@@ -242,7 +242,7 @@ def obtener_contexto_admision(consecutivo) -> dict:
                     sp.tipo_id, sp.num_id,
                     sp.primer_nom, sp.segundo_nom, sp.primer_ape, sp.segundo_ape,
                     se.nombre AS entidad, c.alias AS contrato, sm.fecha_ing, c.nombre AS contrato_nombre,
-                    sm.obs
+                    sm.obs, sp.fecha_naci
                 FROM sis_maes sm
                 LEFT JOIN sis_paci sp ON sm.autoid = sp.autoid
                 LEFT JOIN sis_empre se ON LTRIM(RTRIM(sm.EPSPaciente)) = LTRIM(RTRIM(se.codigo))
@@ -263,6 +263,9 @@ def obtener_contexto_admision(consecutivo) -> dict:
                     "contrato_nombre": _reparar_texto((fila[9] or '').strip()),
                     # Observación de la admisión: ahí admisiones anota "CONTRASTADA" (mismo CUPS simple/contrastado)
                     "observacion": _reparar_texto(str(fila[10] or '').strip()),
+                    # Apellidos y nacimiento: la orden de un recién nacido viene a nombre de la mamá (caso 33358)
+                    "apellidos": _reparar_texto(' '.join((p or '').strip() for p in fila[4:6] if (p or '').strip())),
+                    "fecha_nacimiento": str(fila[11].date() if hasattr(fila[11], 'date') else fila[11] or ''),
                 })
 
             cursor.execute(
@@ -1301,6 +1304,25 @@ def _es_recien_nacido(nombre) -> bool:
     return bool(re.search(r'\b(HIJ[OA]|RN|R\.N\.?|NN)\s+(DE|DEL)\b|\bRECIEN\s+NACID[OA]\b|^\s*(RN|NN)\b', n))
 
 
+def _documento_de_la_mama(nombre, datos_admision: dict) -> bool:
+    """
+    Paciente menor de 1 año (a la fecha de la admisión) y el documento está a nombre de otra persona que comparte
+    un apellido con él: la orden del recién nacido se hace a nombre de la mamá (caso 33358: orden a nombre de la
+    mamá con observación RECIEN NACIDO; el primer apellido de la mamá es el segundo del bebé).
+    """
+    from datetime import date
+    try:
+        nacimiento = date.fromisoformat(str(datos_admision.get('fecha_nacimiento') or '')[:10])
+        referencia = date.fromisoformat(str(datos_admision.get('fecha') or '')[:10] or str(date.today()))
+    except ValueError:
+        return False
+    if not (0 <= (referencia - nacimiento).days < 366):
+        return False
+    apellidos = set(_tokens_nombre(datos_admision.get('apellidos')))
+    doc = set(_tokens_nombre(nombre)) - set(_NO_SON_NOMBRE)
+    return bool(apellidos & doc)
+
+
 def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> str:
     """
     Cuando la IA dice que el paciente NO coincide, decide con reglas fijas:
@@ -1320,6 +1342,9 @@ def _clasificar_paciente(resultado: dict, texto: str, datos_admision: dict) -> s
     # Recién nacido sin registro civil: la orden lo nombra por la mamá ('HIJA DE MARILYN', 'RN DE ...', 'RECIEN
     # NACIDO') y con un número provisional (CN); en SIESA ya tiene su nombre. No es otra persona (caso 36536)
     if _es_recien_nacido(resultado.get('nombre_documento') or resultado.get('paciente_documento')):
+        return "misma_persona"
+    if _documento_de_la_mama(resultado.get('nombre_documento') or resultado.get('paciente_documento'),
+                             datos_admision):
         return "misma_persona"
 
     # El nombre COMPLETO del paciente de la admisión está escrito en el documento: es su documento,
