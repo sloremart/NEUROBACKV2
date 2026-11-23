@@ -2091,6 +2091,8 @@ def _solo_motivo_cantidad(descripcion) -> bool:
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
     # "Nombre del usuario correcto; procedimiento ... coincide" confirma, no es otro motivo (caso 35704)
     d = re.sub(_AFIRMACIONES, ' ', d)
+    # "cantidad (2) no corresponde a la admisión (1)" habla de la cantidad, no de otro motivo (caso 37439)
+    d = re.sub(r'(cantidad[^.;]{0,40}?)\bno (corresponde|coincide)\b', r'\1 distinta', d)
     return 'cantidad' in d and not re.search(r'vencid|vigencia|nombre|identificacion|firma|legib|no cubre|'
                                              r'no incluye|no corresponde|numero de autorizacion|sin numero', d)
 

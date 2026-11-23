@@ -2497,3 +2497,20 @@ class NombreDelMedicoTests(SimpleTestCase):
         r = self._revisar([{"nombre": "LUIS CARLOS TORRES VEGA", "identificaciones": ["3000000003"],
                             "profesionales": ["MARTA DANIELA RUIZ OJEDA"]}])
         self.assertEqual(r['tipo'], 'INFORMACION')
+
+
+class OrdenCantidadNoCorrespondeTests(SimpleTestCase):
+    """Caso 37439: 'cantidad (2) no corresponde a la admisión (1)' en una ORDEN: pide más, no es error."""
+    DESC = ("Nombre del usuario correcto. Procedimiento en documento (879420) coincide, pero cantidad (2) no "
+            "corresponde a la admisión (1).")
+    ADM = {'paciente': 'PACIENTE PRUEBA', 'cups': ['879420 - TOMOGRAFIA DE ABDOMEN Y PELVIS (cant. 1)']}
+
+    def test_orden_con_mas_cantidad(self):
+        from gedocumental.services.ai_revision import _orden_con_mas_cantidad, _solo_motivo_cantidad
+        self.assertTrue(_solo_motivo_cantidad(self.DESC))
+        self.assertTrue(_orden_con_mas_cantidad('ORDEN', self.DESC))
+        self.assertEqual(evaluar_hallazgo('ORDEN', self.DESC, self.ADM)[0], DESCARTADO)
+
+    def test_procedimiento_no_corresponde_sigue_siendo_otro_motivo(self):
+        from gedocumental.services.ai_revision import _solo_motivo_cantidad
+        self.assertFalse(_solo_motivo_cantidad("El procedimiento no corresponde; cantidad 2, se esperaba 1."))
