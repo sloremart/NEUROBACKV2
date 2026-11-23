@@ -32,7 +32,7 @@ from gedocumental.services.ai_revision import (
     MAX_PAGINAS_LEER, MIN_CARACTERES_TEXTO, TIPOS_SIN_REVISION_IA, _buscar_palabra, _codigos_cups,
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _imagen_documentada, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE, TIPOS_NO_REVISADOS,
-    _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida,
+    _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida, _bilateral_cubre,
     _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _es_anestesia, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
     _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden, _autorizacion_aplicacion_de_mas, _autorizacion_de_mas,
     obtener_contexto_admision, cantidades_orden, _clasificar_paciente, _es_recien_nacido,
@@ -476,6 +476,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     if texto and _cantidad_anotada(texto, _cantidades_esperadas(d)):
         return DESCARTADO, (f"El PDF tiene la anotación 'CANTIDAD {_cantidades_esperadas(d)[0]}' que coincide "
                             "con la admisión; prevalece sobre la columna de la tabla.")
+
+    if texto and _bilateral_cubre(d, texto):
+        return DESCARTADO, ("El procedimiento está autorizado como BILATERAL: cantidad 1 bilateral cubre los dos "
+                            "lados que factura la admisión.")
 
     if _procedimiento_libre_particular(tipo, d, datos_admision):
         return DESCARTADO, ("Paciente particular: puede tomarse cualquier examen; la diferencia de "

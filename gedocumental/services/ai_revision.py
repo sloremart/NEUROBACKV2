@@ -123,7 +123,9 @@ VERIFICACIONES OBLIGATORIAS (en este orden):
    firmas, legibilidad, datos incompletos).
    CANTIDADES: si la autorización trae, además de la tabla, una anotación u observación de cantidad (ej.
    "CANTIDAD 2" al pie de la autorización, impresa o a mano), ESA es la cantidad autorizada y prevalece
-   sobre la columna "Cantidad" de la tabla. En una ORDEN, que pida MÁS cantidad que la admisión no es error
+   sobre la columna "Cantidad" de la tabla. Un procedimiento autorizado como BILATERAL (columna "Tipo de
+   intervención", lateralidad u observación "bilateral"/"ambos oídos") con cantidad 1 cubre los DOS lados:
+   equivale a cantidad 2 (en cantidades_documento pon 2). En una ORDEN, que pida MÁS cantidad que la admisión no es error
    (la orden cubre varias sesiones y cada admisión factura las suyas); solo es error si pide menos.
 Si hay varios problemas, el tipo es el del primero según este orden, y en la descripción menciona también los demás de forma breve.
 No marques como error que el documento no traiga un dato que normalmente no lleva ese tipo de documento.
@@ -983,6 +985,7 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         if ((zeus and len(set(zeus)) == 1 and len(set(anotada)) == 1 and int(anotada[0]) == zeus[0])
                 or _cantidad_anotada(texto, zeus)
                 or _cantidades_iguales(resultado.get("descripcion"), datos_admision)
+                or _bilateral_cubre(resultado.get("descripcion"), texto, resultado)
                 or _orden_con_mas_cantidad(tipo_documento, resultado.get("descripcion"))):
             logger.info("%s: la cantidad anotada coincide con Zeus, se descarta '%s'",
                         tipo_documento, resultado.get("descripcion"))
@@ -1001,6 +1004,9 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             and resultado.get("paciente_coincide") != "NO"):
         distintas = _cantidades_distintas_zeus(resultado.get("cantidades_documento"), datos_admision,
                                                resultado.get("cantidad_anotada"))
+        # Autorizado como BILATERAL con cantidad 1: cubre los dos lados que factura la admisión (caso 37273)
+        if distintas and _es_bilateral(texto, resultado) and all(z == 2 * doc for _, doc, z in distintas):
+            distintas = []
         if distintas:
             logger.info("AUTORIZACION: cantidad distinta a Zeus %s", distintas)
             resultado.update(tipo="AUTORIZACION", ajuste_cantidad_cups=True, descripcion="; ".join(
@@ -1900,6 +1906,33 @@ def _cantidades_esperadas(descripcion) -> list:
     if not _solo_motivo_cantidad(d):
         return []
     return [int(n) for n in re.findall(r'se esperaba(?:n)?\s+(\d+)', d)]
+
+
+def _es_bilateral(texto='', resultado=None) -> bool:
+    """El documento autoriza el procedimiento como BILATERAL (tipo de intervención, lateralidad u observación)."""
+    import re
+    import unicodedata
+    resultado = resultado or {}
+    estudio = resultado.get("estudio_documento") or {}
+    lat = str(estudio.get("lateralidad") or '') if isinstance(estudio, dict) else ''
+    fuentes = " ".join([texto or '', lat, str(resultado.get("procedimientos_documento") or '')])
+    t = unicodedata.normalize('NFKD', fuentes).encode('ascii', 'ignore').decode().upper()
+    return bool(re.search(r'\bBILATERAL\b|\bAMBOS (OIDOS|OJOS|LADOS|MIEMBROS)\b', t))
+
+
+def _bilateral_cubre(descripcion, texto='', resultado=None) -> bool:
+    """
+    Hallazgo de cantidad en el que el documento autoriza 1 y la admisión factura 2, y el procedimiento está
+    autorizado como BILATERAL: un estudio por cada lado, cantidad 1 bilateral = 2 (caso 37273, 954626 Sanitas).
+    """
+    import re
+    import unicodedata
+    d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    if not _solo_motivo_cantidad(d) or not _es_bilateral(texto, resultado):
+        return False
+    pares = [(int(a), int(b)) for a, b in re.findall(r'\bes\s+(\d{1,3}),?\s*(?:y\s+|pero\s+)?se esperaba(?:n)?\s+(\d{1,3})', d)]
+    pares += [(int(a), int(b)) for a, b in re.findall(r"documento\s*'(\d{1,3})',\s*admision\s*'(\d{1,3})'", d)]
+    return bool(pares) and all(b == 2 * a for a, b in pares)
 
 
 def _solo_motivo_cantidad(descripcion) -> bool:

@@ -2335,3 +2335,26 @@ class EscaneoConTextoSinPacienteTests(SimpleTestCase):
         self.assertEqual(llamar.call_count, 1)
         leer.assert_not_called()
         self.assertEqual(r['modo'], 'texto')
+
+
+class BilateralCantidadTests(SimpleTestCase):
+    """Autorización con 'Tipo de intervención BILATERAL' y cantidad 1: cubre los 2 que factura la admisión."""
+    DESC = "Cantidad autorizada en el documento es 1, se esperaba 2 para el procedimiento 954626."
+    ADM = {'paciente': 'PACIENTE PRUEBA', 'cups': ['954626 - POTENCIALES EVOCADOS AUDITIVOS (cant. 2)'],
+           'contrato': 'SANITAS EVENTO CONTRIBUTIVO'}
+    TEXTO = "954626 POTENCIALES EVOCADOS AUDITIVOS DE CORTA LATENCIA BILATERAL 1"
+
+    def test_bilateral_cubre_dos(self):
+        from gedocumental.services.ai_revision import _bilateral_cubre
+        self.assertTrue(_bilateral_cubre(self.DESC, self.TEXTO))
+        self.assertTrue(_bilateral_cubre(self.DESC, '', {"estudio_documento": {"lateralidad": "BILATERAL"}}))
+
+    def test_sin_bilateral_sigue_hallazgo(self):
+        from gedocumental.services.ai_revision import _bilateral_cubre
+        self.assertFalse(_bilateral_cubre(self.DESC, "954626 POTENCIALES EVOCADOS AUDITIVOS 1"))
+        self.assertFalse(_bilateral_cubre(
+            "Cantidad autorizada en el documento es 1, se esperaba 4 para el procedimiento 954626.", self.TEXTO))
+
+    def test_reverificacion_descarta(self):
+        r = evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM, texto=self.TEXTO)
+        self.assertEqual(r[0], DESCARTADO)
