@@ -234,12 +234,16 @@ def construir(periodo: str) -> dict:
                     alertas.append(f"Lumier registra otro examen: {e.cups} {e.examen}")
             medicos_lumier = {x.cod_medico for x in emparejados}
             if medicos_lumier != {l['cod_medico_zeus']}:
+                # Quien realmente lee el examen es el de Lumier: se le paga a él automáticamente (regla
+                # 2026-11-23); solo si el auditor decide "Pagar a Zeus" se queda con el médico de Zeus
                 res = resoluciones.get(_clave_md(sid))
-                if res and res.decision == 'LUMIER' and e.cod_medico:
+                if res and res.decision == 'ZEUS':
+                    pass
+                elif e.cod_medico:
                     l['cod_medico'] = e.cod_medico
-                    alertas.append(f"Lumier: leído por {e.profesional} (validado: se paga a Lumier)")
-                elif not res:
-                    alertas.append(f"Lumier: leído por {e.profesional}, pendiente validar")
+                    l['medico_agenda'] = medicos.get(l['cod_medico_zeus'], {}).get('nombre', 'Sin médico')
+                else:
+                    alertas.append(f"Lumier: leído por {e.profesional}, que no se encontró en Zeus; pendiente validar")
                 hallazgos.append(dict(base_hallazgo, clave=_clave_md(sid), tipo='MEDICO_DIFERENTE',
                                       medico_lumier=', '.join(sorted({x.profesional for x in emparejados})),
                                       cod_medico_lumier=e.cod_medico))
@@ -303,6 +307,11 @@ def construir(periodo: str) -> dict:
         x['decision'] = r.decision if r else ''
         x['nota'] = r.nota if r else ''
         x['validado_por'] = r.usuario if r else ''
+        x['automatico'] = False
+        if not r and x['tipo'] == 'MEDICO_DIFERENTE' and x['cod_medico_lumier']:
+            # Se paga a Lumier sin intervención (el radiólogo de Lumier es quien leyó el examen)
+            x.update(decision='LUMIER', automatico=True, validado_por='Automático',
+                     nota='Se paga al radiólogo que leyó en Lumier')
     return {'lineas': lineas, 'medicos': medicos, 'hallazgos': hallazgos, 'lumier_cargado': lumier_cargado,
             'lumier_estudios': len(estudios), 'valor_hora': valor_hora}
 
@@ -332,6 +341,7 @@ def _linea_json(l: dict) -> dict:
         'cod_medico': l['cod_medico'], 'cod_medico_zeus': l['cod_medico_zeus'],
         'lumier': l['lumier'], 'tipo': l['tipo'], 'por_horas': l['por_horas'], 'bloques': l.get('bloques'),
         'valor_glosa': _num(l['valor_glosa']), 'valor_glosado': _num(l['valor_glosado']),
+        'medico_agenda': l.get('medico_agenda', ''),
     }
 
 
