@@ -124,7 +124,8 @@ VERIFICACIONES OBLIGATORIAS (en este orden):
    CANTIDADES: si la autorización trae, además de la tabla, una anotación u observación de cantidad (ej.
    "CANTIDAD 2" al pie de la autorización, impresa o a mano), ESA es la cantidad autorizada y prevalece
    sobre la columna "Cantidad" de la tabla. Un procedimiento autorizado como BILATERAL (columna "Tipo de
-   intervención", lateralidad u observación "bilateral"/"ambos oídos") con cantidad 1 cubre los DOS lados:
+   intervención", lateralidad u observación "bilateral", "derecho e izquierdo" o "ambos oídos") con cantidad 1
+   cubre los DOS lados:
    equivale a cantidad 2 (en cantidades_documento pon 2). En una ORDEN, que pida MÁS cantidad que la admisión no es error
    (la orden cubre varias sesiones y cada admisión factura las suyas); solo es error si pide menos.
 Si hay varios problemas, el tipo es el del primero según este orden, y en la descripción menciona también los demás de forma breve.
@@ -547,7 +548,9 @@ PROMPT_RELEER_BILATERAL = (
     "autorizado (código CUPS de 6 dígitos), indica si está autorizado como BILATERAL. Cuenta como bilateral si lo "
     "dice la columna \"Tipo de intervención\" o \"Lateralidad\", la descripción del procedimiento, las "
     "observaciones o una línea suelta \"BILATERAL\" dentro de la MISMA autorización (ej. debajo de \"VALIDO "
-    "HASTA\"), o \"ambos oídos\"/\"ambos ojos\"/\"ambos miembros\". Una autorización sin esa palabra NO es bilateral. "
+    "HASTA\"), \"LATERALIDAD DERECHO E IZQUIERDO\" (los dos lados, aunque esté partido en dos renglones) o "
+    "\"ambos oídos\"/\"ambos ojos\"/\"ambos miembros\". Una autorización de un solo lado (solo derecho o solo "
+    "izquierdo) o sin lateralidad NO es bilateral. "
     "Responde en JSON: {\"procedimientos\": [{\"cups\": \"<6 dígitos>\", \"bilateral\": \"SI | NO\"}]}"
 )
 
@@ -2061,7 +2064,10 @@ def _es_bilateral(texto='', resultado=None) -> bool:
     lat = str(estudio.get("lateralidad") or '') if isinstance(estudio, dict) else ''
     fuentes = " ".join([texto or '', lat, str(resultado.get("procedimientos_documento") or '')])
     t = unicodedata.normalize('NFKD', fuentes).encode('ascii', 'ignore').decode().upper()
-    return bool(re.search(r'\bBILATERAL\b|\bAMBOS (OIDOS|OJOS|LADOS|MIEMBROS)\b', t))
+    # "LATERALIDAD DERECHO E IZQUIERDO" (Capital Salud, caso 37017) también son los dos lados
+    return bool(re.search(r'\bBILATERAL\b|\bAMBOS (OIDOS|OJOS|LADOS|MIEMBROS)\b|'
+                          r'\bDERECH[OA]S?\s*(E|Y|-|/|,)\s*IZQUIERD[OA]S?\b|'
+                          r'\bIZQUIERD[OA]S?\s*(E|Y|-|/|,)\s*DERECH[OA]S?\b', t))
 
 
 def _bilateral_cubre(descripcion, texto='', resultado=None) -> bool:

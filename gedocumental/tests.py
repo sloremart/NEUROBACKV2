@@ -2417,6 +2417,14 @@ class BilateralCantidadTests(SimpleTestCase):
         with override_settings(OPENAI_API_KEY='x'), mock.patch('openai.OpenAI', return_value=client):
             self.assertEqual(_llamar_openai('', ['img'], 'AUTORIZACION', adm)['tipo'], 'AUTORIZACION')
 
+    def test_lateralidad_derecho_e_izquierdo(self):
+        # Caso 37017: Capital Salud escribe "LATERALIDAD DERECHO E IZQUIERDO" en vez de "BILATERAL"
+        from gedocumental.services.ai_revision import _bilateral_cubre, _es_bilateral
+        desc = "Cantidad autorizada en el documento es 1, se esperaba 2 para el procedimiento 882318."
+        self.assertTrue(_bilateral_cubre(desc, "882318 ECOGRAFIA DOPPLER 1\nLATERALIDAD DERECHO\nE IZQUIERDO"))
+        self.assertTrue(_es_bilateral("Lateralidad: izquierda y derecha"))
+        self.assertFalse(_es_bilateral("LATERALIDAD DERECHO"))
+
 
 class OrdenRecienNacidoMamaTests(SimpleTestCase):
     """Caso 33358: orden del recién nacido a nombre de la mamá, que comparte apellido con el bebé."""
