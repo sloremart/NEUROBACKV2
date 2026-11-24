@@ -2801,47 +2801,72 @@ def revisar_archivo(archivo_obj, datos_admision: dict) -> dict | None:
 
 
 def _registrar_revision(archivo_obj, resultado: dict) -> None:
+    from django.db import transaction
     from django.utils import timezone
-    from gedocumental.models import RevisionIA
+    from gedocumental.models import ArchivoFacturacion
 
+    # Dos o más revisiones del mismo archivo al tiempo (clic repetido en Guardar/Reemplazar/Revisar, o la subida
+    # más el cron) creaban un hallazgo pendiente cada una (caso 38018: tres iguales a la misma hora). Se bloquea
+    # el archivo para que se registren una tras otra: la última cierra las anteriores
     try:
-        RevisionIA.objects.filter(IdArchivo=archivo_obj, Resuelta=False).update(
-            Resuelta=True,
-            Resolucion='CORREGIDO' if resultado["tipo"] == "OK" else 'REEMPLAZADO',
-            FechaResolucion=timezone.now(),
-        )
-        # "Reemplazar" en GE Documental borra el archivo y sube uno nuevo del mismo tipo:
-        # el hallazgo cerrado como ARCHIVO_ELIMINADO pasa a CORREGIDO (o REEMPLAZADO si el nuevo también falla)
-        RevisionIA.objects.filter(
-            AdmisionId=archivo_obj.Admision_id, TipoDocumento=archivo_obj.Tipo or '',
-            Resolucion='ARCHIVO_ELIMINADO',
-        ).exclude(TipoHallazgo='OK').update(
-            Resolucion='CORREGIDO' if resultado["tipo"] == "OK" else 'REEMPLAZADO',
-        )
-        # Si llegó el RESULTADO, se cierra el hallazgo de "ausencia del reporte" de la admisión
-        if (archivo_obj.Tipo or '').upper() == 'RESULTADO':
-            RevisionIA.objects.filter(
-                AdmisionId=archivo_obj.Admision_id, TipoDocumento='RESULTADO',
-                IdArchivo__isnull=True, Resuelta=False,
-            ).update(Resuelta=True, Resolucion='CORREGIDO', FechaResolucion=timezone.now())
-        RevisionIA.objects.create(
-            IdArchivo=archivo_obj,
-            AdmisionId=archivo_obj.Admision_id,
-            TipoDocumento=archivo_obj.Tipo or '',
-            # Archivos cargados por el sistema (sin usuario) quedan a cargo de la coordinación médica
-            UsuarioId=archivo_obj.Usuario_id or getattr(settings, 'USUARIO_COORDINACION_MEDICA_ID', None),
-            TipoHallazgo=resultado["tipo"],
-            Descripcion=resultado.get("descripcion", ""),
-            Modo=resultado.get("modo", ""),
-            DatosRecaudo=(json.dumps(resultado.get("recaudo"), ensure_ascii=False)
-                          if resultado.get("hallazgo_recaudo") else ''),
-            Cantidades=(str(resultado.get("cantidades_documento") or '')[:500]
-                        if (archivo_obj.Tipo or '').upper() in ('ORDEN', 'AUTORIZACION') else ''),
-            # Un OK no deja nada pendiente
-            Resuelta=resultado["tipo"] == "OK",
-        )
+        with transaction.atomic():
+            ArchivoFacturacion.objects.select_for_update().filter(IdArchivo=archivo_obj.IdArchivo).first()
+            _registrar_revision_bloqueada(archivo_obj, resultado, timezone.now())
     except Exception as exc:
         logger.error("Error guardando revisión IA del archivo %s: %s", archivo_obj.IdArchivo, exc)
+
+
+def _registrar_revision_bloqueada(archivo_obj, resultado: dict, ahora) -> None:
+    from gedocumental.models import RevisionIA
+
+    tipo_doc = (archivo_obj.Tipo or '').upper()
+    datos = dict(
+        Modo=resultado.get("modo", ""),
+        DatosRecaudo=(json.dumps(resultado.get("recaudo"), ensure_ascii=False)
+                      if resultado.get("hallazgo_recaudo") else ''),
+        Cantidades=(str(resultado.get("cantidades_documento") or '')[:500]
+                    if tipo_doc in ('ORDEN', 'AUTORIZACION') else ''),
+    )
+    pendientes = RevisionIA.objects.filter(IdArchivo=archivo_obj, Resuelta=False)
+    if resultado["tipo"] != "OK":
+        # El mismo hallazgo ya está pendiente en el archivo: se conserva (y su fecha), no se duplica
+        igual = pendientes.filter(TipoHallazgo=resultado["tipo"],
+                                  Descripcion=resultado.get("descripcion", "")).order_by('-IdRevision').first()
+        if igual:
+            pendientes.exclude(pk=igual.pk).update(Resuelta=True, Resolucion='REEMPLAZADO', FechaResolucion=ahora)
+            RevisionIA.objects.filter(pk=igual.pk).update(**datos)
+            return
+    pendientes.update(
+        Resuelta=True,
+        Resolucion='CORREGIDO' if resultado["tipo"] == "OK" else 'REEMPLAZADO',
+        FechaResolucion=ahora,
+    )
+    # "Reemplazar" en GE Documental borra el archivo y sube uno nuevo del mismo tipo:
+    # el hallazgo cerrado como ARCHIVO_ELIMINADO pasa a CORREGIDO (o REEMPLAZADO si el nuevo también falla)
+    RevisionIA.objects.filter(
+        AdmisionId=archivo_obj.Admision_id, TipoDocumento=archivo_obj.Tipo or '',
+        Resolucion='ARCHIVO_ELIMINADO',
+    ).exclude(TipoHallazgo='OK').update(
+        Resolucion='CORREGIDO' if resultado["tipo"] == "OK" else 'REEMPLAZADO',
+    )
+    # Si llegó el RESULTADO, se cierra el hallazgo de "ausencia del reporte" de la admisión
+    if tipo_doc == 'RESULTADO':
+        RevisionIA.objects.filter(
+            AdmisionId=archivo_obj.Admision_id, TipoDocumento='RESULTADO',
+            IdArchivo__isnull=True, Resuelta=False,
+        ).update(Resuelta=True, Resolucion='CORREGIDO', FechaResolucion=ahora)
+    RevisionIA.objects.create(
+        IdArchivo=archivo_obj,
+        AdmisionId=archivo_obj.Admision_id,
+        TipoDocumento=archivo_obj.Tipo or '',
+        # Archivos cargados por el sistema (sin usuario) quedan a cargo de la coordinación médica
+        UsuarioId=archivo_obj.Usuario_id or getattr(settings, 'USUARIO_COORDINACION_MEDICA_ID', None),
+        TipoHallazgo=resultado["tipo"],
+        Descripcion=resultado.get("descripcion", ""),
+        # Un OK no deja nada pendiente
+        Resuelta=resultado["tipo"] == "OK",
+        **datos,
+    )
 
 
 def _ia_disponible() -> bool:

@@ -5,7 +5,7 @@ Tests sin base de datos (SimpleTestCase): reglas de reverificación de hallazgos
 
 import os
 import tempfile
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest import mock
 
@@ -2514,3 +2514,27 @@ class OrdenCantidadNoCorrespondeTests(SimpleTestCase):
     def test_procedimiento_no_corresponde_sigue_siendo_otro_motivo(self):
         from gedocumental.services.ai_revision import _solo_motivo_cantidad
         self.assertFalse(_solo_motivo_cantidad("El procedimiento no corresponde; cantidad 2, se esperaba 1."))
+
+
+class RegistrarRevisionSinDuplicadosTests(SimpleTestCase):
+    """Revisiones simultáneas del mismo archivo no dejan varios hallazgos pendientes iguales (caso 38018)."""
+
+    def _registrar(self, igual):
+        from gedocumental.services import ai_revision
+        archivo = mock.MagicMock(IdArchivo=1, Admision_id=99, Tipo='AUTORIZACION', Usuario_id=5)
+        resultado = {"tipo": "RECAUDO", "descripcion": "No se recaudó; debía cobrarse copago de $1.000"}
+        with mock.patch('gedocumental.models.RevisionIA.objects') as objetos:
+            pendientes = objetos.filter.return_value
+            pendientes.filter.return_value.order_by.return_value.first.return_value = igual
+            ai_revision._registrar_revision_bloqueada(archivo, resultado, datetime(2026, 11, 24))
+            return objetos, pendientes
+
+    def test_mismo_hallazgo_pendiente_no_se_duplica(self):
+        objetos, pendientes = self._registrar(mock.MagicMock(pk=7))
+        objetos.create.assert_not_called()
+        pendientes.exclude.assert_called_once_with(pk=7)
+
+    def test_hallazgo_nuevo_se_crea(self):
+        objetos, pendientes = self._registrar(None)
+        objetos.create.assert_called_once()
+        pendientes.update.assert_called_once()
