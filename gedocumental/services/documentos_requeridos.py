@@ -13,6 +13,8 @@ Documentos que el admisionista debe cargar en cada admisión, según el contrato
   Particular ....................................... no se validan documentos
   Admisión solo de anestesiología (890226, 890326,
   998701, 998702) ................................. no se exigen documentos (complemento de la resonancia)
+  Admisión exonerada por directriz (tabla
+  admision_sin_documentos, comando exonerar_documentos) no se exigen documentos (el RESULTADO sí)
 
 El RESULTADO no está aquí: lo carga la coordinación médica.
 """
@@ -58,6 +60,17 @@ def admisiones_excluidas(admision_ids) -> set:
     return {adm for adm, d in datos_admisiones(admision_ids).items() if d['anulada'] or es_particular(d['contrato'])}
 
 
+def admisiones_sin_documentos(admision_ids) -> set:
+    """Admisiones que por directriz se cargan sin orden, autorización ni comprobante (AdmisionSinDocumentos)."""
+    from gedocumental.models import AdmisionSinDocumentos
+    ids = [int(i) for i in admision_ids if i]
+    salida = set()
+    for i in range(0, len(ids), 1000):
+        salida.update(AdmisionSinDocumentos.objects.filter(AdmisionId__in=ids[i:i + 1000])
+                      .values_list('AdmisionId', flat=True))
+    return salida
+
+
 def requisitos(contrato: str, es_consulta: bool, primera_vez: bool = False, sedacion: bool = False) -> list[tuple[str, ...]]:
     """
     primera_vez: consulta de primera vez (CUPS 8902xx); Colsanitas Plan Integral no pide orden en ellas.
@@ -97,7 +110,8 @@ def cumple(contrato: str, es_consulta: bool, tipos, primera_vez: bool = False, s
 
 def datos_admisiones(admision_ids) -> dict:
     """
-    {admisión: {'contrato', 'es_consulta', 'primera_vez', 'sedacion', 'anulada'}} desde ZeusSalud. primera_vez: tiene consulta
+    {admisión: {'contrato', 'es_consulta', 'primera_vez', 'sedacion', 'anulada', 'sin_documentos'}} desde ZeusSalud.
+    sin_documentos: exonerada por directriz (no exige orden, autorización ni comprobante). primera_vez: tiene consulta
     de primera vez (CUPS 8902xx) y ninguna de control (8903xx), sin contar cargos revertidos. Una admisión ANULADA en SIESA (el paciente
     canceló y no se hizo el examen) no exige documentos ni pasa por Cuentas Médicas.
     """
@@ -125,4 +139,7 @@ def datos_admisiones(admision_ids) -> dict:
                                            'es_consulta': ufuncional == UFUNCIONAL_CONSULTA,
                                            'primera_vez': bool(primera_vez),
                                            'anulada': (estado or '').strip().upper() == 'N'}
+    exoneradas = admisiones_sin_documentos(resultado)
+    for adm, d in resultado.items():
+        d['sin_documentos'] = adm in exoneradas
     return resultado

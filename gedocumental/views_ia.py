@@ -338,7 +338,10 @@ def bandeja_cuentas_medicas(request):
             anestesia = req.get('sedacion', False)
             if anestesia:
                 tiene_resultado = True
-            faltantes_doc = doc_faltantes(req['contrato'], req['es_consulta'], cargados, req.get('primera_vez', False), anestesia) + \
+            # Exonerada por directriz (AdmisionSinDocumentos): no exige orden, autorización ni comprobante
+            sin_documentos = req.get('sin_documentos', False)
+            faltantes_doc = ([] if sin_documentos else
+                             doc_faltantes(req['contrato'], req['es_consulta'], cargados, req.get('primera_vez', False), anestesia)) + \
                 ([] if tiene_resultado else ['RESULTADO'])
             val = validaciones.get(adm_id)
             completo = val['completo'] if val else None
@@ -357,8 +360,8 @@ def bandeja_cuentas_medicas(request):
             elif anestesia and revisados >= docs:
                 estado_ia = 'listas'   # documentos revisados (OK de sistema), sin exigir RESULTADO
             elif (revisados >= docs and 'RESULTADO' in tipos_ok_ia.get(adm_id, set())
-                  and doc_cumple(req['contrato'], req['es_consulta'], tipos_ok_ia.get(adm_id, set()),
-                             req.get('primera_vez', False), req.get('sedacion', False))):
+                  and (sin_documentos or doc_cumple(req['contrato'], req['es_consulta'], tipos_ok_ia.get(adm_id, set()),
+                             req.get('primera_vez', False), req.get('sedacion', False)))):
                 # Pre-auditada solo si la IA revisó y aprobó los documentos exigidos por el contrato y el
                 # RESULTADO (evita que entren admisiones antiguas con 0/0 documentos por revisar)
                 estado_ia = 'listas'
@@ -447,8 +450,8 @@ def documentos_faltantes(request):
         faltan = {}
         for a in ids:
             r = reglas.get(a)
-            if r is None or r.get('anulada'):
-                continue   # no está en Zeus, o está anulada en SIESA (no se hizo el examen)
+            if r is None or r.get('anulada') or r.get('sin_documentos'):
+                continue   # no está en Zeus, anulada en SIESA (no se hizo el examen) o exonerada por directriz
             f = doc_faltantes(r['contrato'], r['es_consulta'], cargados.get(a, set()), r.get('primera_vez', False), r.get('sedacion', False))
             if f:
                 faltan[a] = f

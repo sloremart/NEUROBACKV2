@@ -282,3 +282,22 @@ class GestionLlamadaDemanda(models.Model):
 
     def __str__(self):
         return f"{self.orden_id} → {self.observacion}"
+
+
+class AdmisionSinDocumentos(models.Model):
+    """
+    Admisiones que por directriz se cargan SIN orden, autorización ni comprobante: no aparecen en "Documentos
+    faltantes" ni quedan como documentos incompletos en Cuentas Médicas o Gestión de facturación.
+    Se registran con: python manage.py exonerar_documentos --admision 33782 33785 --usuario X --nota "..."
+    """
+    AdmisionId = models.IntegerField(unique=True)
+    Usuario = models.CharField(max_length=150, blank=True, default='')
+    Nota = models.TextField(blank=True, default='')
+    Fecha = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'admision_sin_documentos'
+        managed = True
+
+    def __str__(self):
+        return f'Admisión {self.AdmisionId} sin documentos'

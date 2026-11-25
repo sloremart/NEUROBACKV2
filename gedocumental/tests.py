@@ -2566,3 +2566,18 @@ class OrdenAplicacionMedicamentoTests(SimpleTestCase):
     def test_autorizacion_no_aplica(self):
         from gedocumental.services.ai_revision import _orden_aplicacion_medicamento
         self.assertFalse(_orden_aplicacion_medicamento('AUTORIZACION', self.DESC, self._datos()))
+
+
+class AdmisionSinDocumentosTests(SimpleTestCase):
+    """Admisiones exoneradas por directriz: no exigen orden, autorización ni comprobante."""
+
+    def test_vista_archivos_no_pide_documentos(self):
+        from gedocumental.services import documentos_requeridos as dr
+        with mock.patch.object(dr, 'admisiones_sin_documentos', return_value={33782}):
+            self.assertEqual(dr.admisiones_sin_documentos([33782, 33785]), {33782})
+
+    def test_comando_exige_nota(self):
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+        with self.assertRaises(CommandError):
+            call_command('exonerar_documentos', admision=[1])

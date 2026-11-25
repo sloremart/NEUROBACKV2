@@ -410,9 +410,11 @@ def _facturas_sin_radicar(fecha_inicio: str, fecha_fin: str) -> dict:
             renombradas.add(aid)
 
     # Resultado y factura siempre; orden/autorización/comprobante según el contrato (documentos_requeridos)
-    from gedocumental.services.documentos_requeridos import cumple as doc_cumple
+    from gedocumental.services.documentos_requeridos import admisiones_sin_documentos, cumple as doc_cumple
+    exoneradas = admisiones_sin_documentos(tipos)   # por directriz no llevan orden, autorización ni comprobante
     por_renombrar = {a for a, t in tipos.items()
-                     if a not in renombradas and {'RESULTADO', 'FACTURA'} <= t and doc_cumple(*regla[a], t)}
+                     if a not in renombradas and {'RESULTADO', 'FACTURA'} <= t
+                     and (a in exoneradas or doc_cumple(*regla[a], t))}
     por_renombrar -= _con_hallazgos_pendientes(por_renombrar)
     etapas = {a: 'pendiente_renombrar' for a in por_renombrar}
     etapas.update({a: 'renombrada_sin_radicar' for a in renombradas if sin_remision[a]})
@@ -454,9 +456,10 @@ def _causas_sin_factura(ids, zeus: dict) -> dict:
     from django.db.models import Min as _Min
     from gedocumental.models import ObservacionesArchivos, RevisionIA
     from gedocumental.services.ai_revision import TIPOS_NO_REVISADOS, TIPOS_SIN_REVISION_IA
-    from gedocumental.services.documentos_requeridos import faltantes as doc_faltantes
+    from gedocumental.services.documentos_requeridos import admisiones_sin_documentos, faltantes as doc_faltantes
 
     ids = list(ids)
+    exoneradas = admisiones_sin_documentos(ids)   # por directriz no llevan orden, autorización ni comprobante
     archivos = list(
         ArchivoFacturacion.objects.filter(Admision_id__in=ids)
         .exclude(Tipo__in=TIPOS_SIN_REVISION_IA)
@@ -507,7 +510,7 @@ def _causas_sin_factura(ids, zeus: dict) -> dict:
         admisionista = cargue[0]['Usuario_id'] if cargue else None
 
         # Documentos exigidos según el contrato (services/documentos_requeridos.py)
-        faltan = doc_faltantes(contrato, zeus.get(aid, {}).get('ufuncional') == 1, tipos)
+        faltan = [] if aid in exoneradas else doc_faltantes(contrato, zeus.get(aid, {}).get('ufuncional') == 1, tipos)
         evaluados = [a for a in arcs if (a['Tipo'] or '').upper() not in ('FACTURA', *TIPOS_NO_REVISADOS)]
         no_revisados = [a for a in evaluados if a['IdArchivo'] not in revisados]
         sin_ia = sorted({(a['Tipo'] or '').upper() for a in no_revisados})

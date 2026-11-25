@@ -412,7 +412,9 @@ def archivos_por_admision(request, numero_admision):
         except Exception:
             pass
         documentos_faltantes = None
-        if regla and not regla['anulada'] and not es_particular(regla['contrato']):
+        if regla and regla.get('sin_documentos'):
+            documentos_faltantes = []   # exonerada por directriz: no lleva orden, autorización ni comprobante
+        elif regla and not regla['anulada'] and not es_particular(regla['contrato']):
             documentos_faltantes = doc_faltantes(regla['contrato'], regla['es_consulta'],
                                                  {(a.Tipo or '').upper() for a in archivos},
                                                  regla.get('primera_vez', False), regla.get('sedacion', False))
