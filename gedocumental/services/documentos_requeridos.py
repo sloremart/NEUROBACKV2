@@ -19,6 +19,7 @@ Documentos que el admisionista debe cargar en cada admisión, según el contrato
 El RESULTADO no está aquí: lo carga la coordinación médica.
 """
 
+import logging
 import unicodedata
 
 from django.db import connections
@@ -65,9 +66,14 @@ def admisiones_sin_documentos(admision_ids) -> set:
     from gedocumental.models import AdmisionSinDocumentos
     ids = [int(i) for i in admision_ids if i]
     salida = set()
-    for i in range(0, len(ids), 1000):
-        salida.update(AdmisionSinDocumentos.objects.filter(AdmisionId__in=ids[i:i + 1000])
-                      .values_list('AdmisionId', flat=True))
+    try:
+        for i in range(0, len(ids), 1000):
+            salida.update(AdmisionSinDocumentos.objects.filter(AdmisionId__in=ids[i:i + 1000])
+                          .values_list('AdmisionId', flat=True))
+    except Exception as exc:
+        # Tabla aún no creada (falta el migrate 0014, o copia local de la base): nadie está exonerado
+        logging.getLogger(__name__).warning("No se pudo leer admision_sin_documentos: %s", exc)
+        return set()
     return salida
 
 
