@@ -7,6 +7,7 @@ from .views_gestion import (
     actualizar_caso,
     represamiento_admisiones,
     represamiento_cuentas_medicas,
+    hallazgos_pendientes,
 )
 
 from . import views_auditoria as aud
@@ -37,5 +38,6 @@ urlpatterns = [
     path('caso/<int:admision_id>/',        detalle_caso,               name='gf-detalle'),
     path('caso/<int:admision_id>/actualizar/', actualizar_caso,        name='gf-actualizar'),
     path('represamiento-admisiones/',      represamiento_admisiones,   name='gf-represamiento-admisiones'),
+    path('hallazgos-pendientes/',          hallazgos_pendientes,       name='gf-hallazgos-pendientes'),
     path('represamiento-cuentas/',         represamiento_cuentas_medicas, name='gf-represamiento-cuentas'),
 ]

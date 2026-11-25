@@ -10,6 +10,7 @@ Endpoints:
   POST /api/v2/gestion-facturacion/caso/<id>/actualizar/ → cambiar estado/responsable/radicado/obs
   GET  /api/v2/gestion-facturacion/represamiento-admisiones/
   GET  /api/v2/gestion-facturacion/represamiento-cuentas/
+  GET  /api/v2/gestion-facturacion/hallazgos-pendientes/ → resumen de hallazgos IA por responsable y tipo
 
 Notas:
   - Admision_id en gedocumental = sis_maes.con_estudio en ZeusSalud (NO sis_maes.autoid, que es el paciente).
@@ -27,7 +28,8 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connections
 from django.db.models import Min
-from django.http import JsonResponse
+from django.core.cache import cache
+from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view
 
@@ -46,6 +48,44 @@ TIPOS_ADMISIONES = ('ORDEN', 'AUTORIZACION', 'COMPROBANTE', 'DATOS_PACIENTE')
 TIPO_COORDINACION = 'RESULTADO'
 DIAS_VENCIDO = 30
 _BLOQUE = 1000
+
+
+# ── Caché de las bandejas ─────────────────────────────────────────────────────
+# Las bandejas cruzan Zeus y GE Documental (varios segundos). La respuesta se guarda unos minutos por
+# bandeja y rango de fechas; ?refrescar=1 (botón Buscar) la recalcula, y gestionar un caso invalida todas.
+CACHE_SEGUNDOS = 300
+_CACHE_VERSION = 'gf-bandejas-version'
+
+
+def _version_cache() -> int:
+    return cache.get_or_set(_CACHE_VERSION, 1, None)
+
+
+def invalidar_cache_bandejas():
+    try:
+        cache.incr(_CACHE_VERSION)
+    except ValueError:
+        cache.set(_CACHE_VERSION, 2, None)
+
+
+def _cacheada(vista):
+    """Guarda la respuesta JSON de una bandeja (GET) por CACHE_SEGUNDOS."""
+    def envoltura(request, *args, **kwargs):
+        if request.method != 'GET':
+            return vista(request, *args, **kwargs)
+        params = sorted((k, v) for k, v in request.GET.items() if k != 'refrescar')
+        clave = f"gf:{_version_cache()}:{vista.__name__}:{params}"
+        if not request.GET.get('refrescar'):
+            guardada = cache.get(clave)
+            if guardada is not None:
+                return HttpResponse(guardada, content_type='application/json')
+        respuesta = vista(request, *args, **kwargs)
+        if getattr(respuesta, 'status_code', 500) == 200:
+            cache.set(clave, respuesta.content, CACHE_SEGUNDOS)
+        return respuesta
+    envoltura.__name__ = vista.__name__
+    envoltura.__doc__ = vista.__doc__
+    return envoltura
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -159,14 +199,15 @@ def _servicio_detallado(fila: dict) -> str:
 
 
 def _zeus_en_rango(admision_ids, fecha_inicio: str, fecha_fin: str,
-                   excluir_sin_radicacion: bool = False) -> list[int]:
+                   excluir_sin_radicacion: bool = False, excluir_anuladas: bool = False) -> list[int]:
     """
     Admisiones (con_estudio) que existen en Zeus con fecha de ingreso en el rango.
     excluir_sin_radicacion: quita los contratos MRC y PARTICULAR (no se radican por admisión).
+    excluir_anuladas: quita las anuladas en SIESA (estado N: no se hizo el examen, nunca tendrán factura).
     """
-    extra = ''
+    extra = "AND ISNULL(sm.estado, '') <> 'N'" if excluir_anuladas else ''
     if excluir_sin_radicacion:
-        extra = ' '.join(
+        extra += ' ' + ' '.join(
             f"AND UPPER(ISNULL(ct.alias, '') + ' ' + ISNULL(ct.nombre, '')) NOT LIKE '%%{c}%%'"
             for c in CONTRATOS_SIN_RADICACION
         )
@@ -431,6 +472,7 @@ ETAPAS_RADICACION = {
 # ── Causa por la que un estudio realizado sigue sin factura ───────────────────
 
 CAUSAS = {
+    'facturada_siesa':     'Facturada en SIESA: falta cargar la factura en GE Documental',
     'devuelta_cm':         'Devuelta por Cuentas Médicas',
     'hallazgo_admisiones': 'Hallazgos de admisiones',
     'hallazgo_resultado':  'Hallazgo en el resultado (coord. médica)',
@@ -472,11 +514,14 @@ def _causas_sin_factura(ids, zeus: dict) -> dict:
     # Momento en que arrancó la revisión con IA: lo cargado antes nunca se revisó (lo revisa CM a mano)
     inicio_ia = RevisionIA.objects.aggregate(m=_Min('Fecha'))['m']
     hallazgos: dict = defaultdict(list)
-    for aid, tipo_doc, desc, uid in (RevisionIA.objects.filter(AdmisionId__in=ids, Resuelta=False)
-                                     .exclude(TipoHallazgo='OK').exclude(TipoDocumento__in=TIPOS_NO_REVISADOS)
-                                     .order_by('Fecha')
-                                     .values_list('AdmisionId', 'TipoDocumento', 'Descripcion', 'UsuarioId')):
+    tipos_hallazgo: dict = defaultdict(list)   # (tipo de hallazgo, usuario) de cada hallazgo, para las gráficas
+    for aid, tipo_doc, desc, uid, tipo_h in (RevisionIA.objects.filter(AdmisionId__in=ids, Resuelta=False)
+                                             .exclude(TipoHallazgo='OK').exclude(TipoDocumento__in=TIPOS_NO_REVISADOS)
+                                             .order_by('Fecha')
+                                             .values_list('AdmisionId', 'TipoDocumento', 'Descripcion', 'UsuarioId',
+                                                          'TipoHallazgo')):
         hallazgos[aid].append((tipo_doc or '', _reparar_texto((desc or '').strip()), uid))
+        tipos_hallazgo[aid].append((tipo_h or '', tipo_doc or '', uid))
     devueltas: dict = {}
     for aid, uid in (ObservacionesArchivos.objects
                      .filter(ObservacionCuentasMedicas=True, IdArchivo__Admision_id__in=ids,
@@ -518,7 +563,11 @@ def _causas_sin_factura(ids, zeus: dict) -> dict:
             a['FechaCreacionArchivo'] and a['FechaCreacionArchivo'] < inicio_ia for a in no_revisados)
 
         responsable_id, area = None, AREA_CUENTAS_MEDICAS
-        if aid in devueltas:
+        factura_siesa = (zeus.get(aid, {}).get('factura_zeus') or '').strip()
+        if factura_siesa.upper().startswith('FES'):
+            # Ya se facturó en SIESA: lo único que falta es cargar el PDF de la factura (caso de Facturación)
+            causa, detalle, area = 'facturada_siesa', [factura_siesa], AREA_FACTURACION
+        elif aid in devueltas:
             causa, detalle = 'devuelta_cm', []
             responsable_id = devueltas[aid] or admisionista
         elif h_adm:
@@ -544,6 +593,12 @@ def _causas_sin_factura(ids, zeus: dict) -> dict:
             'responsable_causa_id': responsable_id,
             'responsable_causa': nombres.get(responsable_id) if responsable_id else area,
             'usuario_cargue': nombres.get(admisionista, '') if admisionista else '',
+            # Todos los hallazgos pendientes de la admisión (no solo el que define la causa), con quien los
+            # corrige: el usuario del hallazgo (quien cargó el documento) o, si no tiene, quien cargó la admisión
+            'hallazgos': [{'tipo': th or 'OTRO', 'documento': td,
+                           'responsable': nombres.get(u or admisionista) or (
+                               'COORDINACIÓN MÉDICA' if td == TIPO_COORDINACION else 'Sin usuario')}
+                          for th, td, u in tipos_hallazgo.get(aid, [])],
         }
         if responsable_id and not resultado[aid]['responsable_causa']:
             resultado[aid]['responsable_causa'] = f"Usuario {responsable_id}"
@@ -553,6 +608,7 @@ def _causas_sin_factura(ids, zeus: dict) -> dict:
 # ── Bandeja 1: Realizados sin factura ────────────────────────────────────────
 
 @api_view(['GET'])
+@_cacheada
 def bandeja_realizados(request):
     """Estudios con RESULTADO en gedocumental pero sin FACTURA (días desde el ingreso en Zeus)."""
     fecha_inicio, fecha_fin = _rango(request)
@@ -566,7 +622,9 @@ def bandeja_realizados(request):
         ArchivoFacturacion.objects.filter(Tipo='FACTURA', Admision_id__in=con_resultado)
         .values_list('Admision_id', flat=True)
     )
-    ids = _zeus_en_rango(con_resultado - con_factura, fecha_inicio, fecha_fin)
+    # MRC y particulares no se facturan por admisión ni pasan por Cuentas Médicas; las anuladas no se facturan
+    ids = _zeus_en_rango(con_resultado - con_factura, fecha_inicio, fecha_fin,
+                         excluir_sin_radicacion=True, excluir_anuladas=True)
     if not ids:
         return JsonResponse({'success': True, 'data': [], 'total': 0})
 
@@ -601,9 +659,66 @@ def bandeja_realizados(request):
                          'responsables': lista_responsables})
 
 
+# ── Resumen administrativo: hallazgos IA pendientes por responsable y por tipo ──
+
+@api_view(['GET'])
+@_cacheada
+def hallazgos_pendientes(request):
+    """
+    Hallazgos de la IA sin corregir (todas las admisiones, tengan o no resultado), con la fecha del hallazgo en
+    el rango: cuántos tiene cada responsable y de qué tipo. Responsable = usuario del hallazgo (quien cargó el
+    documento; el RESULTADO, la coordinación médica). Sin anuladas en SIESA ni particulares (no se validan).
+    """
+    from gedocumental.models import RevisionIA
+    from gedocumental.services.ai_revision import TIPOS_NO_REVISADOS
+    from gedocumental.services.documentos_requeridos import admisiones_excluidas
+
+    fecha_inicio, fecha_fin = _rango(request)
+    filas = list(
+        RevisionIA.objects.filter(Resuelta=False, Fecha__date__gte=fecha_inicio, Fecha__date__lte=fecha_fin)
+        .exclude(TipoHallazgo='OK').exclude(TipoDocumento__in=TIPOS_NO_REVISADOS).exclude(TipoDocumento='FACTURA')
+        .values_list('AdmisionId', 'TipoHallazgo', 'TipoDocumento', 'UsuarioId')
+    )
+    try:
+        excluidas = admisiones_excluidas({f[0] for f in filas})
+    except Exception:
+        excluidas = set()
+    filas = [f for f in filas if f[0] not in excluidas]
+
+    User = get_user_model()
+    nombres = {u.id: _nombre_usuario(u) for u in User.objects.filter(id__in={f[3] for f in filas if f[3]})}
+    coordinacion = getattr(settings, 'USUARIO_COORDINACION_MEDICA_ID', None)
+    por_responsable: dict = {}
+    por_tipo: dict = defaultdict(int)
+    for aid, tipo_h, tipo_doc, uid in filas:
+        tipo_h = (tipo_h or 'OTRO').upper()
+        nombre = nombres.get(uid) or ('Sin usuario' if not uid else f"Usuario {uid}")
+        r = por_responsable.setdefault(nombre, {
+            'responsable': nombre, 'total': 0, 'admisiones': set(), 'por_tipo': defaultdict(int),
+            'resultados': 0, 'es_coordinacion': uid == coordinacion and coordinacion is not None})
+        r['total'] += 1
+        r['admisiones'].add(aid)
+        r['por_tipo'][tipo_h] += 1
+        r['resultados'] += tipo_doc == TIPO_COORDINACION
+        por_tipo[tipo_h] += 1
+    # Coordinación médica: el usuario configurado o quien tiene sobre todo hallazgos del RESULTADO
+    responsables = sorted(
+        ({'responsable': r['responsable'], 'total': r['total'], 'admisiones': len(r['admisiones']),
+          'por_tipo': dict(r['por_tipo']),
+          'coordinacion_medica': r['es_coordinacion'] or r['resultados'] * 2 > r['total']}
+         for r in por_responsable.values()),
+        key=lambda r: r['total'], reverse=True)
+    return JsonResponse({
+        'success': True, 'total': len(filas), 'admisiones': len({f[0] for f in filas}),
+        'responsables': responsables,
+        'tipos': sorted(({'tipo': t, 'total': n} for t, n in por_tipo.items()), key=lambda x: x['total'], reverse=True),
+    })
+
+
 # ── Bandeja 2: Facturados sin radicar ────────────────────────────────────────
 
 @api_view(['GET'])
+@_cacheada
 def bandeja_radicados(request):
     """
     Admisiones facturadas en Zeus (FES) sin radicar (sin radicado, fecha de radicación ni remisión), con la
@@ -672,6 +787,7 @@ def bandeja_devoluciones(request):
 
 
 def _registrar_devolucion(request):
+    invalidar_cache_bandejas()
     body = request.data
     admision_id = body.get('admision_id')
     if not admision_id:
@@ -735,6 +851,7 @@ def actualizar_caso(request, admision_id: int):
     Body: { bandeja, estado?, responsable_id?, numero_radicado?, fecha_radicado?,
             motivo_devolucion?, observacion? }
     """
+    invalidar_cache_bandejas()
     body = request.data
     bandeja = body.get('bandeja')
     if bandeja not in dict(CasoGestion.BANDEJA_CHOICES):
