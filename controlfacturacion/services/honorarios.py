@@ -20,8 +20,9 @@ Reglas 2026-11-21:
 Reglas 2026-11-25:
   - El detalle del médico se agrupa por categoría (RX, tomografía, resonancia, ecografía, doppler, PET-CT,
     consultas, bloqueos, estudios del sueño, procedimientos).
-  - Dr. Roberto Ortega (cod 20): sus bloqueos se pagan de una bolsa: valor 1 = $6.789.478 / puntos de bloqueo
-    del mes; honorario del paciente = valor 1 × puntos del paciente × 70 %.
+  - Dr. Roberto Ortega (cod 20): sus bloqueos del contrato MRC se pagan de una bolsa: valor 1 = $6.789.478 /
+    puntos de bloqueo MRC del mes; honorario del paciente = valor 1 × puntos del paciente × 70 %. Sus bloqueos de
+    otros contratos siguen con la tarifa normal.
   - Dr. Rafael Carrasquilla (cod 2): no se le cuentan los CUPS 890426 ni 890202.
 """
 
@@ -40,7 +41,9 @@ EXCLUIDOS_POR_MEDICO = {
 # valor 1 = valor_mes / puntos de bloqueo del mes; honorario = valor 1 × puntos del paciente × porcentaje
 CUPS_BLOQUEO = ('53105', '53106', '53111')
 BOLSA_BLOQUEOS = {
-    20: {'valor_mes': 6789478, 'porcentaje': 70},   # Roberto Mario Ortega Villalba (regla 2026-11-25)
+    # Roberto Mario Ortega Villalba (regla 2026-11-25): solo sus bloqueos del contrato Sanitas MRC; los de otros
+    # contratos se pagan con su tarifa normal
+    20: {'valor_mes': 6789478, 'porcentaje': 70, 'contrato': 'MRC'},
 }
 # Categorías del detalle del médico, en el orden en que se muestran
 CATEGORIAS = ('CONSULTAS', 'RADIOGRAFÍA (RX)', 'TOMOGRAFÍA (TAC)', 'RESONANCIA', 'ECOGRAFÍA', 'DOPPLER',
@@ -163,6 +166,12 @@ def _categoria_cups(cod_servicio) -> str:
     return 'PROCEDIMIENTOS'
 
 
+def en_bolsa_bloqueos(cod_medico, cod_servicio, contrato) -> bool:
+    """True si la línea es un bloqueo que ese médico cobra de su bolsa (BOLSA_BLOQUEOS, solo su contrato)."""
+    bolsa = BOLSA_BLOQUEOS.get(cod_medico)
+    return bool(bolsa) and es_bloqueo(cod_servicio) and bolsa.get('contrato', '') in plano(contrato)
+
+
 def honorario_bolsa_bloqueo(cod_medico, puntos_paciente, puntos_mes) -> tuple[Decimal, str] | None:
     """
     Bloqueo pagado de la bolsa del médico (BOLSA_BLOQUEOS): (honorario, texto de la tarifa), o None si el médico
@@ -174,7 +183,7 @@ def honorario_bolsa_bloqueo(cod_medico, puntos_paciente, puntos_mes) -> tuple[De
     valor_1 = Decimal(bolsa['valor_mes']) / Decimal(str(puntos_mes))
     honorario = _redondear(valor_1 * Decimal(str(puntos_paciente)) * Decimal(bolsa['porcentaje']) / 100)
     miles = lambda v: f"{int(_redondear(Decimal(v))):,}".replace(',', '.')
-    texto = (f"Bolsa ${miles(bolsa['valor_mes'])} / {float(puntos_mes):g} puntos del mes = ${miles(valor_1)} "
+    texto = (f"Bolsa {bolsa.get('contrato', '')} ${miles(bolsa['valor_mes'])} / {float(puntos_mes):g} puntos del mes = ${miles(valor_1)} "
              f"por punto × {bolsa['porcentaje']} %")
     return honorario, texto
 

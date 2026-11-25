@@ -229,6 +229,12 @@ class CategoriaYBolsaTests(SimpleTestCase):
         self.assertEqual(valor, h._redondear(Decimal(6789478) / Decimal(226) * 10 * Decimal('0.7')))
         self.assertIn('70 %', texto)
         self.assertIsNone(h.honorario_bolsa_bloqueo(3, 10, 226))   # otro médico: tarifa normal
+        # Solo los bloqueos del contrato MRC van a la bolsa
+        self.assertTrue(h.en_bolsa_bloqueos(20, '053105-10', 'SANITAS MRC CONTRIBUTIVO'))
+        self.assertTrue(h.en_bolsa_bloqueos(20, '053105', 'SANITAS MRC SUBSIDIADO'))
+        self.assertFalse(h.en_bolsa_bloqueos(20, '053105-10', 'CAPITAL SALUD SUBSIDIADO'))
+        self.assertFalse(h.en_bolsa_bloqueos(20, '053105-10', 'SANITAS EVENTO CONTRIBUTIVO'))
+        self.assertFalse(h.en_bolsa_bloqueos(3, '053105-10', 'SANITAS MRC CONTRIBUTIVO'))
 
     def test_excluidos_por_medico(self):
         from controlfacturacion.services import honorarios as h

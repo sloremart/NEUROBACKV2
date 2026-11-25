@@ -182,10 +182,10 @@ def construir(periodo: str) -> dict:
     # CUPS que no se le cuentan a un médico en particular (ej. 890426 / 890202 al Dr. Carrasquilla)
     lineas = [l for l in _lineas_zeus(periodo) if not h.excluido_medico(l['cod_servicio'], l['cod_medico_zeus'])]
     medicos = {m['codigo']: m for m in medicos_zeus()}
-    # Puntos de bloqueo del mes de cada médico que cobra de una bolsa (Dr. Ortega)
+    # Puntos de bloqueo MRC del mes de cada médico que cobra de una bolsa (Dr. Ortega)
     puntos_bloqueo = defaultdict(float)
     for l in lineas:
-        if l['cod_medico_zeus'] in h.BOLSA_BLOQUEOS and h.es_bloqueo(l['cod_servicio']):
+        if h.en_bolsa_bloqueos(l['cod_medico_zeus'], l['cod_servicio'], l['contrato']):
             puntos_bloqueo[l['cod_medico_zeus']] += l['cantidad']
 
     # Procedimientos de cada admisión (para la sedación escalonada)
@@ -266,9 +266,9 @@ def construir(periodo: str) -> dict:
         elif l['cod_medico'] == SIN_MEDICO:
             alertas.append('Sin médico en Zeus')
             tarifa, calculado, l['tarifa'] = None, Decimal(0), ''
-        elif h.es_bloqueo(l['cod_servicio']) and h.honorario_bolsa_bloqueo(
+        elif h.en_bolsa_bloqueos(l['cod_medico'], l['cod_servicio'], l['contrato']) and h.honorario_bolsa_bloqueo(
                 l['cod_medico'], l['cantidad'], puntos_bloqueo.get(l['cod_medico'])):
-            # Bloqueo pagado de la bolsa mensual del médico (Dr. Ortega)
+            # Bloqueo MRC pagado de la bolsa mensual del médico (Dr. Ortega)
             calculado, l['tarifa'] = h.honorario_bolsa_bloqueo(l['cod_medico'], l['cantidad'],
                                                                puntos_bloqueo[l['cod_medico']])
             tarifa = True   # tiene tarifa (no es "sin tarifa")
