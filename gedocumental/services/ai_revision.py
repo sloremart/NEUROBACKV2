@@ -1053,7 +1053,9 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                 or _cantidad_anotada(texto, zeus)
                 or _cantidades_iguales(resultado.get("descripcion"), datos_admision)
                 or _bilateral_cubre(resultado.get("descripcion"), texto, resultado)
-                or _orden_con_mas_cantidad(tipo_documento, resultado.get("descripcion"))):
+                or _orden_con_mas_cantidad(tipo_documento, resultado.get("descripcion"))
+                or _orden_aplicacion_medicamento(tipo_documento, resultado.get("descripcion"), datos_admision,
+                                                 resultado.get("cantidades_documento"))):
             logger.info("%s: la cantidad anotada coincide con Zeus, se descarta '%s'",
                         tipo_documento, resultado.get("descripcion"))
             resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cantidad=True)
@@ -2123,6 +2125,40 @@ def _orden_con_mas_cantidad(tipo_documento, descripcion) -> bool:
         return False
     numeros = [int(n) for n in re.findall(r'(?<!\d)(?<!\d[.,])(\d{1,3})(?!\d)(?![.,]\d)', str(descripcion))]
     return len(numeros) == 2 and numeros[0] > numeros[1]
+
+
+def _cups_aplicacion_medicamento(datos_admision: dict) -> set:
+    """CUPS de la admisión que son aplicación de medicamentos (9929xx, inyección, infusión...)."""
+    import re
+    import unicodedata
+    zeus = _cantidades_por_cups(datos_admision)
+    textos = {}
+    for c in datos_admision.get('cups') or []:
+        m = re.search(r'^\s*(\S+)\s*-\s*(.*)', str(c))
+        if m:
+            textos[m.group(1).upper()] = unicodedata.normalize('NFKD', m.group(2)).encode('ascii', 'ignore').decode().upper()
+    return {c for c in zeus if c.startswith('9929') or re.search(_APLICACION_MEDICAMENTO, textos.get(c, ''))}
+
+
+def _orden_aplicacion_medicamento(tipo_documento, descripcion, datos_admision: dict, cantidades_documento='') -> bool:
+    """
+    ORDEN de aplicación de medicamentos (992990 inyección, infusión...): el médico ordena varias aplicaciones y
+    cada admisión factura la del día. La cantidad distinta no es hallazgo, aunque la IA no diga cuánto pide la
+    orden ("Procedimiento 992990 en el documento no coincide con el de la admisión (cantidad 1)", caso 37873).
+    Solo sigue siendo hallazgo si la orden leída pide MENOS que la admisión.
+    """
+    import re
+    if (tipo_documento or '').upper() != 'ORDEN' or not _solo_motivo_cantidad(descripcion):
+        return False
+    zeus = _cantidades_por_cups(datos_admision)
+    aplicacion = _cups_aplicacion_medicamento(datos_admision)
+    if not aplicacion:
+        return False
+    reclamados = [c for c in re.findall(r'\b(\d{6})\b', str(descripcion)) if c in zeus] or list(zeus)
+    if not set(reclamados) <= aplicacion:
+        return False   # habla de otro procedimiento
+    leidas = _parsear_cantidades(cantidades_documento)
+    return all(leidas.get(c, zeus[c]) >= zeus[c] for c in reclamados)
 
 
 def _cantidades_iguales(descripcion, datos_admision: dict) -> bool:

@@ -33,7 +33,7 @@ from gedocumental.services.ai_revision import (
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _imagen_documentada, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE, TIPOS_NO_REVISADOS,
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida, _bilateral_cubre,
-    _orden_con_mas_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _es_anestesia, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
+    _orden_con_mas_cantidad, _orden_aplicacion_medicamento, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _es_anestesia, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
     _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden, _autorizacion_aplicacion_de_mas, _autorizacion_de_mas,
     obtener_contexto_admision, cantidades_orden, _clasificar_paciente, _es_recien_nacido, _documento_de_la_mama,
 )
@@ -499,6 +499,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     if (tipo or '').upper() == 'AUTORIZACION' and _autorizacion_de_mas(d, datos_admision):
         return DESCARTADO, ("La autorización trae más cantidad que la admisión: se puede facturar menos de lo "
                             "autorizado; solo es hallazgo facturar más.")
+
+    if _orden_aplicacion_medicamento(tipo, d, datos_admision):
+        return DESCARTADO, ("Orden de aplicación de medicamentos: el médico ordena varias aplicaciones y cada "
+                            "admisión factura la del día; la cantidad distinta no es un error.")
 
     if _orden_con_mas_cantidad(tipo, d):
         return DESCARTADO, ("La orden pide más cantidad de la que factura la admisión (varias sesiones); "

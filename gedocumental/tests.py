@@ -2538,3 +2538,31 @@ class RegistrarRevisionSinDuplicadosTests(SimpleTestCase):
         objetos, pendientes = self._registrar(None)
         objetos.create.assert_called_once()
         pendientes.update.assert_called_once()
+
+
+class OrdenAplicacionMedicamentoTests(SimpleTestCase):
+    """Orden de inyecciones (992990): la cantidad distinta no es hallazgo (caso 37873)."""
+    DATOS = {'cups': ['992990 - INYECCION O INFUSION DE OTRA SUSTANCIA TERAPEUTICA (cant. 1)']}
+    DESC = "Procedimiento 992990 en el documento no coincide con el de la admisión (cantidad 1)."
+
+    def _datos(self):
+        return dict(self.DATOS)
+
+    def test_orden_inyeccion_cantidad_no_es_hallazgo(self):
+        from gedocumental.services.ai_revision import _orden_aplicacion_medicamento
+        self.assertTrue(_orden_aplicacion_medicamento('ORDEN', self.DESC, self._datos()))
+
+    def test_reverificacion_descarta(self):
+        from gedocumental.services.reverificacion import evaluar_hallazgo, DESCARTADO
+        r = evaluar_hallazgo('ORDEN', self.DESC, self._datos())
+        self.assertEqual(r[0], DESCARTADO)
+
+    def test_otro_procedimiento_sigue(self):
+        from gedocumental.services.ai_revision import _orden_aplicacion_medicamento
+        datos = {'cups': ['883101 - RESONANCIA MAGNETICA DE CEREBRO (cant. 1)']}
+        self.assertFalse(_orden_aplicacion_medicamento(
+            'ORDEN', "Procedimiento 883101 en el documento no coincide con el de la admisión (cantidad 1).", datos))
+
+    def test_autorizacion_no_aplica(self):
+        from gedocumental.services.ai_revision import _orden_aplicacion_medicamento
+        self.assertFalse(_orden_aplicacion_medicamento('AUTORIZACION', self.DESC, self._datos()))
