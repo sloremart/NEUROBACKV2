@@ -1559,14 +1559,8 @@ GRUPOS_MRC = {
         "min": 42, "ref": 47, "max": 52,
         "valor_mes": 35070488,
     },
-    "OTROS PROCEDIMIENTOS": {
-        "cups": {"891515", "891514", "930820", "891511", "891509",
-                 "930860", "891530", "952303", "954626", "952302",
-                 "930103", "930821", "954624", "954625"},
-        "tarifa": 37613,
-        "min": 972, "ref": 1080, "max": 1188,
-        "valor_mes": 35070488,
-    },
+    # "OTROS PROCEDIMIENTOS" (electromiografía, neuroconducción, potenciales evocados...) salió del contrato MRC
+    # en octubre de 2026: ya no se admiten por MRC (agosto 153 estudios, septiembre 154, octubre 2, noviembre 0)
 }
 
 class DashboardFacturacionNuevoView(APIView):
