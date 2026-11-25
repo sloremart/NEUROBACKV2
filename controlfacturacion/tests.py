@@ -205,3 +205,34 @@ class ReglasNoviembreTests(SimpleTestCase):
         self.assertEqual(h.honorario_final(Decimal('280000'), 'GLOSA'), Decimal(0))
         self.assertEqual(h.honorario_final(Decimal('280000'), 'OK', Decimal('250000')), Decimal('250000'))
         self.assertEqual(h.honorario_final(Decimal('100'), 'GLOSA', None, Decimal('500')), Decimal(0))
+
+
+class CategoriaYBolsaTests(SimpleTestCase):
+    """Detalle agrupado por categoría, bolsa de bloqueos del Dr. Ortega y CUPS excluidos por médico (2026-11-25)."""
+
+    def test_categorias(self):
+        from controlfacturacion.services import honorarios as h
+        self.assertEqual(h.categoria('879111', 'TOMOGRAFIA'), 'TOMOGRAFÍA (TAC)')
+        self.assertEqual(h.categoria('883101', ''), 'RESONANCIA')
+        self.assertEqual(h.categoria('871121', ''), 'RADIOGRAFÍA (RX)')
+        self.assertEqual(h.categoria('1005927-3', 'RADIOGRAFÍA DE CADERA COMPARATIVA'), 'RADIOGRAFÍA (RX)')
+        self.assertEqual(h.categoria('890374', ''), 'CONSULTAS')
+        self.assertEqual(h.categoria('053105-10', ''), 'BLOQUEOS')
+        self.assertEqual(h.categoria('891704', ''), 'ESTUDIOS DEL SUEÑO')
+        self.assertEqual(h.categoria('930860', 'ELECTROMIOGRAFIA'), 'PROCEDIMIENTOS')
+
+    def test_bolsa_bloqueos(self):
+        from decimal import Decimal
+        from controlfacturacion.services import honorarios as h
+        valor, texto = h.honorario_bolsa_bloqueo(20, 10, 226)
+        # 6.789.478 / 226 × 10 × 70 %
+        self.assertEqual(valor, h._redondear(Decimal(6789478) / Decimal(226) * 10 * Decimal('0.7')))
+        self.assertIn('70 %', texto)
+        self.assertIsNone(h.honorario_bolsa_bloqueo(3, 10, 226))   # otro médico: tarifa normal
+
+    def test_excluidos_por_medico(self):
+        from controlfacturacion.services import honorarios as h
+        self.assertTrue(h.excluido_medico('890426', 2))
+        self.assertTrue(h.excluido_medico('890202', 2))
+        self.assertFalse(h.excluido_medico('890426', 20))
+        self.assertFalse(h.excluido_medico('998702', 2))

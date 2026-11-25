@@ -179,8 +179,14 @@ def _clave_md(sid):
 
 def construir(periodo: str) -> dict:
     """Líneas del mes con honorario calculado, decisiones del auditor y hallazgos de Lumier."""
-    lineas = _lineas_zeus(periodo)
+    # CUPS que no se le cuentan a un médico en particular (ej. 890426 / 890202 al Dr. Carrasquilla)
+    lineas = [l for l in _lineas_zeus(periodo) if not h.excluido_medico(l['cod_servicio'], l['cod_medico_zeus'])]
     medicos = {m['codigo']: m for m in medicos_zeus()}
+    # Puntos de bloqueo del mes de cada médico que cobra de una bolsa (Dr. Ortega)
+    puntos_bloqueo = defaultdict(float)
+    for l in lineas:
+        if l['cod_medico_zeus'] in h.BOLSA_BLOQUEOS and h.es_bloqueo(l['cod_servicio']):
+            puntos_bloqueo[l['cod_medico_zeus']] += l['cantidad']
 
     # Procedimientos de cada admisión (para la sedación escalonada)
     por_estudio = defaultdict(set)
@@ -260,6 +266,12 @@ def construir(periodo: str) -> dict:
         elif l['cod_medico'] == SIN_MEDICO:
             alertas.append('Sin médico en Zeus')
             tarifa, calculado, l['tarifa'] = None, Decimal(0), ''
+        elif h.es_bloqueo(l['cod_servicio']) and h.honorario_bolsa_bloqueo(
+                l['cod_medico'], l['cantidad'], puntos_bloqueo.get(l['cod_medico'])):
+            # Bloqueo pagado de la bolsa mensual del médico (Dr. Ortega)
+            calculado, l['tarifa'] = h.honorario_bolsa_bloqueo(l['cod_medico'], l['cantidad'],
+                                                               puntos_bloqueo[l['cod_medico']])
+            tarifa = True   # tiene tarifa (no es "sin tarifa")
         else:
             tarifa, alertas_t = h.elegir_tarifa(tarifas.get(l['cod_medico'], []), l['cod_servicio'], l['contrato'],
                                                 l['cantidad'])
@@ -279,6 +291,7 @@ def construir(periodo: str) -> dict:
             alertas.append('Sin factura en Zeus')
         d = decisiones.get(sid)
         l['grupo'] = h.grupo_contrato(l['contrato']) if l['tipo'] != 'AGENDA' else 'AGENDA'
+        l['categoria'] = h.categoria(l['cod_servicio'], l['descripcion'])
         l['honorario_calculado'] = calculado
         l['estado'] = d.estado if d else 'PENDIENTE'
         l['valor_ajustado'] = d.valor_ajustado if d else None
@@ -341,7 +354,7 @@ def _linea_json(l: dict) -> dict:
         'cod_medico': l['cod_medico'], 'cod_medico_zeus': l['cod_medico_zeus'],
         'lumier': l['lumier'], 'tipo': l['tipo'], 'por_horas': l['por_horas'], 'bloques': l.get('bloques'),
         'valor_glosa': _num(l['valor_glosa']), 'valor_glosado': _num(l['valor_glosado']),
-        'medico_agenda': l.get('medico_agenda', ''),
+        'medico_agenda': l.get('medico_agenda', ''), 'categoria': l.get('categoria', 'PROCEDIMIENTOS'),
     }
 
 

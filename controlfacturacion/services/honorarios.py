@@ -16,6 +16,13 @@ Reglas 2026-11-21:
   - Médicos "(HORA)" en el Excel (Sofy, Sebastián): las consultas se pagan por las horas de su agenda del mes
     (horas × valor de la consulta del Excel); sus demás CUPS (EEG, monitorización...) se pagan por CUPS.
   - Particular de fisiatría: paquetes de Zeus 000006 / 000005 / 000004 = 1 / 2 / 4 extremidades.
+
+Reglas 2026-11-25:
+  - El detalle del médico se agrupa por categoría (RX, tomografía, resonancia, ecografía, doppler, PET-CT,
+    consultas, bloqueos, estudios del sueño, procedimientos).
+  - Dr. Roberto Ortega (cod 20): sus bloqueos se pagan de una bolsa: valor 1 = $6.789.478 / puntos de bloqueo
+    del mes; honorario del paciente = valor 1 × puntos del paciente × 70 %.
+  - Dr. Rafael Carrasquilla (cod 2): no se le cuentan los CUPS 890426 ni 890202.
 """
 
 import re
@@ -25,6 +32,20 @@ from decimal import Decimal, ROUND_HALF_UP
 from difflib import SequenceMatcher
 
 CUPS_EXCLUIDOS = ('992990', '998701', '890226')
+# CUPS que no se le cuentan a un médico en particular {Medicos.codigo: CUPS}
+EXCLUIDOS_POR_MEDICO = {
+    2: ('890426', '890202'),          # Rafael Carrasquilla Cárdenas (regla 2026-11-25)
+}
+# Bloqueos (CUPS base, sin ceros a la izquierda) y médicos que los cobran de una bolsa mensual:
+# valor 1 = valor_mes / puntos de bloqueo del mes; honorario = valor 1 × puntos del paciente × porcentaje
+CUPS_BLOQUEO = ('53105', '53106', '53111')
+BOLSA_BLOQUEOS = {
+    20: {'valor_mes': 6789478, 'porcentaje': 70},   # Roberto Mario Ortega Villalba (regla 2026-11-25)
+}
+# Categorías del detalle del médico, en el orden en que se muestran
+CATEGORIAS = ('CONSULTAS', 'RADIOGRAFÍA (RX)', 'TOMOGRAFÍA (TAC)', 'RESONANCIA', 'ECOGRAFÍA', 'DOPPLER',
+              'MAMOGRAFÍA', 'PET-CT', 'OTRAS IMÁGENES', 'PROCEDIMIENTOS', 'BLOQUEOS', 'ESTUDIOS DEL SUEÑO')
+CUPS_SUENO = ('891703', '891704')
 # CUPS de imágenes (RX 87, TAC 879, ecografía 881, doppler 882, resonancia 883, PET 9214): los que lee el
 # radiólogo en Lumier
 PREFIJOS_IMAGEN = ('87', '88', '9214')
@@ -85,6 +106,77 @@ def excluido(cod_servicio) -> bool:
 
 def es_imagen(cod_servicio) -> bool:
     return str(cups_base(cod_servicio)).startswith(PREFIJOS_IMAGEN)
+
+
+def excluido_medico(cod_servicio, cod_medico) -> bool:
+    """CUPS que no se le cuentan a ese médico (EXCLUIDOS_POR_MEDICO)."""
+    return cups_base(cod_servicio) in {norm_cups(c) for c in EXCLUIDOS_POR_MEDICO.get(cod_medico, ())}
+
+
+def es_bloqueo(cod_servicio) -> bool:
+    return cups_base(cod_servicio) in CUPS_BLOQUEO
+
+
+def categoria(cod_servicio, descripcion: str = '') -> str:
+    """
+    Categoría de la línea para agrupar el detalle del médico (ver CATEGORIAS). Si el CUPS no lo dice (códigos
+    internos como 1005927-3 'RADIOGRAFÍA DE CADERA COMPARATIVA'), se decide por la descripción.
+    """
+    por_cups = _categoria_cups(cod_servicio)
+    if por_cups != 'PROCEDIMIENTOS':
+        return por_cups
+    d = plano(descripcion)
+    for patron, cat in ((r'RESONANCIA', 'RESONANCIA'), (r'TOMOGRAF', 'TOMOGRAFÍA (TAC)'), (r'DOPPLER', 'DOPPLER'),
+                        (r'ECOGRAF', 'ECOGRAFÍA'), (r'MAMOGRAF', 'MAMOGRAFÍA'), (r'RADIOGRAF', 'RADIOGRAFÍA (RX)'),
+                        (r'POLISOMNOGRA', 'ESTUDIOS DEL SUEÑO')):
+        if re.search(patron, d):
+            return cat
+    return 'PROCEDIMIENTOS'
+
+
+def _categoria_cups(cod_servicio) -> str:
+    if str(cod_servicio).upper() == 'AGENDA':
+        return 'CONSULTAS'
+    b = str(cups_base(cod_servicio))
+    if b.startswith(('8902', '8903')):
+        return 'CONSULTAS'
+    if b in CUPS_BLOQUEO:
+        return 'BLOQUEOS'
+    if b in CUPS_SUENO:
+        return 'ESTUDIOS DEL SUEÑO'
+    if b.startswith('9214'):
+        return 'PET-CT'
+    if b.startswith('883'):
+        return 'RESONANCIA'
+    if b.startswith('879'):
+        return 'TOMOGRAFÍA (TAC)'
+    if b.startswith('882'):
+        return 'DOPPLER'
+    if b.startswith('881'):
+        return 'ECOGRAFÍA'
+    if b.startswith('8768'):
+        return 'MAMOGRAFÍA'
+    if b.startswith('87'):
+        return 'RADIOGRAFÍA (RX)'
+    if b.startswith('88'):
+        return 'OTRAS IMÁGENES'
+    return 'PROCEDIMIENTOS'
+
+
+def honorario_bolsa_bloqueo(cod_medico, puntos_paciente, puntos_mes) -> tuple[Decimal, str] | None:
+    """
+    Bloqueo pagado de la bolsa del médico (BOLSA_BLOQUEOS): (honorario, texto de la tarifa), o None si el médico
+    no cobra así. valor 1 = valor_mes / puntos del mes; honorario = valor 1 × puntos del paciente × porcentaje.
+    """
+    bolsa = BOLSA_BLOQUEOS.get(cod_medico)
+    if not bolsa or not puntos_mes:
+        return None
+    valor_1 = Decimal(bolsa['valor_mes']) / Decimal(str(puntos_mes))
+    honorario = _redondear(valor_1 * Decimal(str(puntos_paciente)) * Decimal(bolsa['porcentaje']) / 100)
+    miles = lambda v: f"{int(_redondear(Decimal(v))):,}".replace(',', '.')
+    texto = (f"Bolsa ${miles(bolsa['valor_mes'])} / {float(puntos_mes):g} puntos del mes = ${miles(valor_1)} "
+             f"por punto × {bolsa['porcentaje']} %")
+    return honorario, texto
 
 
 # ── contrato → grupo de tarifa ───────────────────────────────────────────────
