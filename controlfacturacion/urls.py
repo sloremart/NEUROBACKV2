@@ -31,6 +31,7 @@ urlpatterns = [
     path('auditoria/sin-facturar/',            aud.sin_facturar,      name='aud-sin-facturar'),
     path('auditoria/sin-tarifa/',              aud.sin_tarifa,        name='aud-sin-tarifa'),
     path('auditoria/indicadores/',             aud.indicadores,       name='aud-indicadores'),
+    path('auditoria/errores-resultados/',      aud.errores_resultados, name='aud-errores-resultados'),
 
     path('realizados/',                    bandeja_realizados,         name='gf-realizados'),
     path('radicados/',                     bandeja_radicados,          name='gf-radicados'),

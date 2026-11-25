@@ -12,6 +12,7 @@ Auditoría de honorarios médicos — /api/v2/gestion-facturacion/auditoria/...
   GET  sin-facturar/?periodo= [&exportar=1]     → servicios sin número de factura en SIESA
   GET  sin-tarifa/?periodo=                     → CUPS facturados por cada médico que no tienen tarifa
   GET  indicadores/?desde=YYYY-MM&hasta=YYYY-MM  → glosas y pagos por médico (de las líneas auditadas)
+  GET  errores-resultados/?periodo=             → errores del médico en los resultados (revisión de resultados)
 
 Reglas en controlfacturacion/services/honorarios.py.
 """
@@ -995,3 +996,148 @@ def resolver_lumier(request):
         clave=clave, defaults={'periodo': periodo, 'decision': decision,
                                'nota': (request.data.get('nota') or '').strip(), 'usuario': _usuario(request)})
     return JsonResponse({'ok': True})
+
+
+
+# ── errores del médico en los resultados ─────────────────────────────────────
+# Hallazgos de la revisión de RESULTADOS (RevisionIA) que son un error de lo que escribió el médico.
+# No cuentan: el resultado sin cargar ("Ausencia del reporte"), el documento de otro paciente (error de cargue)
+# ni lo que el sistema descartó porque la IA leyó mal el documento.
+NO_ES_ERROR_MEDICO = re.compile(r'ausencia del reporte|sin resultado cargado|paciente no corresponde', re.IGNORECASE)
+CATEGORIAS_ERROR_RESULTADO = (
+    ('NOMBRE', 'Nombre del paciente mal escrito',
+     re.compile(r'nombre del (usuario|paciente)', re.IGNORECASE)),
+    ('DATOS', 'Edad o documento del paciente',
+     re.compile(r'\bedad\b|naci[óo]|documento de identidad|n[úu]mero de documento|identificaci[óo]n', re.IGNORECASE)),
+    ('LATERALIDAD', 'Lado equivocado (derecho / izquierdo)',
+     re.compile(r'derech\w*.*izquierd|izquierd\w*.*derech', re.IGNORECASE | re.DOTALL)),
+    ('ESTUDIO', 'Estudio o procedimiento no corresponde',
+     re.compile(r'no corresponde|no coincide|esperaba|no incluye|no se especifica|mientras que|'
+                r'pero la admisi[óo]n|diferente', re.IGNORECASE)),
+)
+CATEGORIA_ERROR_OTRO = ('OTRO', 'Otro error en el resultado')
+# Palabras del hallazgo → categoría de la línea (honorarios.categoria), para saber cuál médico leyó el estudio
+PALABRAS_CATEGORIA = (
+    (re.compile(r'\bRX\b|RADIOGRAF', re.IGNORECASE), 'RADIOGRAFÍA (RX)'),
+    (re.compile(r'\bTAC\b|TOMOGRAF|UROTAC', re.IGNORECASE), 'TOMOGRAFÍA (TAC)'),
+    (re.compile(r'RESONANCIA', re.IGNORECASE), 'RESONANCIA'),
+    (re.compile(r'ECOGRAF', re.IGNORECASE), 'ECOGRAFÍA'),
+    (re.compile(r'DOPPLER', re.IGNORECASE), 'DOPPLER'),
+    (re.compile(r'MAMOGRAF', re.IGNORECASE), 'MAMOGRAFÍA'),
+    (re.compile(r'\bPET', re.IGNORECASE), 'PET-CT'),
+    (re.compile(r'SUE[ÑN]O|POLISOMNO|CPAP', re.IGNORECASE), 'ESTUDIOS DEL SUEÑO'),
+    (re.compile(r'CONSULTA', re.IGNORECASE), 'CONSULTAS'),
+)
+
+
+def errores_resultado(descripcion: str) -> list[tuple[str, str, str]]:
+    """Partes del hallazgo que son error del médico: [(clave, categoría, texto)]. Vacío si ninguna lo es."""
+    salida = []
+    for parte in (descripcion or '').split(' | '):
+        parte = parte.strip()
+        if not parte or NO_ES_ERROR_MEDICO.search(parte):
+            continue
+        clave, nombre = next(((c, n) for c, n, rx in CATEGORIAS_ERROR_RESULTADO if rx.search(parte)),
+                             CATEGORIA_ERROR_OTRO)
+        salida.append((clave, nombre, parte))
+    return salida
+
+
+def medicos_del_error(texto: str, lineas: list[dict]) -> set:
+    """Médicos de la admisión a los que se atribuye el error: si hay varios, el que leyó ese tipo de estudio."""
+    medicos = {l['cod_medico_zeus'] for l in lineas if l['cod_medico_zeus'] != SIN_MEDICO}
+    if len(medicos) <= 1:
+        return medicos or {SIN_MEDICO}
+    categorias = {cat for rx, cat in PALABRAS_CATEGORIA if rx.search(texto)}
+    elegidos = {l['cod_medico_zeus'] for l in lineas
+                if l['cod_medico_zeus'] != SIN_MEDICO and h.categoria(l['cod_servicio'], l['descripcion']) in categorias}
+    return elegidos or medicos
+
+
+def _estado_error(r) -> str | None:
+    """PENDIENTE / CORREGIDO / ACEPTADO, o None si no fue error del médico (se corrigió el dato en Zeus)."""
+    if r.Resuelta and re.search(r'zeus', r.NotaResolucion or '', re.IGNORECASE):
+        return None
+    if not r.Resuelta:
+        return 'PENDIENTE'
+    return 'ACEPTADO' if r.Resolucion == 'ACEPTADO' else 'CORREGIDO'
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def errores_resultados(request):
+    """
+    Errores del médico en los resultados de las admisiones del mes (los detecta la revisión de resultados):
+    nombre o datos del paciente mal escritos, lado equivocado, estudio que no corresponde. Cuenta también los ya
+    corregidos (el error se cometió); el mismo error repetido en una admisión cuenta una sola vez.
+    """
+    from gedocumental.models import RevisionIA
+    periodo = _periodo(request)
+    por_estudio = defaultdict(list)
+    for l in _lineas_zeus(periodo):
+        por_estudio[l['estudio']].append(l)
+    nombres = {m['codigo']: m for m in medicos_zeus()}
+
+    errores = {}   # (admisión, categoría) → error; la revisión más reciente define el estado
+    ids = list(por_estudio)
+    for i in range(0, len(ids), 1000):
+        revisiones = (RevisionIA.objects
+                      .filter(AdmisionId__in=ids[i:i + 1000], TipoDocumento__iexact='RESULTADO')
+                      .exclude(TipoHallazgo='OK').exclude(Resolucion='DESCARTADO')
+                      .order_by('Fecha'))
+        for r in revisiones:
+            estado = _estado_error(r)
+            for clave, nombre, texto in errores_resultado(r.Descripcion):
+                if estado is None:   # el dato estaba mal en Zeus: no era error del médico
+                    errores.pop((r.AdmisionId, clave), None)
+                    continue
+                anterior = errores.get((r.AdmisionId, clave)) or {}
+                errores[(r.AdmisionId, clave)] = {
+                    'id': r.IdRevision, 'admision': r.AdmisionId, 'categoria': clave, 'categoria_texto': nombre,
+                    'descripcion': texto, 'estado': estado,
+                    'fecha_hallazgo': anterior.get('fecha_hallazgo') or r.Fecha.date().isoformat(),
+                }
+
+    medicos = defaultdict(lambda: {'errores': 0, 'admisiones_error': set(), 'pendientes': 0,
+                                   'por_categoria': defaultdict(int)})
+    filas = []
+    for e in errores.values():
+        lineas = por_estudio[e['admision']]
+        cods = medicos_del_error(e['descripcion'], lineas)
+        for cod in cods:
+            m = medicos[cod]
+            m['errores'] += 1
+            m['admisiones_error'].add(e['admision'])
+            m['pendientes'] += e['estado'] == 'PENDIENTE'
+            m['por_categoria'][e['categoria']] += 1
+        l0 = lineas[0]
+        servicios = [l for l in lineas if l['cod_medico_zeus'] in cods] or lineas
+        filas.append(dict(
+            e, fecha=l0['fecha'].isoformat() if l0['fecha'] else None, paciente=l0['paciente'],
+            documento=f"{l0['tipo_id']} {l0['documento']}".strip(), contrato=l0['contrato'],
+            cod_medicos=sorted(cods),
+            medico=', '.join(nombres.get(c, {}).get('nombre', 'SIN MÉDICO') for c in sorted(cods)),
+            servicios=', '.join(sorted({f"{l['cod_servicio']} {l['descripcion']}" for l in servicios}))[:300],
+        ))
+
+    # Admisiones de cada médico en el mes: base del porcentaje
+    admisiones = defaultdict(set)
+    for estudio, lineas in por_estudio.items():
+        for l in lineas:
+            admisiones[l['cod_medico_zeus']].add(estudio)
+    medicos_salida = []
+    for cod, m in medicos.items():
+        info = nombres.get(cod, {})
+        total = len(admisiones.get(cod, ()))
+        medicos_salida.append({
+            'cod_medico': cod, 'medico': info.get('nombre') or 'SIN MÉDICO', 'especialidad': info.get('especialidad', ''),
+            'errores': m['errores'], 'pendientes': m['pendientes'], 'admisiones': total,
+            'admisiones_error': len(m['admisiones_error']),
+            'pct': round(100 * len(m['admisiones_error']) / total, 1) if total else 0,
+            'por_categoria': dict(m['por_categoria']),
+        })
+    medicos_salida.sort(key=lambda x: (-x['errores'], x['medico']))
+    filas.sort(key=lambda f: (f['estado'] != 'PENDIENTE', f['medico'], f['fecha'] or ''))
+    categorias = ([{'clave': c, 'texto': n} for c, n, _ in CATEGORIAS_ERROR_RESULTADO]
+                  + [{'clave': CATEGORIA_ERROR_OTRO[0], 'texto': CATEGORIA_ERROR_OTRO[1]}])
+    return JsonResponse({'periodo': periodo, 'medicos': medicos_salida, 'errores': filas, 'categorias': categorias})

@@ -242,3 +242,31 @@ class CategoriaYBolsaTests(SimpleTestCase):
         self.assertTrue(h.excluido_medico('890202', 2))
         self.assertFalse(h.excluido_medico('890426', 20))
         self.assertFalse(h.excluido_medico('998702', 2))
+
+
+class ErroresResultadoTests(SimpleTestCase):
+    """Pestaña 'Errores en resultados': solo lo que es error de lo que escribió el médico."""
+
+    def test_no_son_error_del_medico(self):
+        from controlfacturacion.views_auditoria import errores_resultado
+        self.assertEqual(errores_resultado('Ausencia del reporte: 5 días desde el ingreso sin RESULTADO cargado.'), [])
+        self.assertEqual(errores_resultado("Paciente no corresponde: documento 'PEDRO PRUEBA', admisión 'JUAN EJEMPLO'."), [])
+
+    def test_categorias(self):
+        from controlfacturacion.views_auditoria import errores_resultado
+        cat = lambda d: [c for c, _, _ in errores_resultado(d)]
+        self.assertEqual(cat("Nombre del usuario incorrecto: documento 'ANA PRUEBA', admisión 'ANA PRUEVA'."), ['NOMBRE'])
+        self.assertEqual(cat('Resultado de RX de fémur derecho, se esperaba RX de fémur izquierdo según admisión.'),
+                         ['LATERALIDAD'])
+        self.assertEqual(cat('El resultado indica TAC DE CUELLO, pero la admisión es TOMOGRAFÍA DE TÓRAX.'), ['ESTUDIO'])
+        self.assertEqual(cat('El documento presenta un error en la edad del paciente.'), ['DATOS'])
+        self.assertEqual(cat("Nombre del usuario incorrecto: documento 'A', admisión 'B'. | Ausencia del reporte"),
+                         ['NOMBRE'])
+
+    def test_medico_del_estudio(self):
+        from controlfacturacion.views_auditoria import medicos_del_error
+        lineas = [{'cod_medico_zeus': 3, 'cod_servicio': '883101', 'descripcion': 'RESONANCIA CEREBRAL'},
+                  {'cod_medico_zeus': 11, 'cod_servicio': '873420', 'descripcion': 'RADIOGRAFIA DE CADERA'}]
+        self.assertEqual(medicos_del_error('Resultado de RX CADERA no corresponde', lineas), {11})
+        self.assertEqual(medicos_del_error('Nombre del usuario incorrecto', lineas), {3, 11})
+        self.assertEqual(medicos_del_error('x', lineas[:1]), {3})
