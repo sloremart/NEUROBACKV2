@@ -1627,58 +1627,41 @@ class DashboardFacturacionNuevoView(APIView):
         total_admisiones_regular = sum(e['admisiones'] for e in entidades_list)
 
         # ── MRC (contratos 5 y 6) ─────────────────────────────────────────────
-        # Fuente: citas (no sis_deta, que es incompleto para MRC capitation).
-        # - citas_procedimientos: procedimientos/imágenes — cantidad en el sufijo del cup
-        #   (ej: '053105-10' → cup base '053105', cantidad 10)
-        # - citas_procedimientos_asuntos: consultas médicas — cada fila = 1 procedimiento
-        # Se excluyen canceladas (estado C/X). Solo citas no canceladas en el rango.
+        # Fuente: admisiones de SIESA (sis_maes + sis_deta), igual que el informe de admisiones MRC.
+        # Antes se contaba la agenda (citas): cada consulta salía repetida (citas_procedimientos_asuntos tiene
+        # filas duplicadas por cita) y se sumaban citas pendientes no atendidas (caso nov 2026: 653 consultas en
+        # el tablero frente a 266 del informe).
+        # Cantidad = la facturada en SIESA (sis_deta.cantidad): en videotelemetrías (891901-12) son las horas y
+        # en bloqueos (053105-10) los bloqueos, como acordó facturación; las consultas cuentan una por admisión. Sin anuladas ni cargos revertidos, y
+        # solo procedimientos (no medicamentos ni insumos).
         with connections['zeussalud'].cursor() as cursor:
             cursor.execute('''
-                SELECT cup, SUM(cantidad) AS total
-                FROM (
-                    SELECT
-                        LTRIM(RTRIM(cp.id_procedimiento)) AS cup,
-                        CASE
-                            WHEN CHARINDEX(\'-\', cp.id_procedimiento) > 0
-                                 AND TRY_CONVERT(INT,
-                                     SUBSTRING(cp.id_procedimiento,
-                                               CHARINDEX(\'-\', cp.id_procedimiento) + 1,
-                                               10)) IS NOT NULL
-                            THEN TRY_CONVERT(INT,
-                                     SUBSTRING(cp.id_procedimiento,
-                                               CHARINDEX(\'-\', cp.id_procedimiento) + 1,
-                                               10))
-                            ELSE ISNULL(cp.Cantidad, 1)
-                        END AS cantidad
-                    FROM citas c
-                    JOIN citas_procedimientos cp ON cp.id_cita = c.id
-                    WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
-                      AND c.contrato IN (\'5\', \'6\')
-                      AND ISNULL(c.estado, \'P\') NOT IN (\'C\', \'X\')
-
-                    UNION ALL
-
-                    SELECT
-                        LTRIM(RTRIM(cpa.CodProcedimiento)) AS cup,
-                        1 AS cantidad
-                    FROM citas c
-                    JOIN citas_procedimientos_asuntos cpa ON cpa.IdCita = c.id
-                    WHERE CONVERT(date, c.fecha) BETWEEN %s AND %s
-                      AND c.contrato IN (\'5\', \'6\')
-                      AND ISNULL(c.estado, \'P\') NOT IN (\'C\', \'X\')
-                ) combined
-                GROUP BY cup
-            ''', [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin])
-            rows_citas = cursor.fetchall()
+                SELECT LTRIM(RTRIM(d.cod_servicio))         AS cup,
+                       MAX(LTRIM(RTRIM(d.descripcion)))     AS nombre,
+                       SUM(ISNULL(d.cantidad, 1))           AS total,
+                       COUNT(DISTINCT sm.con_estudio)       AS estudios
+                FROM sis_maes sm
+                JOIN sis_deta d ON d.estudio = sm.con_estudio AND ISNULL(d.ItemRevertido, 0) = 0
+                WHERE CONVERT(date, sm.fecha_ing) BETWEEN %s AND %s
+                  AND sm.contrato IN (5, 6)
+                  AND ISNULL(sm.estado, \'\') <> \'N\'
+                  AND ISNULL(LTRIM(RTRIM(d.TipoItem)), \'Procedimiento\') IN (\'Procedimiento\', \'\')
+                GROUP BY LTRIM(RTRIM(d.cod_servicio))
+            ''', [fecha_inicio, fecha_fin])
+            rows_mrc = cursor.fetchall()
 
         cups_data = {}
-        for cup, cantidad in rows_citas:
+        for cup, nombre, cantidad, estudios in rows_mrc:
             k = str(cup or '').strip()
             if not k:
                 continue
             if k not in cups_data:
-                cups_data[k] = {'cups': k, 'nombre': k, 'cantidad': 0.0, 'valor': 0.0}
-            cups_data[k]['cantidad'] += float(cantidad or 0)
+                cups_data[k] = {'cups': k, 'nombre': (nombre or k), 'cantidad': 0.0, 'valor': 0.0, 'estudios': 0}
+            # Consultas (8902xx primera vez / 8903xx control): una por admisión, aunque SIESA tenga la línea
+            # repetida en la admisión (caso nov 2026: 13 admisiones con la consulta cobrada dos veces)
+            es_consulta = k[:4] in ('8902', '8903')
+            cups_data[k]['cantidad'] += float(estudios or 0) if es_consulta else float(cantidad or 0)
+            cups_data[k]['estudios'] += int(estudios or 0)
 
         cups_en_grupo = set()
         grupos_resultado = []
