@@ -364,7 +364,7 @@ def _estudios_por_fecha(fecha_inicio: str, fecha_fin: str):
             JOIN sis_deta sd ON sd.estudio = sm.con_estudio
             WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
               AND sm.id_sede IN (2, 3)
-              AND sm.estado = 'A'
+              AND ISNULL(sm.estado, '') <> 'N'   -- abiertas (A) y cerradas/facturadas (C); solo se excluyen anuladas
               AND LEFT(sd.cups, 2) IN ('87', '88', '92')
             GROUP BY sm.con_estudio
             ORDER BY sm.con_estudio
@@ -1395,7 +1395,7 @@ def _estudios_enfermeria_por_fecha(fecha_inicio: str, fecha_fin: str) -> list:
             JOIN sis_deta sd ON sd.estudio = sm.con_estudio
             WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
               AND sm.id_sede = 2
-              AND sm.estado = 'A'
+              AND ISNULL(sm.estado, '') <> 'N'   -- abiertas (A) y cerradas/facturadas (C); solo se excluyen anuladas
               AND sm.ufuncional = 12
               AND EXISTS (SELECT 1 FROM notas_enfermeria ne WHERE ne.ingreso = sm.con_estudio)
             ORDER BY sm.con_estudio
@@ -1605,7 +1605,7 @@ def _estudios_consulta_por_fecha(fecha_inicio: str, fecha_fin: str, especialidad
             JOIN hcingres h ON h.con_estudio = sm.con_estudio
             WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
               AND sm.id_sede = 2
-              AND sm.estado = 'A'
+              AND ISNULL(sm.estado, '') <> 'N'   -- abiertas (A) y cerradas/facturadas (C); solo se excluyen anuladas
               AND sm.ufuncional = 1
               AND h.estado = 'C'
               AND LTRIM(RTRIM(h.tipo_histo)) IN ({marcadores})
@@ -1717,7 +1717,7 @@ def _estudios_procedimiento_por_fecha(fecha_inicio: str, fecha_fin: str) -> list
             JOIN hcingres h ON h.con_estudio = sm.con_estudio
             WHERE CAST(sm.fecha_ing AS DATE) BETWEEN %s AND %s
               AND sm.id_sede = 2
-              AND sm.estado = 'A'
+              AND ISNULL(sm.estado, '') <> 'N'   -- abiertas (A) y cerradas/facturadas (C); solo se excluyen anuladas
               AND sm.ufuncional = 10
               AND h.estado = 'C'
               AND LTRIM(RTRIM(h.tipo_histo)) IN ({marcadores})
