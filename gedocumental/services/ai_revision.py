@@ -366,7 +366,9 @@ def _formatear_contexto(datos_admision: dict) -> str:
 
 PROMPT_TRANSCRIBIR = (
     "Transcribe TODAS las filas de la tabla de servicios/procedimientos de la orden o autorización, en orden y "
-    "sin omitir ninguna (revisa hasta la ÚLTIMA fila, incluidas consultas, laboratorios y terapias). Solo "
+    "sin omitir ninguna: desde la PRIMERA hasta la ÚLTIMA fila, incluidas consultas, laboratorios y terapias. "
+    "Una fila puede ocupar varios renglones (descripción larga u \"Observaciones\" debajo): sigue siendo una sola "
+    "fila; cada código CUPS de la columna izquierda inicia una fila. Copia cada código dígito por dígito. Solo "
     "transcribe, no evalúes. De cada fila basta el código CUPS y las primeras palabras de la descripción. "
     "Responde en JSON: "
     '{"procedimientos": "<código CUPS y descripción corta de cada fila, separados por punto y coma>"}'
@@ -402,6 +404,45 @@ def _transcribir_procedimientos(client, modelo: str, imagenes: list[str]) -> tup
     if isinstance(procedimientos, list):
         procedimientos = '; '.join(str(p) for p in procedimientos)
     return str(procedimientos), tokens
+
+
+PROMPT_BUSCAR_CUPS = (
+    "Busca en la tabla de servicios/procedimientos de esta orden o autorización si aparece cada uno de estos "
+    "servicios (por su código CUPS o por su descripción). Revisa TODAS las filas, también la primera y las que "
+    "ocupan varios renglones. Para cada uno que SÍ aparezca, copia la fila tal como está escrita: código CUPS "
+    "dígito por dígito y descripción. No inventes filas: si no aparece, no lo incluyas. Servicios: {servicios}. "
+    "Responde en JSON: "
+    '{{"filas": ["<código y descripción de la fila encontrada>", ...]}}'
+)
+
+
+def _buscar_cups_en_tabla(client, modelo: str, imagenes: list[str], datos_admision: dict) -> tuple[str, list]:
+    """Pregunta puntual: filas de la tabla con los CUPS de la admisión. Devuelve ('fila; fila', [tokens])."""
+    servicios = '; '.join(re.sub(r'\s*\(cant\.\s*\d+\)\s*$', '', _reparar_texto(str(c)))
+                          for c in datos_admision.get('cups') or [])
+    if not servicios:
+        return '', [0, 0]
+    contenido = [{"type": "text", "text": "Documento escaneado: ver imágenes adjuntas."}]
+    contenido += [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"}}
+                  for img in imagenes]
+    try:
+        respuesta = client.chat.completions.create(
+            model=modelo,
+            messages=[{"role": "system", "content": PROMPT_BUSCAR_CUPS.format(servicios=servicios)},
+                      {"role": "user", "content": contenido}],
+            response_format={"type": "json_object"},
+            max_tokens=400,
+            temperature=0,
+        )
+        uso = getattr(respuesta, 'usage', None)
+        tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
+        filas = json.loads(respuesta.choices[0].message.content or '{}').get("filas") or []
+    except Exception as exc:
+        logger.warning("No se pudo buscar el CUPS de la admisión en la tabla: %s", exc)
+        return '', [0, 0]
+    if isinstance(filas, str):
+        filas = [filas]
+    return '; '.join(str(f) for f in filas if f), tokens
 
 
 PROMPT_RELEER_NOMBRE = (
@@ -977,9 +1018,22 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         procedimientos, tokens = _transcribir_procedimientos(client, modelo, imagenes)
         resultado["tokens"] = [a + b for a, b in zip(resultado["tokens"], tokens)]
         resultado["llamadas"] = resultado.get("llamadas", 1) + 1
-        # ...o la consulta de la admisión por su descripción (especialidad y tipo), con el código mal leído (35639)
-        if (_mismo_codigo_cups('', procedimientos, datos_admision)
-                or _consulta_en_orden(procedimientos, datos_admision)):
+
+        def en_tabla(texto_tabla):
+            # ...o la consulta de la admisión por su descripción (especialidad y tipo), con el código mal leído (35639)
+            return (_mismo_codigo_cups('', texto_tabla, datos_admision)
+                    or _consulta_en_orden(texto_tabla, datos_admision))
+
+        if not en_tabla(procedimientos):
+            # La transcripción completa a veces se salta una fila (caso 36893: la consulta 890375 en la primera
+            # fila, con la descripción en dos renglones). Pregunta puntual por los CUPS de la admisión; solo vale
+            # si la fila devuelta trae el código o la misma consulta (no basta un "sí").
+            filas, tokens = _buscar_cups_en_tabla(client, modelo, imagenes, datos_admision)
+            resultado["tokens"] = [a + b for a, b in zip(resultado["tokens"], tokens)]
+            resultado["llamadas"] += 1
+            if filas and en_tabla(filas):
+                procedimientos = f"{procedimientos}; {filas}" if procedimientos else filas
+        if en_tabla(procedimientos):
             logger.info("La transcripción de la tabla trae el CUPS de la admisión: se descarta '%s'",
                         resultado.get("descripcion"))
             resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",

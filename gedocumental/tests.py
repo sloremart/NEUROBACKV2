@@ -416,7 +416,8 @@ class TranscripcionTablaTests(SimpleTestCase):
 
     def test_la_transcripcion_tampoco_la_trae(self):
         r, llamadas = self._llamar("883101 RESONANCIA MAGNETICA DE CEREBRO; 891402 ELECTROENCEFALOGRAMA")
-        self.assertEqual((r['tipo'], llamadas), ('SOPORTES', 3))   # + ¿manuscrita?
+        # transcripción + pregunta puntual por el CUPS (caso 36893) + ¿manuscrita?
+        self.assertEqual((r['tipo'], llamadas), ('SOPORTES', 4))
 
     def test_documento_digital_no_hace_la_consulta_extra(self):
         r, llamadas = self._llamar("890375", imagenes=())
@@ -2613,3 +2614,32 @@ class ConsultaEnOrdenTests(SimpleTestCase):
              "MAGNETICA DE BASE DE CRANEO O SILLA TURCA); 903896 (CREATININA EN SUERO O OTROS FLUIDOS); 950374 "
              "(NEUROLOGÍA CONTROL.). Corrija el CUPS en la admisión o cargue la orden correcta.")
         self.assertEqual(evaluar_hallazgo('ORDEN', d, self.ADM)[0], DESCARTADO)
+
+
+class BuscarCupsEnTablaTests(SimpleTestCase):
+    """Caso 36893: la transcripción se saltó la consulta 890375 (primera fila); la pregunta puntual la encuentra."""
+
+    def _cliente(self, contenido):
+        msg = SimpleNamespace(content=contenido)
+        resp = SimpleNamespace(choices=[SimpleNamespace(message=msg)],
+                               usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5))
+        crear = lambda **kw: resp
+        return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=crear)))
+
+    def test_fila_encontrada(self):
+        from gedocumental.services.ai_revision import _buscar_cups_en_tabla, _consulta_en_orden, _mismo_codigo_cups
+        adm = dict(ADMISION, cups=['890375 - CONSULTA DE CONTROL O DE SEGUIMIENTO POR ESPECIALISTA EN NEUROLOGÍA '
+                                   'PEDIÁTRICA (cant. 1)'])
+        cliente = self._cliente('{"filas": ["890375 CONSULTA DE CONTROL O DE SEGUIMIENTO POR ESPECIALISTA EN '
+                                'NEUROLOGIA PEDIATRICA"]}')
+        filas, tokens = _buscar_cups_en_tabla(cliente, 'm', ['x'], adm)
+        self.assertIn('890375', filas)
+        self.assertEqual(tokens, [10, 5])
+        self.assertTrue(_mismo_codigo_cups('', filas, adm))
+        # Con el código mal leído también vale, por la descripción de la consulta
+        self.assertTrue(_consulta_en_orden(filas.replace('890375', '890875'), adm))
+
+    def test_no_aparece(self):
+        from gedocumental.services.ai_revision import _buscar_cups_en_tabla
+        filas, _ = _buscar_cups_en_tabla(self._cliente('{"filas": []}'), 'm', ['x'], ADMISION)
+        self.assertEqual(filas, '')
