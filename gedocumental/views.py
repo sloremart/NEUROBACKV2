@@ -777,6 +777,15 @@ class AdmisionesRadicarView(APIView):
             .values_list('AdmisionId', flat=True)
         )
 
+        # Ya renombradas (algún archivo con Radicado=True): no se listan. El renombrado las rechaza
+        # ("ya está radicada") y el 17/11/2026 la regeneración de resultados les creó un RESULTADO
+        # nuevo con Radicado=False que las hacía reaparecer.
+        ids_revisados -= set(
+            ArchivoFacturacion.objects
+            .filter(Admision_id__in=ids_revisados, Radicado=True)
+            .values_list('Admision_id', flat=True)
+        )
+
         if not ids_revisados:
             return Response([], status=200)
 
