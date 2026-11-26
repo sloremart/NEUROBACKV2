@@ -2585,3 +2585,31 @@ class AdmisionSinDocumentosTests(SimpleTestCase):
         from django.core.management.base import CommandError
         with self.assertRaises(CommandError):
             call_command('exonerar_documentos', admision=[1])
+
+
+class ConsultaEnOrdenTests(SimpleTestCase):
+    """Caso 35639: orden escaneada con '890374' leído como '950374'; la fila dice 'NEUROLOGÍA CONTROL'."""
+    ADM = dict(ADMISION, cups=['890374 - CONSULTA DE CONTROL O DE SEGUIMIENTO POR ESPECIALISTA EN NEUROLOGÍA (cant. 1)'])
+    TRANSCRIPCION = ("883702 RESONANCIA MAGNETICA DE BASE DE CRANEO O SILLA TURCA (1)\n"
+                     "903896 CREATININA EN SUERO U OTROS FLUIDOS (1)\n950374 NEUROLOGÍA CONTROL (1)")
+
+    def test_consulta_por_descripcion(self):
+        from gedocumental.services.ai_revision import _consulta_en_orden
+        self.assertTrue(_consulta_en_orden(self.TRANSCRIPCION, self.ADM))
+
+    def test_tipo_distinto_sigue(self):
+        from gedocumental.services.ai_revision import _consulta_en_orden
+        primera = dict(ADMISION, cups=['890274 - CONSULTA DE PRIMERA VEZ POR ESPECIALISTA EN NEUROLOGÍA (cant. 1)'])
+        self.assertFalse(_consulta_en_orden(self.TRANSCRIPCION, primera))     # caso 36691
+        fisiatria = dict(ADMISION, cups=['890364 - CONSULTA DE CONTROL O DE SEGUIMIENTO POR ESPECIALISTA EN '
+                                         'MEDICINA FISICA Y REHABILITACION (cant. 1)'])
+        self.assertFalse(_consulta_en_orden(self.TRANSCRIPCION, fisiatria))
+        con_imagen = dict(self.ADM, cups=self.ADM['cups'] + ['883101 - RESONANCIA MAGNETICA DE CEREBRO (cant. 1)'])
+        self.assertFalse(_consulta_en_orden(self.TRANSCRIPCION, con_imagen))
+
+    def test_reverificacion_descarta(self):
+        d = ("Procedimiento no coincide: la orden no trae el CUPS de la admisión. Admisión: 890374 (CONSULTA DE "
+             "CONTROL O DE SEGUIMIENTO POR ESPECIALISTA EN NEUROLOGÍA). La orden trae: 883702 (RESONANCIA "
+             "MAGNETICA DE BASE DE CRANEO O SILLA TURCA); 903896 (CREATININA EN SUERO O OTROS FLUIDOS); 950374 "
+             "(NEUROLOGÍA CONTROL.). Corrija el CUPS en la admisión o cargue la orden correcta.")
+        self.assertEqual(evaluar_hallazgo('ORDEN', d, self.ADM)[0], DESCARTADO)

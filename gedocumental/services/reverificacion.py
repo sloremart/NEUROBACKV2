@@ -33,7 +33,7 @@ from gedocumental.services.ai_revision import (
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _imagen_documentada, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE, TIPOS_NO_REVISADOS,
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida, _bilateral_cubre,
-    _orden_con_mas_cantidad, _orden_aplicacion_medicamento, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _es_anestesia, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
+    _orden_con_mas_cantidad, _orden_aplicacion_medicamento, _consulta_en_orden, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _es_anestesia, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
     _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden, _autorizacion_aplicacion_de_mas, _autorizacion_de_mas,
     obtener_contexto_admision, cantidades_orden, _clasificar_paciente, _es_recien_nacido, _documento_de_la_mama,
 )
@@ -518,6 +518,15 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
         # (regla del usuario 2026-11-19)
         return DESCARTADO, ("Solo difiere el contraste y el CUPS de la admisión es el mismo para simple y "
                             "contrastado; no es un error.")
+
+    # "La orden no trae el CUPS de la admisión ... La orden trae: 950374 (NEUROLOGÍA CONTROL.)": la consulta sí
+    # está, con el código mal leído del escaneo (caso 35639)
+    m = re.search(r'no trae el CUPS de la admisi[oó]n\..*?\bLa (?:orden|autorizaci[oó]n|documento) trae:\s*(.+?)'
+                  r'(?:\. Corrija|$)', d, re.DOTALL)
+    if (m and (tipo or '').upper() in ('ORDEN', 'AUTORIZACION')
+            and _consulta_en_orden(re.sub(r'\)\s*;\s*', ');\n', m.group(1)), datos_admision)):
+        return DESCARTADO, ("La orden trae la consulta de la admisión (misma especialidad y tipo); el código se leyó "
+                            "mal del escaneo.")
 
     if not _es_comprobante(tipo) and _solo_procedimiento_adicional(d):
         return DESCARTADO, ("El documento trae un procedimiento adicional a los de la admisión; "

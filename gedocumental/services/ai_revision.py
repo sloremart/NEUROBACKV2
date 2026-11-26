@@ -977,7 +977,9 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         procedimientos, tokens = _transcribir_procedimientos(client, modelo, imagenes)
         resultado["tokens"] = [a + b for a, b in zip(resultado["tokens"], tokens)]
         resultado["llamadas"] = resultado.get("llamadas", 1) + 1
-        if _mismo_codigo_cups('', procedimientos, datos_admision):
+        # ...o la consulta de la admisión por su descripción (especialidad y tipo), con el código mal leído (35639)
+        if (_mismo_codigo_cups('', procedimientos, datos_admision)
+                or _consulta_en_orden(procedimientos, datos_admision)):
             logger.info("La transcripción de la tabla trae el CUPS de la admisión: se descarta '%s'",
                         resultado.get("descripcion"))
             resultado.update(tipo="OK", descripcion="Documento correcto", procedimientos_coinciden="SI",
@@ -1841,6 +1843,49 @@ def _mismo_codigo_cups(texto, procedimientos_documento, datos_admision) -> bool:
     for cups in datos_admision.get('cups') or []:
         admision |= _codigos_cups(str(cups).split(' - ')[0])
     return bool(admision & (_codigos_cups(texto) | _codigos_cups(procedimientos_documento)))
+
+
+def _consulta_en_orden(procedimientos, datos_admision: dict) -> bool:
+    """
+    True si cada CUPS de la admisión está en la transcripción de la orden/autorización, por código o, si es una
+    CONSULTA, por su descripción: misma especialidad y mismo tipo (control / primera vez). En el escaneo el
+    código se lee mal ("890374" → "950374") pero la fila dice "NEUROLOGÍA CONTROL" (caso 35639). Un tipo
+    distinto sigue siendo hallazgo (caso 36691: control en la orden y primera vez en la admisión).
+    """
+    import unicodedata
+
+    def plano(t):
+        t = unicodedata.normalize('NFKD', _reparar_texto(str(t or ''))).encode('ascii', 'ignore').decode().upper()
+        return ' '.join(re.sub(r'[^A-Z]+', ' ', t).split())
+
+    filas = [plano(re.sub(r'\b\d{5,6}(-\d+)?\b', ' ', f)) for f in re.split(r'[;\n]', str(procedimientos or ''))]
+    filas = [f for f in filas if f]
+    codigos_doc = _codigos_cups(procedimientos)
+    cups_adm = datos_admision.get('cups') or []
+    if not filas or not cups_adm:
+        return False
+    hubo_consulta = False
+    for cups in cups_adm:
+        partes = str(cups).split(' - ', 1)
+        codigos = _codigos_cups(partes[0])
+        if codigos & codigos_doc:
+            continue
+        codigo = min(codigos) if codigos else ''
+        if not codigo.startswith(('8902', '8903')):
+            return False
+        desc = plano(partes[1] if len(partes) > 1 else '')
+        m = re.search(r'ESPECIALISTA EN (.+?)(?: CANT.*)?$', desc) or re.search(r' POR (.+?)(?: CANT.*)?$', desc)
+        especialidad = _norm_especialidad(m.group(1)) if m else ''
+        if not especialidad:
+            return False
+        control = codigo.startswith('8903')
+        tipo_si, tipo_no = ((r'\bCONTROL\b|SEGUIMIENTO', r'PRIMERA') if control
+                            else (r'PRIMERA', r'\bCONTROL\b|SEGUIMIENTO'))
+        if not any(_norm_especialidad(f) == especialidad and re.search(tipo_si, f) and not re.search(tipo_no, f)
+                   and not re.search(_IMAGENES, f) for f in filas):
+            return False
+        hubo_consulta = True
+    return hubo_consulta
 
 
 def _lateralidad_opuesta(doc, adm) -> bool:
