@@ -2643,3 +2643,38 @@ class BuscarCupsEnTablaTests(SimpleTestCase):
         from gedocumental.services.ai_revision import _buscar_cups_en_tabla
         filas, _ = _buscar_cups_en_tabla(self._cliente('{"filas": []}'), 'm', ['x'], ADMISION)
         self.assertEqual(filas, '')
+
+
+class AnotacionPorAutorizacionTests(SimpleTestCase):
+    """Caso 37874: PDF digital con 'CANTIDAD #8' al pie; admisión 891509 x8 y 930860 x2."""
+    ADM = dict(ADMISION, cups=['891509 - NEUROCONDUCCION (CADA NERVIO) 8 NERVIOS (cant. 8)',
+                               '930860 - ELECTROMIOGRAFIA EN CADA EXTREMIDAD (cant. 2)'])
+    BLOQUE = ("AUTORIZACION DE SERVICIOS\nNOVIEMBRE 23 DE 2026\nREGIMEN SUB 263000000000001\n"
+              "BENEF. PACIENTE PRUEBA EDAD 90 CC 1000000\nServicios Autorizados Cantidad\n"
+              "{cups} {desc} 1\nNO REQUIERE PAGO EN CONSULTORIO O INSTITUCION\nVALIDO HASTA 20270122\n"
+              "CANTIDAD {anot}\nFUNCIONARIO PRUEBA 20261123 Hora 14:52\n")
+    DESC = "Cantidad autorizada para NEUROCONDUCCIÓN es 1, pero se indica CANTIDAD #8 en el documento."
+
+    def _texto(self, *autorizaciones):
+        return ''.join(self.BLOQUE.format(cups=c, desc=d, anot=a) for c, d, a in autorizaciones)
+
+    def test_anotacion_con_numeral(self):
+        from gedocumental.services.ai_revision import _anotadas_por_autorizacion, _anotacion_texto_igual_zeus
+        texto = self._texto(('891509', 'NEUROCONDUCCIÓN (CADA NERVIO)', '#8'),
+                            ('930860', 'ELECTROMIOGRAFIA EN CADA EXTREMIDAD', '2'))
+        self.assertEqual(_anotadas_por_autorizacion(texto), '891509:8; 930860:2')
+        self.assertTrue(_anotacion_texto_igual_zeus(texto, self.DESC, self.ADM))
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM, texto=texto)[0], DESCARTADO)
+
+    def test_falta_una_autorizacion_o_cantidad_distinta(self):
+        from gedocumental.services.ai_revision import _anotacion_texto_igual_zeus
+        solo_una = self._texto(('891509', 'NEUROCONDUCCIÓN (CADA NERVIO)', '#8'))
+        self.assertFalse(_anotacion_texto_igual_zeus(solo_una, self.DESC, self.ADM))
+        distinta = self._texto(('891509', 'NEUROCONDUCCIÓN (CADA NERVIO)', '#6'),
+                               ('930860', 'ELECTROMIOGRAFIA EN CADA EXTREMIDAD', '2'))
+        self.assertFalse(_anotacion_texto_igual_zeus(distinta, self.DESC, self.ADM))
+
+    def test_sin_anotacion_no_toma_la_tabla(self):
+        from gedocumental.services.ai_revision import _anotadas_por_autorizacion
+        texto = self._texto(('891509', 'NEUROCONDUCCIÓN (CADA NERVIO)', '')).replace('CANTIDAD \n', '\n')
+        self.assertEqual(_anotadas_por_autorizacion(texto), '')

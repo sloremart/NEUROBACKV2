@@ -1107,6 +1107,7 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         anotada = re.findall(r'\d+', str(resultado.get("cantidad_anotada") or ''))   # "2", "CANTIDAD 2"...
         if ((zeus and len(set(zeus)) == 1 and len(set(anotada)) == 1 and int(anotada[0]) == zeus[0])
                 or _cantidad_anotada(texto, zeus)
+                or _anotacion_texto_igual_zeus(texto, resultado.get("descripcion"), datos_admision)
                 or _cantidades_iguales(resultado.get("descripcion"), datos_admision)
                 or _bilateral_cubre(resultado.get("descripcion"), texto, resultado)
                 or _orden_con_mas_cantidad(tipo_documento, resultado.get("descripcion"))
@@ -2467,8 +2468,45 @@ def _cantidad_anotada(texto: str, esperadas: list) -> bool:
     n = esperadas[0]
     t = unicodedata.normalize('NFKD', texto or '').upper()
     # "CANTIDAD 8", o las horas de una monitorización ("12 HORAS", "8H"): las horas son la cantidad (caso 37121)
-    anotadas = re.findall(rf'\bCANTIDAD\s*[:=]?\s*{n}\b|\b{n}\s*(?:HORAS?|HRS?|H)\b', t)
+    # "CANTIDAD #8" / "CANTIDAD No. 8" también (caso 37874)
+    anotadas = re.findall(rf'\bCANTIDAD\s*(?:[:=#]|N[O°º]\.?)?\s*{n}\b|\b{n}\s*(?:HORAS?|HRS?|H)\b', t)
     return len(anotadas) >= len(esperadas)
+
+
+_ANOTACION_CANTIDAD = r'\bCANTIDAD\s*(?:[:=#]|N[O°º]\.?)?\s*(\d{1,3})\b(?![.,]\d)'
+
+
+def _anotadas_por_autorizacion(texto: str) -> str:
+    """
+    Anotación "CANTIDAD N" de cada autorización de un PDF digital, por CUPS ('891509:8; 930860:2'). El PDF puede
+    traer varias autorizaciones, cada una con su anotación al pie (caso 37874: "CANTIDAD #8" para 891509).
+    """
+    import unicodedata
+    t = unicodedata.normalize('NFKD', texto or '').upper()
+    partes = []
+    for bloque in re.split(r'AUTORIZACION DE SERVICIOS', t)[1:] or [t]:
+        servicios = re.search(r'SERVICIOS\s+AUTORIZADOS(.*)', bloque, re.DOTALL)
+        anotadas = re.findall(_ANOTACION_CANTIDAD, servicios.group(1) if servicios else '')
+        codigos = re.findall(r'(?m)^\s*(\d{6})\b', servicios.group(1)) if servicios else []
+        if codigos and anotadas:
+            partes += [f"{c}:{anotadas[-1]}" for c in dict.fromkeys(codigos)]
+    return '; '.join(partes)
+
+
+def _anotacion_texto_igual_zeus(texto: str, descripcion, datos_admision: dict) -> bool:
+    """
+    Hallazgo de cantidad en un PDF digital cuya anotación "CANTIDAD N" de cada autorización es la cantidad de Zeus
+    para ese CUPS. Si el hallazgo no nombra el CUPS por código, todas las de la admisión deben tener su anotación.
+    """
+    if not texto or not _solo_motivo_cantidad(descripcion):
+        return False
+    anotadas = _anotadas_por_autorizacion(texto)
+    if not anotadas or not _anotada_igual_zeus(anotadas, datos_admision, descripcion):
+        return False
+    if re.search(r'\b\d{6}\b', str(descripcion or '')):
+        return True
+    zeus = {c.split('-')[0] for c in _cantidades_por_cups(datos_admision)}
+    return zeus <= set(_parsear_cantidades(anotadas))
 
 
 def _es_particular(datos_admision: dict) -> bool:
