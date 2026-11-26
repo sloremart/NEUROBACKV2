@@ -2726,3 +2726,26 @@ class ReleerCantidadesOrdenTests(SimpleTestCase):
     def test_respuesta_invalida(self):
         from gedocumental.services.ai_revision import _releer_cantidades_tabla
         self.assertEqual(_releer_cantidades_tabla(self._cliente('no json'), 'm', ['x'], ADMISION)[0], {})
+
+
+class HorasEnNombreDelCupsTests(SimpleTestCase):
+    """Caso 37965: Zeus '891901 ... 12 HORAS (cant. 1)' y autorización con 'CANTIDAD 12'."""
+    ADM = dict(ADMISION, cups=['891901 - MONITORIZACIÓN ELECTROENCEFALOGRAFICA POR VIDEO Y RADIO 12 HORAS (cant. 1)'])
+    DESC = ("Cantidad autorizada 12, pero solo se indica 1 en el documento. Procedimiento coincide en nombre, "
+            "pero no en cantidad.")
+
+    def test_anotacion_son_las_horas(self):
+        from gedocumental.services.ai_revision import _anotacion_son_horas
+        self.assertTrue(_anotacion_son_horas('12', self.ADM))
+        self.assertTrue(_anotacion_son_horas('891901:12', self.ADM))
+        self.assertFalse(_anotacion_son_horas('8', self.ADM))
+        self.assertFalse(_anotacion_son_horas('12', ADMISION))   # CUPS que no es por horas
+
+    def test_reverificacion_descarta(self):
+        self.assertEqual(evaluar_hallazgo('AUTORIZACION', self.DESC, self.ADM)[0], DESCARTADO)
+
+    def test_otras_horas_siguen(self):
+        from gedocumental.services.ai_revision import _hallazgo_horas_como_cantidad
+        self.assertTrue(_hallazgo_horas_como_cantidad(self.DESC, self.ADM))
+        self.assertFalse(_hallazgo_horas_como_cantidad(self.DESC.replace('12', '24'), self.ADM))
+        self.assertFalse(_hallazgo_horas_como_cantidad(self.DESC, ADMISION))

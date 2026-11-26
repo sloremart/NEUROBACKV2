@@ -571,6 +571,51 @@ def _cups_por_horas(datos_admision: dict) -> bool:
     return any(re.search(r'\bHORAS?\b', _plano_texto(str(c))) for c in datos_admision.get('cups') or [])
 
 
+def _horas_cups(datos_admision: dict) -> dict:
+    """{CUPS base: horas} de los CUPS de la admisión cuyo nombre trae las horas ('... 12 HORAS (cant. 1)')."""
+    horas = {}
+    for c in datos_admision.get('cups') or []:
+        codigo = str(c).split(' - ')[0].strip().split('-')[0]
+        m = re.search(r'\b(\d{1,2})\s*(?:HORAS?|HRS?)\b', _plano_texto(re.sub(r'\(cant\.\s*\d+\)', '', str(c))))
+        if m and re.fullmatch(r'\d{6}', codigo):
+            horas[codigo] = int(m.group(1))
+    return horas
+
+
+def _anotacion_son_horas(anotada, datos_admision: dict) -> bool:
+    """
+    La anotación "CANTIDAD 12" de la autorización son las HORAS que Zeus factura en el nombre del CUPS
+    ('891901 - MONITORIZACIÓN ... 12 HORAS (cant. 1)', caso 37965). Todos los CUPS de la admisión deben ser por
+    horas y cada anotación igual a sus horas.
+    """
+    horas = _horas_cups(datos_admision)
+    if not horas or len(horas) != len(datos_admision.get('cups') or []):
+        return False
+    leidas = _parsear_cantidades(anotada)
+    if leidas:
+        en_admision = {c: n for c, n in leidas.items() if c in horas}
+        return bool(en_admision) and all(horas[c] == n for c, n in en_admision.items())
+    numeros = set(re.findall(r'\d+', str(anotada or '')))
+    return len(numeros) == 1 and len(set(horas.values())) == 1 and int(numeros.pop()) == next(iter(horas.values()))
+
+
+def _hallazgo_horas_como_cantidad(descripcion, datos_admision: dict) -> bool:
+    """
+    Hallazgo de cantidad cuyos números son solo las horas del CUPS y la cantidad de Zeus ("Cantidad autorizada 12,
+    pero solo se indica 1 en el documento" con '891901 ... 12 HORAS (cant. 1)', caso 37965): no hay diferencia.
+    """
+    if not _solo_motivo_cantidad(descripcion):
+        return False
+    horas = _horas_cups(datos_admision)
+    if len(horas) != 1 or len(datos_admision.get('cups') or []) != 1:
+        return False
+    h = next(iter(horas.values()))
+    zeus = set(_cantidades_zeus(datos_admision))
+    # Números de la descripción, sin el código CUPS (6 dígitos)
+    numeros = {int(n) for n in re.findall(r'(?<![\d.,])(\d{1,3})(?![\d]|[.,]\d)', str(descripcion or ''))}
+    return h in numeros and numeros <= ({h, 1} | zeus)
+
+
 def _plano_texto(texto) -> str:
     import unicodedata
     return unicodedata.normalize('NFKD', str(texto or '')).encode('ascii', 'ignore').decode().upper()
@@ -1149,6 +1194,7 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
         zeus = _cantidades_zeus(datos_admision)
         anotada = re.findall(r'\d+', str(resultado.get("cantidad_anotada") or ''))   # "2", "CANTIDAD 2"...
         if ((zeus and len(set(zeus)) == 1 and len(set(anotada)) == 1 and int(anotada[0]) == zeus[0])
+                or (len(set(anotada)) == 1 and _anotacion_son_horas(anotada[0], datos_admision))
                 or _cantidad_anotada(texto, zeus)
                 or _anotacion_texto_igual_zeus(texto, resultado.get("descripcion"), datos_admision)
                 or _cantidades_iguales(resultado.get("descripcion"), datos_admision)
@@ -1226,7 +1272,8 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                  or len(set(_cantidades_zeus(datos_admision))) > 1)):
         anotada, tokens = _releer_cantidad(client, modelo, imagenes)
         resultado["tokens"] = [a + b for a, b in zip(resultado.get("tokens") or [0, 0], tokens)]
-        if _anotada_igual_zeus(anotada, datos_admision, resultado.get("descripcion")):
+        if (_anotada_igual_zeus(anotada, datos_admision, resultado.get("descripcion"))
+                or _anotacion_son_horas(anotada, datos_admision)):
             logger.info("AUTORIZACION: relectura 'CANTIDAD %s' coincide con Zeus, se descarta '%s'",
                         anotada, resultado.get("descripcion"))
             resultado.update(tipo="OK", descripcion="Documento correcto", cantidad_anotada=anotada,
@@ -1239,7 +1286,8 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             por_horas = "; ".join(f"{str(c).split(' - ')[0].strip().split('-')[0]}:{horas}"
                                   for c in datos_admision.get('cups') or []
                                   if re.search(r'\bHORAS?\b', _plano_texto(str(c))))
-            if horas and _anotada_igual_zeus(por_horas, datos_admision, resultado.get("descripcion")):
+            if horas and (_anotada_igual_zeus(por_horas, datos_admision, resultado.get("descripcion"))
+                          or _anotacion_son_horas(por_horas, datos_admision)):
                 logger.info("AUTORIZACION: '%s HORAS' coincide con Zeus, se descarta '%s'",
                             horas, resultado.get("descripcion"))
                 resultado.update(tipo="OK", descripcion="Documento correcto", cantidad_anotada=f"{horas} HORAS",
@@ -2252,6 +2300,9 @@ def _solo_motivo_cantidad(descripcion) -> bool:
     import re
     import unicodedata
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
+    # "Procedimiento coincide en nombre, pero no en cantidad": el nombre del procedimiento, no el del paciente
+    # (caso 37965; antes de quitar las afirmaciones, que dejarían suelto "en nombre")
+    d = re.sub(r'\bcoincide[n]?\s+en\s+(el\s+)?nombre\b', ' coincide ', d)
     # "Nombre del usuario correcto; procedimiento ... coincide" confirma, no es otro motivo (caso 35704)
     d = re.sub(_AFIRMACIONES, ' ', d)
     # "cantidad (2) no corresponde a la admisión (1)" habla de la cantidad, no de otro motivo (caso 37439)

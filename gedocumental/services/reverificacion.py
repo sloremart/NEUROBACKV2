@@ -33,7 +33,7 @@ from gedocumental.services.ai_revision import (
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _imagen_documentada, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE, TIPOS_NO_REVISADOS,
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida, _bilateral_cubre,
-    _orden_con_mas_cantidad, _orden_aplicacion_medicamento, _consulta_en_orden, _anotacion_texto_igual_zeus, _solo_motivo_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _es_anestesia, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
+    _orden_con_mas_cantidad, _orden_aplicacion_medicamento, _consulta_en_orden, _anotacion_texto_igual_zeus, _solo_motivo_cantidad, _hallazgo_horas_como_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _es_anestesia, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
     _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden, _autorizacion_aplicacion_de_mas, _autorizacion_de_mas,
     obtener_contexto_admision, cantidades_orden, _clasificar_paciente, _es_recien_nacido, _documento_de_la_mama,
 )
@@ -482,6 +482,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
     if texto and _cantidad_anotada(texto, _cantidades_esperadas(d)):
         return DESCARTADO, (f"El PDF tiene la anotación 'CANTIDAD {_cantidades_esperadas(d)[0]}' que coincide "
                             "con la admisión; prevalece sobre la columna de la tabla.")
+
+    if (tipo or '').upper() == 'AUTORIZACION' and _hallazgo_horas_como_cantidad(d, datos_admision):
+        return DESCARTADO, ("La cantidad anotada son las horas del CUPS que factura la admisión (ej. 12 HORAS); no "
+                            "hay diferencia con Zeus.")
 
     if texto and _anotacion_texto_igual_zeus(texto, d, datos_admision):
         return DESCARTADO, ("La anotación 'CANTIDAD N' de cada autorización coincide con la cantidad de la admisión "
