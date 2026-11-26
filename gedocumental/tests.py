@@ -699,13 +699,17 @@ class CantidadCeroLeidaTests(SimpleTestCase):
     def test_cantidad_cero_se_descarta(self):
         for desc in ("La autorización no cubre el procedimiento de la admisión, ya que la cantidad autorizada es 0 "
                      "para el CUPS 879420, mientras que se esperaba 1.",
-                     "Cantidad autorizada incorrecta: documento '0', admisión '1'."):
+                     "Cantidad autorizada incorrecta: documento '0', admisión '1'.",
+                     # caso 38243: el 0 seguido de coma
+                     "El documento es correcto, pero la cantidad autorizada es 0, mientras que la admisión tiene "
+                     "cantidad 1."):
             self.assertEqual(evaluar_hallazgo('AUTORIZACION', desc, self.ADM)[0], DESCARTADO, desc)
 
     def test_otras_cantidades_y_motivos_siguen(self):
         from gedocumental.services.ai_revision import _cantidad_cero_leida
         self.assertFalse(_cantidad_cero_leida("Cantidad autorizada incorrecta: documento '10', admisión '1'."))
         self.assertFalse(_cantidad_cero_leida("Cantidad autorizada es 2, se esperaba 1."))
+        self.assertFalse(_cantidad_cero_leida("Cantidad autorizada es 0,5, se esperaba 1."))
         self.assertFalse(_cantidad_cero_leida("Autorización vencida; cantidad autorizada es 0."))
         self.assertFalse(_cantidad_cero_leida("La autorización no cubre el CUPS 879420 (documento trae 879410)."))
 

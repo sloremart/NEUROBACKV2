@@ -2110,7 +2110,8 @@ def _cantidad_cero_leida(descripcion) -> bool:
     d = unicodedata.normalize('NFKD', str(descripcion or '')).encode('ascii', 'ignore').decode().lower()
     # "no cubre ... ya que/porque la cantidad..." habla de la cantidad, no de otro procedimiento
     d = re.sub(r'no (cubre|incluye)[^.;]*?(ya que|porque|pues|debido a que|dado que)', ' ', d)
-    cero = re.search(r'cantidad[^.;\d]{0,40}?\b(es|de|:|=|en el documento es)?\s*[\'"(]?0[\'")]?(?![\d.,])', d) \
+    # El 0 puede ir seguido de coma o punto ("es 0, mientras que...", caso 38243), no de decimales (0,5 / 0.0)
+    cero = re.search(r'cantidad[^.;\d]{0,40}?\b(es|de|:|=|en el documento es)?\s*[\'"(]?0[\'")]?(?!\d|[.,]\d)', d) \
         or re.search(r'documento\s*[\'"(]0[\'")]', d)
     return bool(cero) and _solo_motivo_cantidad(d)
 
