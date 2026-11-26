@@ -2801,6 +2801,14 @@ def _bloques_validador_sanitas(texto: str) -> list:
         cobro = re.search(r'(?i)Condiciones de pago y rec\w* de\s+(Copago|Cuota Moderadora)', bloque)
         recaudo = re.search(r'(?i)Recaudo de pago:\s*([\d.,]+)', bloque)
         porcentaje = re.search(r'(?i)Porcentaje Copago:\s*([\d.,]+)', bloque)
+        # Salto de página (caso 35808): los VALORES quedan al final de la página 1, justo después del número
+        # ("Seleccionada: 354748022 Cuota Moderadora 20100.0") y los RÓTULOS al inicio de la página 2
+        # ("Condiciones de pago... Recaudo de pago: Porcentaje Copago: 0.0"): el valor suelto es el recaudo
+        suelto = re.search(r'(?is)^.{0,60}?\b\d{6,12}\b\s*(Copago|Cuota Moderadora)\s*([\d]+(?:[.,]\d+)?)\b', bloque)
+        if suelto and not cobro:
+            cobro = suelto
+            if not recaudo:
+                recaudo = re.match(r'(.*)', suelto.group(2))
         if not (numero and cobro and (recaudo or porcentaje)):
             continue
         # Servicio de esa autorización: el primer CUPS después de su número en la tabla de autorizaciones

@@ -2678,3 +2678,29 @@ class AnotacionPorAutorizacionTests(SimpleTestCase):
         from gedocumental.services.ai_revision import _anotadas_por_autorizacion
         texto = self._texto(('891509', 'NEUROCONDUCCIÓN (CADA NERVIO)', '')).replace('CANTIDAD \n', '\n')
         self.assertEqual(_anotadas_por_autorizacion(texto), '')
+
+
+class ValidadorSanitasSaltoPaginaTests(SimpleTestCase):
+    """Caso 35808: valores al final de la página 1 y rótulos al inicio de la página 2."""
+    ADM = dict(ADMISION, cups=['890374 - CONSULTA DE CONTROL POR NEUROLOGIA (cant. 1)'])
+    TEXTO = ("Numero Autorizacion Tipo Autorizacion Fecha Aprobacion\n"
+             "300000001 NORMAL 25/07/2026 22/11/2026 APROBADA NEUROELECTRODIAGNOSTICO SH DEL LLANO SAS\n"
+             "890374 CONSULTA DE CONTROL POR NEUROLOGIA - 0.0 UVR 1\n"
+             "Número de Autorización\nSeleccionada:\n300000001\nCuota Moderadora\n20100.0\n"
+             "https://appcore.colsanitas.com/ValidadorDerechos/pages/gestion/ValidacionDerechos.seam 1/2\n"
+             "10/11/26, 9:42 Validador de usuarios Sanitas\n"
+             "Condiciones de pago y recaudo de pago del Volante: Recaudo de pago: Porcentaje Copago: 0.0\n"
+             "Valor pesos pago compartido: 0.0\nTope máximo copagos: 0.0\n")
+
+    def test_valor_antes_del_rotulo(self):
+        from gedocumental.services.ai_revision import _recaudo_validador_sanitas
+        r = _recaudo_validador_sanitas(self.TEXTO, self.ADM)
+        self.assertEqual((r['requiere_pago'], r['tipo_cobro'], r['valor']), ('SI', 'CUOTA_MODERADORA', '20100'))
+
+    def test_formato_normal_sigue(self):
+        from gedocumental.services.ai_revision import _recaudo_validador_sanitas
+        texto = self.TEXTO.replace("Cuota Moderadora\n20100.0\n", "").replace(
+            "Condiciones de pago y recaudo de pago del Volante: Recaudo de pago: Porcentaje Copago: 0.0",
+            "Condiciones de pago y recaudo de Cuota Moderadora Recaudo de pago: 0.0 Porcentaje Copago: 0.0")
+        r = _recaudo_validador_sanitas(texto, self.ADM)
+        self.assertEqual((r['requiere_pago'], r['valor']), ('NO', '0'))
