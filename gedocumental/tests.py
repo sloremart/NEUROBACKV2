@@ -2704,3 +2704,25 @@ class ValidadorSanitasSaltoPaginaTests(SimpleTestCase):
             "Condiciones de pago y recaudo de Cuota Moderadora Recaudo de pago: 0.0 Porcentaje Copago: 0.0")
         r = _recaudo_validador_sanitas(texto, self.ADM)
         self.assertEqual((r['requiere_pago'], r['valor']), ('NO', '0'))
+
+
+class ReleerCantidadesOrdenTests(SimpleTestCase):
+    """Caso 37805: orden con la columna 'Cant' a la izquierda; la IA leyó 1 y 1 donde dice 2 EMG y 8 VCN."""
+
+    def _cliente(self, contenido):
+        msg = SimpleNamespace(content=contenido)
+        resp = SimpleNamespace(choices=[SimpleNamespace(message=msg)],
+                               usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5))
+        return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: resp)))
+
+    def test_lee_cantidades(self):
+        from gedocumental.services.ai_revision import _releer_cantidades_tabla
+        adm = dict(ADMISION, cups=['930860 - ELECTROMIOGRAFIA EN CADA EXTREMIDAD (cant. 2)',
+                                   '891509 - NEUROCONDUCCION (CADA NERVIO) (cant. 8)'])
+        cliente = self._cliente('{"filas": [{"cups": "930860", "cantidad": 2}, {"cups": "891509", "cantidad": "8"}]}')
+        leidas, tokens = _releer_cantidades_tabla(cliente, 'm', ['x'], adm)
+        self.assertEqual((leidas, tokens), ({'930860': 2, '891509': 8}, [10, 5]))
+
+    def test_respuesta_invalida(self):
+        from gedocumental.services.ai_revision import _releer_cantidades_tabla
+        self.assertEqual(_releer_cantidades_tabla(self._cliente('no json'), 'm', ['x'], ADMISION)[0], {})

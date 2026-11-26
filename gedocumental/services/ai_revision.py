@@ -445,6 +445,49 @@ def _buscar_cups_en_tabla(client, modelo: str, imagenes: list[str], datos_admisi
     return '; '.join(str(f) for f in filas if f), tokens
 
 
+PROMPT_RELEER_CANTIDADES = (
+    "En la tabla de servicios/procedimientos de esta orden, busca cada uno de estos servicios (por su código CUPS "
+    "o su descripción) y transcribe su CANTIDAD tal como está escrita en la columna \"Cant\" o \"Cantidad\" de SU "
+    "fila. Ojo: la columna de cantidad puede estar a la IZQUIERDA de la descripción o a la derecha; una fila puede "
+    "ocupar varios renglones. No confundas la cantidad con el código ni con números de la descripción. Si un "
+    "servicio no aparece, no lo incluyas. Servicios: {servicios}. "
+    "Responde en JSON: {{\"filas\": [{{\"cups\": \"<código de 6 dígitos de la fila>\", \"cantidad\": <número>}}]}}"
+)
+
+
+def _releer_cantidades_tabla(client, modelo: str, imagenes: list[str], datos_admision: dict) -> tuple[dict, list]:
+    """Consulta corta: la cantidad de cada servicio de la admisión en la tabla de la orden. ({cups: n}, [tokens])."""
+    servicios = '; '.join(re.sub(r'\s*\(cant\.\s*\d+\)\s*$', '', _reparar_texto(str(c)))
+                          for c in datos_admision.get('cups') or [])
+    if not servicios:
+        return {}, [0, 0]
+    contenido = [{"type": "text", "text": "Documento escaneado: ver imágenes adjuntas."}]
+    contenido += [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"}}
+                  for img in imagenes]
+    try:
+        respuesta = client.chat.completions.create(
+            model=modelo,
+            messages=[{"role": "system", "content": PROMPT_RELEER_CANTIDADES.format(servicios=servicios)},
+                      {"role": "user", "content": contenido}],
+            response_format={"type": "json_object"},
+            max_tokens=300,
+            temperature=0,
+        )
+        uso = getattr(respuesta, 'usage', None)
+        tokens = [int(getattr(uso, 'prompt_tokens', 0) or 0), int(getattr(uso, 'completion_tokens', 0) or 0)]
+        filas = json.loads(respuesta.choices[0].message.content or '{}').get("filas") or []
+    except Exception as exc:
+        logger.warning("No se pudieron releer las cantidades de la tabla: %s", exc)
+        return {}, [0, 0]
+    leidas = {}
+    for f in filas if isinstance(filas, list) else []:
+        m = re.search(r'\d{6}', str((f or {}).get("cups") or ''))
+        n = re.search(r'\d{1,3}', str((f or {}).get("cantidad") or ''))
+        if m and n:
+            leidas[m.group(0)] = leidas.get(m.group(0), 0) + int(n.group(0))
+    return leidas, tokens
+
+
 PROMPT_RELEER_NOMBRE = (
     "Transcribe LETRA POR LETRA el nombre completo del PACIENTE tal como está escrito en el documento (campo "
     "\"Paciente\", \"Nombre del paciente\" o DATOS DEL PACIENTE), con TODOS sus nombres y apellidos, sin corregir "
@@ -1153,6 +1196,24 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
             logger.info("AUTORIZACION: autorizado como BILATERAL, se descarta '%s'", resultado.get("descripcion"))
             resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cantidad=True,
                              cantidad_anotada="BILATERAL")
+
+    # ORDEN escaneada con hallazgo de cantidad: la IA a veces toma mal la columna "Cant" (caso 37805: a la
+    # IZQUIERDA de la descripción, leyó 1 y 1 donde dice 2 EMG y 8 neuroconducción). Se pide solo la cantidad de
+    # cada servicio de la admisión, sin decirle la de Zeus; si la orden pide lo mismo o más, no es error.
+    if ((tipo_documento or '').upper() == 'ORDEN' and imagenes and not _reintento
+            and resultado["tipo"] != "OK" and resultado.get("paciente_coincide") != "NO"
+            and _solo_motivo_cantidad(resultado.get("descripcion"))):
+        leidas, tokens = _releer_cantidades_tabla(client, modelo, imagenes, datos_admision)
+        resultado["tokens"] = [a + b for a, b in zip(resultado.get("tokens") or [0, 0], tokens)]
+        resultado["llamadas"] = resultado.get("llamadas", 1) + 1
+        zeus = {}
+        for c, n in _cantidades_por_cups(datos_admision).items():
+            zeus[c.split('-')[0]] = zeus.get(c.split('-')[0], 0) + n
+        if zeus and all(leidas.get(c, 0) >= n for c, n in zeus.items()):
+            logger.info("ORDEN: relectura de cantidades %s cubre Zeus %s, se descarta '%s'",
+                        leidas, zeus, resultado.get("descripcion"))
+            resultado.update(tipo="OK", descripcion="Documento correcto", ajuste_cantidad=True,
+                             cantidades_documento='; '.join(f"{c}:{n}" for c, n in leidas.items()))
 
     # AUTORIZACION escaneada con hallazgo de cantidad y sin anotación leída: la IA suele tomar la columna de la
     # tabla (1) y no ver "CANTIDAD 8" al pie (caso 35377). Se pide solo la anotación; si es la de Zeus, no hay error.
