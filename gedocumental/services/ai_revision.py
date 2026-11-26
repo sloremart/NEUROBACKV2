@@ -2804,7 +2804,9 @@ def _bloques_validador_sanitas(texto: str) -> list:
         # Salto de página (caso 35808): los VALORES quedan al final de la página 1, justo después del número
         # ("Seleccionada: 354748022 Cuota Moderadora 20100.0") y los RÓTULOS al inicio de la página 2
         # ("Condiciones de pago... Recaudo de pago: Porcentaje Copago: 0.0"): el valor suelto es el recaudo
-        suelto = re.search(r'(?is)^.{0,60}?\b\d{6,12}\b\s*(Copago|Cuota Moderadora)\s*([\d]+(?:[.,]\d+)?)\b', bloque)
+        # (texto real: "Número de Autorización 354748022\nSeleccionada: Cuota Moderadora\n20100.0")
+        suelto = re.search(r'(?is)^.{0,60}?\b\d{6,12}\b\s*(?:Seleccionada:?\s*)?(Copago|Cuota Moderadora)\s*'
+                           r'(\d+(?:[.,]\d+)?)\b', bloque)
         if suelto and not cobro:
             cobro = suelto
             if not recaudo:
