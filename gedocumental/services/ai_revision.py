@@ -1200,6 +1200,8 @@ def _llamar_openai(texto: str, imagenes: list[str], tipo_documento: str, datos_a
                 or _cantidades_iguales(resultado.get("descripcion"), datos_admision)
                 or _bilateral_cubre(resultado.get("descripcion"), texto, resultado)
                 or _orden_con_mas_cantidad(tipo_documento, resultado.get("descripcion"))
+                or _orden_cubre_zeus(tipo_documento, resultado.get("descripcion"),
+                                     resultado.get("cantidades_documento"), datos_admision)
                 or _orden_aplicacion_medicamento(tipo_documento, resultado.get("descripcion"), datos_admision,
                                                  resultado.get("cantidades_documento"))):
             logger.info("%s: la cantidad anotada coincide con Zeus, se descarta '%s'",
@@ -2338,6 +2340,21 @@ def _orden_con_mas_cantidad(tipo_documento, descripcion) -> bool:
         return False
     numeros = [int(n) for n in re.findall(r'(?<!\d)(?<!\d[.,])(\d{1,3})(?!\d)(?![.,]\d)', str(descripcion))]
     return len(numeros) == 2 and numeros[0] > numeros[1]
+
+
+def _orden_cubre_zeus(tipo_documento, descripcion, cantidades_documento, datos_admision: dict) -> bool:
+    """
+    ORDEN con hallazgo solo de cantidad cuyas cantidades leídas por la IA ('930860:4; 891509:16') cubren las de
+    Zeus para cada CUPS: no hay error, aunque la descripción diga otra cosa (caso 38055: "Cantidad en la orden
+    excede la admisión: documento 'ORDEN', admisión '38055'", con la orden igual a Zeus).
+    """
+    if (tipo_documento or '').upper() != 'ORDEN' or not _solo_motivo_cantidad(descripcion):
+        return False
+    leidas = _parsear_cantidades(cantidades_documento)
+    zeus = {}
+    for c, n in _cantidades_por_cups(datos_admision).items():
+        zeus[c.split('-')[0]] = zeus.get(c.split('-')[0], 0) + n
+    return bool(leidas and zeus) and all(leidas.get(c, 0) >= n for c, n in zeus.items())
 
 
 def _cups_aplicacion_medicamento(datos_admision: dict) -> set:

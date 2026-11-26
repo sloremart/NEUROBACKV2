@@ -2749,3 +2749,20 @@ class HorasEnNombreDelCupsTests(SimpleTestCase):
         self.assertTrue(_hallazgo_horas_como_cantidad(self.DESC, self.ADM))
         self.assertFalse(_hallazgo_horas_como_cantidad(self.DESC.replace('12', '24'), self.ADM))
         self.assertFalse(_hallazgo_horas_como_cantidad(self.DESC, ADMISION))
+
+
+class OrdenCubreZeusTests(SimpleTestCase):
+    """Caso 38055: la orden pide 930860 x4 y 891509 x16 como Zeus; la IA armó un hallazgo sin cantidades."""
+    ADM = dict(ADMISION, cups=['930860 - ELECTROMIOGRAFIA EN CADA EXTREMIDAD (cant. 4)',
+                               '891509 - NEUROCONDUCCION (CADA NERVIO) 16 NERVIOS (cant. 16)'])
+    DESC = "Cantidad en la orden excede la admisión: documento 'ORDEN', admisión '38055'."
+
+    def test_descarta(self):
+        self.assertEqual(evaluar_hallazgo('ORDEN', self.DESC, self.ADM, cantidades='930860:4; 891509:16')[0],
+                         DESCARTADO)
+
+    def test_orden_con_menos_sigue(self):
+        from gedocumental.services.ai_revision import _orden_cubre_zeus
+        self.assertFalse(_orden_cubre_zeus('ORDEN', self.DESC, '930860:4; 891509:8', self.ADM))
+        self.assertFalse(_orden_cubre_zeus('ORDEN', self.DESC, '930860:4', self.ADM))
+        self.assertFalse(_orden_cubre_zeus('AUTORIZACION', self.DESC, '930860:4; 891509:16', self.ADM))

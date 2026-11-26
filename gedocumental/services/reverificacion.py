@@ -33,7 +33,7 @@ from gedocumental.services.ai_revision import (
     _consulta_documentada, _detectar_firma_pdf, _es_comprobante, _imagen_documentada, _mismo_codigo_cups, _mismo_paciente,
     _nombre_casi_igual, _separar_pegadas, _misma_palabra, TIPOS_SOLO_PACIENTE, TIPOS_NO_REVISADOS,
     _procedimiento_documentado, _solo_motivo_procedimiento, _solo_procedimiento_adicional, _solo_motivo_contraste, _admision_contrastada, _documento_pide_contraste, _solo_motivo_abdomen_pelvis, _cantidad_documento_en_zeus, _cantidades_esperadas, _cantidad_anotada, _cantidad_cero_leida, _bilateral_cubre,
-    _orden_con_mas_cantidad, _orden_aplicacion_medicamento, _consulta_en_orden, _anotacion_texto_igual_zeus, _solo_motivo_cantidad, _hallazgo_horas_como_cantidad, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _es_anestesia, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
+    _orden_con_mas_cantidad, _orden_aplicacion_medicamento, _consulta_en_orden, _anotacion_texto_igual_zeus, _solo_motivo_cantidad, _hallazgo_horas_como_cantidad, _orden_cubre_zeus, _cantidades_iguales, _procedimiento_libre_particular, _es_particular, _es_anestesia, _autorizacion_soat, _sin_diferencias, _cups_y_cantidades_como_zeus,
     _tokens_nombre, _NO_SON_NOMBRE, _autorizacion_de_mas_con_orden, _autorizacion_aplicacion_de_mas, _autorizacion_de_mas,
     obtener_contexto_admision, cantidades_orden, _clasificar_paciente, _es_recien_nacido, _documento_de_la_mama,
 )
@@ -319,13 +319,15 @@ def procedimiento_cambio_en_zeus(descripcion: str, datos_admision: dict) -> bool
 
 def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict,
                      texto: str | None = None, firma: bool | None = None,
-                     autorizacion: dict | None = None, otras: list | None = None) -> tuple[str, str] | None:
+                     autorizacion: dict | None = None, otras: list | None = None,
+                     cantidades: str = '') -> tuple[str, str] | None:
     """
     Decide si un hallazgo pendiente ya no aplica. Devuelve (resolución, nota) o None si sigue abierto.
       texto: texto COMPLETO del PDF (solo PDFs digitales); None si no se leyó o es escaneado.
       firma: resultado de _detectar_firma_pdf (solo comprobantes).
       autorizacion: lectura_autorizacion() de la admisión (para órdenes y HC de terceros).
       otras: lo que leyó la IA del paciente en los DEMÁS documentos de la admisión (lecturas_admision).
+      cantidades: las cantidades que leyó la IA en el documento (RevisionIA.Cantidades, '930860:4; 891509:16').
     No toca la base de datos.
     """
     d = (descripcion or '').strip()
@@ -515,6 +517,10 @@ def evaluar_hallazgo(tipo_documento: str, descripcion: str, datos_admision: dict
         return DESCARTADO, ("Orden de aplicación de medicamentos: el médico ordena varias aplicaciones y cada "
                             "admisión factura la del día; la cantidad distinta no es un error.")
 
+    if _orden_cubre_zeus(tipo, d, cantidades, datos_admision):
+        return DESCARTADO, ("Las cantidades que la IA leyó en la orden cubren las de la admisión en Zeus para cada "
+                            "CUPS; no hay diferencia.")
+
     if _orden_con_mas_cantidad(tipo, d):
         return DESCARTADO, ("La orden pide más cantidad de la que factura la admisión (varias sesiones); "
                             "no es un error.")
@@ -618,7 +624,8 @@ def reverificar_hallazgos_sin_ia(admision=None, tipo_documento=None, aplicar=Tru
             if h.AdmisionId not in lecturas:
                 lecturas[h.AdmisionId] = lecturas_admision(h.AdmisionId, datos)
             otras = [v for k, v in lecturas[h.AdmisionId].items() if k != h.IdArchivo_id]
-        decision = evaluar_hallazgo(h.TipoDocumento, h.Descripcion, datos, autorizacion=autorizacion, otras=otras)
+        decision = evaluar_hallazgo(h.TipoDocumento, h.Descripcion, datos, autorizacion=autorizacion, otras=otras,
+                                    cantidades=getattr(h, 'Cantidades', ''))
         releer = (decision is None and necesita_pdf(h.TipoDocumento, h.Descripcion)
                   and (forzar_pdf or h.FechaReverificacion is None or h.FechaReverificacion < limite_relectura)
                   and time.monotonic() - inicio < max_segundos_pdf)
@@ -629,7 +636,7 @@ def reverificar_hallazgos_sin_ia(admision=None, tipo_documento=None, aplicar=Tru
             resumen['pdf_leidos'] += 1
             decision = evaluar_hallazgo(h.TipoDocumento, h.Descripcion, datos,
                                         texto=texto if completo else None, firma=firma,
-                                        autorizacion=autorizacion, otras=otras)
+                                        autorizacion=autorizacion, otras=otras, cantidades=getattr(h, 'Cantidades', ''))
             if aplicar:
                 h.FechaReverificacion = ahora
                 if not decision:
