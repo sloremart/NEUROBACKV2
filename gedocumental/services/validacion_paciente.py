@@ -64,12 +64,23 @@ SQL_SOLO_SEDACION = (
 # (sis_deta.autorizacion, pestaña "Autorizaciones / MIPRES" de SIESA), porque la validación de la EPS toma las dos
 # (regla del usuario 2026-11-27, caso 37951: encabezado con número y servicios en NULL). Solo los procedimientos
 # vigentes: no los revertidos ni los cargos previos del admisionista (fact_externa = 1, SIESA los oculta)
+# Solo para las admisiones que ingresan desde esta fecha; las anteriores siguen con la regla de antes (número en la
+# admisión O en algún servicio): "las que pasaron así no importa" (usuario 2026-11-27)
+FECHA_AUTORIZACION_POR_SERVICIO = '2026-11-27'
 SQL_AUTORIZACION_COMPLETA = (
-    "(ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0')"
+    "(CASE WHEN sm.fecha_ing >= '" + FECHA_AUTORIZACION_POR_SERVICIO + "' THEN"
+    # Regla nueva: en el encabezado Y en cada procedimiento vigente
+    " CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0')"
     " AND NOT EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio AND ISNULL(d.ItemRevertido, 0) = 0"
     " AND ISNULL(d.fact_externa, 0) = 0"
     " AND ISNULL(LTRIM(RTRIM(d.TipoItem)), 'Procedimiento') IN ('Procedimiento', '')"
-    " AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') IN ('', '0')))")
+    " AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') IN ('', '0')) THEN 1 ELSE 0 END"
+    " ELSE"
+    # Regla anterior: en el encabezado O en algún servicio
+    " CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0')"
+    " OR EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio AND ISNULL(d.ItemRevertido, 0) = 0"
+    " AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0')) THEN 1 ELSE 0 END"
+    " END = 1)")
 
 CAMPOS_SQL = """
     sm.con_estudio,
