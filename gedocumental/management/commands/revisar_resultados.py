@@ -420,7 +420,8 @@ class Command(BaseCommand):
             IdArchivo=None, AdmisionId=adm, TipoDocumento='AUTORIZACION',
             UsuarioId=quien_autorizacion.get(adm) or cargues[adm]['usuario'],
             TipoHallazgo='AUTORIZACION', Modo='sistema', Resuelta=False,
-            Descripcion=f"{SIN_AUTORIZACION}: diligencie el número de autorización de la EPS en la admisión.",
+            Descripcion=(f"{SIN_AUTORIZACION}: diligencie el número de autorización de la EPS en la admisión "
+                         "y en cada servicio (pestaña Autorizaciones / MIPRES)."),
         ) for adm in (sin & set(cargues)) - ya]
         RevisionIA.objects.bulk_create(nuevos)
         self.stdout.write(f"Sin número de autorización en SIESA: {len(nuevos)} nuevos | {len(ya)} ya registrados | "

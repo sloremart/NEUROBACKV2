@@ -60,6 +60,17 @@ SQL_SOLO_SEDACION = (
     " AND NOT EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio AND ISNULL(d.ItemRevertido, 0) = 0"
     " AND LEFT(LTRIM(d.cod_servicio), 6) NOT IN (" + ', '.join(f"'{c}'" for c in CUPS_SEDACION) + ")))")
 
+# Número de autorización completo: en el ENCABEZADO de la admisión (sis_maes.nro_autoriza) Y en CADA servicio
+# (sis_deta.autorizacion, pestaña "Autorizaciones / MIPRES" de SIESA), porque la validación de la EPS toma las dos
+# (regla del usuario 2026-11-27, caso 37951: encabezado con número y servicios en NULL). Solo los procedimientos
+# vigentes: no los revertidos ni los cargos previos del admisionista (fact_externa = 1, SIESA los oculta)
+SQL_AUTORIZACION_COMPLETA = (
+    "(ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0')"
+    " AND NOT EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio AND ISNULL(d.ItemRevertido, 0) = 0"
+    " AND ISNULL(d.fact_externa, 0) = 0"
+    " AND ISNULL(LTRIM(RTRIM(d.TipoItem)), 'Procedimiento') IN ('Procedimiento', '')"
+    " AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') IN ('', '0')))")
+
 CAMPOS_SQL = """
     sm.con_estudio,
     sp.tipo_id, sp.num_id, sp.primer_nom, sp.primer_ape, sp.fecha_naci, sp.sexo,
@@ -75,10 +86,7 @@ CAMPOS_SQL = """
     for variable in (VARIABLE_MEDICO_ORDENA, VARIABLE_IPS_ORDENA, VARIABLE_FECHA_ORDENAMIENTO,
                      VARIABLE_NIVEL_EDUCATIVO)) + """,
     sm.contrato,
-    CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0')
-              OR EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
-                         AND ISNULL(d.ItemRevertido, 0) = 0
-                         AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0'))
+    CASE WHEN """ + SQL_AUTORIZACION_COMPLETA + """
               OR """ + SQL_SOLO_SEDACION + """
          THEN 1 ELSE 0 END,
     ISNULL(sm.estado, ''), LTRIM(RTRIM(ISNULL(sm.MotivoAnulacion, '')))
@@ -124,7 +132,8 @@ ESTADO_ANULADA = 'N'
 def estado_autorizacion(consecutivos) -> dict:
     """
     {admisión: 'SIN' | 'CON' | 'NO_APLICA'}: SIN = contrato que exige número de autorización, admisión de los
-    últimos DIAS_ADMISION_AUTORIZACION días y sin número en SIESA; NO_APLICA = MRC, particular, contrato que no
+    últimos DIAS_ADMISION_AUTORIZACION días y sin número en SIESA en el encabezado o en algún servicio
+    (SQL_AUTORIZACION_COMPLETA); NO_APLICA = MRC, particular, contrato que no
     la usa, admisión antigua, anulada en SIESA o que solo factura anestesiología (CUPS_ANESTESIA).
     """
     ids = [int(c) for c in consecutivos]
@@ -136,11 +145,7 @@ def estado_autorizacion(consecutivos) -> dict:
             bloque = ids[i:i + 500]
             cursor.execute(
                 f"""SELECT sm.con_estudio, sm.contrato, sm.fecha_ing, ISNULL(sm.estado, ''),
-                         CASE WHEN ISNULL(LTRIM(RTRIM(sm.nro_autoriza)), '') NOT IN ('', '0')
-                                   OR EXISTS (SELECT 1 FROM sis_deta d WHERE d.estudio = sm.con_estudio
-                                              AND ISNULL(d.ItemRevertido, 0) = 0
-                                              AND ISNULL(LTRIM(RTRIM(d.autorizacion)), '') NOT IN ('', '0'))
-                              THEN 1 ELSE 0 END,
+                         CASE WHEN {SQL_AUTORIZACION_COMPLETA} THEN 1 ELSE 0 END,
                          CASE WHEN {SQL_SOLO_SEDACION} THEN 1 ELSE 0 END
                     FROM sis_maes sm WHERE sm.con_estudio IN ({', '.join(['%s'] * len(bloque))})""",
                 bloque)
@@ -259,10 +264,11 @@ def _evaluar(fila, contratos_autorizacion=frozenset()) -> dict:
     if _entero(nivel_educativo) not in range(1, 14):
         falta("Nivel educativo", "Sin diligenciar")
 
-    # Número de autorización (en la admisión o en sus servicios), en los contratos que lo exigen
+    # Número de autorización (en la admisión Y en cada servicio), en los contratos que lo exigen
     reciente = fecha_ing is None or fecha_ing >= datetime.now() - timedelta(days=DIAS_ADMISION_AUTORIZACION)
     if contrato in contratos_autorizacion and not tiene_autorizacion and reciente:
-        falta(SIN_AUTORIZACION, "Diligenciar el número de autorización de la EPS en la admisión")
+        falta(SIN_AUTORIZACION, "Diligenciar el número de autorización de la EPS en la admisión y en cada servicio "
+                                "(Autorizaciones / MIPRES)")
 
     # Datos de la orden (formulario de la admisión)
     if not _txt(medico_ordena):
